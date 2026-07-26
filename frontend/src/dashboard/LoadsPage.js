@@ -1,0 +1,803 @@
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { getApiBase } from '../apiBase';
+import { getUsername } from '../auth';
+import { BRANDS } from './brandTheme';
+import {
+  LoadingSpinner,
+  TableFiltersBar,
+  TablePaginationBar,
+  filterControl,
+  filterLabel,
+  filterLabelNarrow,
+  inDateRange,
+  mobileCardList,
+  MobileRowCard,
+  rowMatchesQuery,
+  scrollTableWrap,
+  stickyFirstTdMuted,
+  stickyFirstThTransparent,
+  stickyTheadTransparent,
+  useTablePagination,
+  modalPanelClass4xl,
+} from './tableToolbar';
+import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+
+const apiBase = getApiBase();
+
+const VEHICLE_OPTIONS = ['LA 9899', 'GQ 4665', 'PD 1306', 'Other'];
+const DEFAULT_MARGIN_PER_BAG = 70;
+
+const emptyForm = () => ({
+  date: new Date().toISOString().slice(0, 10),
+  stockId: '',
+  vehicleNumber: '',
+  transportCostPerBag: '',
+  marginPerBag: String(DEFAULT_MARGIN_PER_BAG),
+  tokyoBags: '',
+  tokyoCost: '',
+  tokyoCutOffPrice: '',
+  tokyoInvoice: '',
+  tokyoCheque: '',
+  tokyoConvertingDate: '',
+  samudraBags: '',
+  samudraCost: '',
+  samudraCutOffPrice: '',
+  samudraInvoice: '',
+  samudraCheque: '',
+  samudraConvertingDate: '',
+  atlasBags: '',
+  atlasCost: '',
+  atlasCutOffPrice: '',
+  atlasInvoice: '',
+  atlasCheque: '',
+  atlasConvertingDate: '',
+  nipponBags: '',
+  nipponCost: '',
+  nipponCutOffPrice: '',
+  nipponInvoice: '',
+  nipponCheque: '',
+  nipponConvertingDate: '',
+});
+
+/** Next ID after the highest existing STK-nnnn (or plain number); defaults to STK-0001. */
+function nextSuggestedStockId(records) {
+  let max = 0;
+  for (const r of records) {
+    const raw = String(r.stockId ?? '').trim();
+    if (!raw) continue;
+    const m = /^STK-(\d+)$/i.exec(raw);
+    if (m) {
+      max = Math.max(max, parseInt(m[1], 10));
+      continue;
+    }
+    if (/^\d+$/.test(raw)) {
+      max = Math.max(max, parseInt(raw, 10));
+    }
+  }
+  const next = max + 1;
+  return `STK-${String(next).padStart(4, '0')}`;
+}
+
+function money(n) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'LKR',
+    maximumFractionDigits: 2,
+  }).format(Number(n) || 0);
+}
+
+/** Bags ≥ 1 means invoice + cheque must be filled for that brand (any letters/digits in those fields). */
+function brandNeedsInvoiceCheque(bagsValue) {
+  const n = Number(bagsValue);
+  return Number.isFinite(n) && n >= 1;
+}
+
+export default function LoadsPage() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [detailRow, setDetailRow] = useState(null);
+  const [editingLoadId, setEditingLoadId] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/stocks`);
+      if (!res.ok) throw new Error('Failed to load stocks');
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e.message || 'Could not load data');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (!inDateRange(r.date, dateFrom, dateTo)) return false;
+      const costParts = BRANDS.map((b) => String(r[`${b.key}Cost`] ?? ''));
+      const bagParts = BRANDS.map((b) => String(r[`${b.key}Bags`] ?? ''));
+      const invParts = BRANDS.map((b) => String(r[`${b.key}Invoice`] ?? ''));
+      const chqParts = BRANDS.map((b) => String(r[`${b.key}Cheque`] ?? ''));
+      return rowMatchesQuery(search, [
+        r.date,
+        r.stockId,
+        r.vehicleNumber,
+        r.addedBy,
+        String(r.totalAmount ?? ''),
+        ...bagParts,
+        ...costParts,
+        ...invParts,
+        ...chqParts,
+      ]);
+    });
+  }, [rows, search, dateFrom, dateTo]);
+
+  const filteredTotals = useMemo(() => {
+    const t = {
+      tokyoBags: 0,
+      tokyoCost: 0,
+      samudraBags: 0,
+      samudraCost: 0,
+      atlasBags: 0,
+      atlasCost: 0,
+      nipponBags: 0,
+      nipponCost: 0,
+      totalAmount: 0,
+    };
+    for (const r of filteredRows) {
+      t.tokyoBags += Number(r.tokyoBags) || 0;
+      t.tokyoCost += Number(r.tokyoCost) || 0;
+      t.samudraBags += Number(r.samudraBags) || 0;
+      t.samudraCost += Number(r.samudraCost) || 0;
+      t.atlasBags += Number(r.atlasBags) || 0;
+      t.atlasCost += Number(r.atlasCost) || 0;
+      t.nipponBags += Number(r.nipponBags) || 0;
+      t.nipponCost += Number(r.nipponCost) || 0;
+      t.totalAmount += Number(r.totalAmount) || 0;
+    }
+    return t;
+  }, [filteredRows]);
+
+  const pagination = useTablePagination(filteredRows.length, [search, dateFrom, dateTo]);
+  const pagedRows = useMemo(
+    () => filteredRows.slice(pagination.offset, pagination.offset + pagination.pageSize),
+    [filteredRows, pagination.offset, pagination.pageSize]
+  );
+
+  const openModal = () => {
+    setEditingLoadId('');
+    setForm({
+      ...emptyForm(),
+      stockId: nextSuggestedStockId(rows),
+    });
+    setSaveError(null);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setSaveError(null);
+    setEditingLoadId('');
+  };
+
+  const openEditModal = (row) => {
+    if (!row || !row.id) return;
+    setEditingLoadId(String(row.id));
+    setForm({
+      date: String(row.date ?? '').slice(0, 10),
+      stockId: String(row.stockId ?? ''),
+      vehicleNumber: String(row.vehicleNumber ?? ''),
+      transportCostPerBag: String(row.transportCostPerBag ?? ''),
+      marginPerBag: String(row.marginPerBag ?? DEFAULT_MARGIN_PER_BAG),
+      tokyoBags: String(row.tokyoBags ?? ''),
+      tokyoCost: String(row.tokyoCost ?? ''),
+      tokyoCutOffPrice: String(row.tokyoCutOffPrice ?? ''),
+      tokyoInvoice: String(row.tokyoInvoice ?? ''),
+      tokyoCheque: String(row.tokyoCheque ?? ''),
+      tokyoConvertingDate: String(row.tokyoConvertingDate ?? '').slice(0, 10),
+      samudraBags: String(row.samudraBags ?? ''),
+      samudraCost: String(row.samudraCost ?? ''),
+      samudraCutOffPrice: String(row.samudraCutOffPrice ?? ''),
+      samudraInvoice: String(row.samudraInvoice ?? ''),
+      samudraCheque: String(row.samudraCheque ?? ''),
+      samudraConvertingDate: String(row.samudraConvertingDate ?? '').slice(0, 10),
+      atlasBags: String(row.atlasBags ?? ''),
+      atlasCost: String(row.atlasCost ?? ''),
+      atlasCutOffPrice: String(row.atlasCutOffPrice ?? ''),
+      atlasInvoice: String(row.atlasInvoice ?? ''),
+      atlasCheque: String(row.atlasCheque ?? ''),
+      atlasConvertingDate: String(row.atlasConvertingDate ?? '').slice(0, 10),
+      nipponBags: String(row.nipponBags ?? ''),
+      nipponCost: String(row.nipponCost ?? ''),
+      nipponCutOffPrice: String(row.nipponCutOffPrice ?? ''),
+      nipponInvoice: String(row.nipponInvoice ?? ''),
+      nipponCheque: String(row.nipponCheque ?? ''),
+      nipponConvertingDate: String(row.nipponConvertingDate ?? '').slice(0, 10),
+    });
+    setSaveError(null);
+    setModalOpen(true);
+  };
+
+  const handleFormChange = (field, value) => {
+    setForm((f) => ({ ...f, [field]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const username = getUsername();
+    if (!username) {
+      setSaveError('You need to be signed in with a username.');
+      return;
+    }
+    const missingRefs = [];
+    for (const b of BRANDS) {
+      if (!brandNeedsInvoiceCheque(form[`${b.key}Bags`])) continue;
+      const inv = String(form[`${b.key}Invoice`] ?? '').trim();
+      const chq = String(form[`${b.key}Cheque`] ?? '').trim();
+      if (!inv) missingRefs.push(`${b.label} invoice number`);
+      if (!chq) missingRefs.push(`${b.label} cheque number`);
+    }
+    if (missingRefs.length > 0) {
+      setSaveError(
+        `When bags are 1 or more for a brand, invoice and cheque numbers are required. Missing: ${missingRefs.join(', ')}.`,
+      );
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const isEditing = Boolean(editingLoadId);
+      const res = await fetch(
+        isEditing ? `${apiBase}/api/stocks/${encodeURIComponent(editingLoadId)}` : `${apiBase}/api/stocks`,
+        {
+        method: isEditing ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(isEditing ? { updatedBy: username } : { addedBy: username }),
+          date: form.date,
+          stockId: form.stockId.trim(),
+          vehicleNumber: form.vehicleNumber.trim(),
+          tokyoBags: form.tokyoBags,
+          tokyoCost: form.tokyoCost,
+          tokyoCutOffPrice: form.tokyoCutOffPrice,
+          tokyoInvoice: form.tokyoInvoice,
+          tokyoCheque: form.tokyoCheque,
+          tokyoConvertingDate: form.tokyoConvertingDate,
+          samudraBags: form.samudraBags,
+          samudraCost: form.samudraCost,
+          samudraCutOffPrice: form.samudraCutOffPrice,
+          samudraInvoice: form.samudraInvoice,
+          samudraCheque: form.samudraCheque,
+          samudraConvertingDate: form.samudraConvertingDate,
+          atlasBags: form.atlasBags,
+          atlasCost: form.atlasCost,
+          atlasCutOffPrice: form.atlasCutOffPrice,
+          atlasInvoice: form.atlasInvoice,
+          atlasCheque: form.atlasCheque,
+          atlasConvertingDate: form.atlasConvertingDate,
+          nipponBags: form.nipponBags,
+          nipponCost: form.nipponCost,
+          nipponCutOffPrice: form.nipponCutOffPrice,
+          nipponInvoice: form.nipponInvoice,
+          nipponCheque: form.nipponCheque,
+          nipponConvertingDate: form.nipponConvertingDate,
+          transportCostPerBag: form.transportCostPerBag,
+          marginPerBag: form.marginPerBag,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSaveError(data.error || 'Save failed');
+        return;
+      }
+      await load();
+      closeModal();
+    } catch {
+      setSaveError('Could not reach the server.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-slate-500">Track stock loads, vehicles, bags, and costs per brand.</p>
+        <button
+          type="button"
+          onClick={openModal}
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+        >
+          Add a Stock
+        </button>
+      </div>
+
+      {error ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <TableFiltersBar
+        hint={
+          !loading && rows.length > 0
+            ? `Showing ${filteredRows.length} of ${rows.length} load${rows.length === 1 ? '' : 's'}. Footer totals reflect the filtered rows.`
+            : null
+        }
+      >
+        <label className={filterLabel}>
+          Search
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Stock ID, vehicle, invoice, cheque, bags, costs…"
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          From date
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          To date
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+      </TableFiltersBar>
+
+      <div className="space-y-3">
+      <div className={mobileCardList}>
+        {loading ? (
+          <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+            <LoadingSpinner />
+          </p>
+        ) : rows.length === 0 ? (
+          <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+            No stock loads yet. Use &quot;Add a Stock&quot; to create a record.
+          </p>
+        ) : filteredRows.length === 0 ? (
+          <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+            No loads match your search or filters.
+          </p>
+        ) : (
+          pagedRows.map((r) => {
+            const brandBags = BRANDS.map((b) => `${b.label}: ${r[`${b.key}Bags`] ?? 0}`).join(' · ');
+            return (
+              <MobileRowCard
+                key={r.id}
+                title={r.stockId || `Load #${r.id}`}
+                subtitle={`${r.date} · ${r.vehicleNumber || '—'}`}
+                onClick={() => setDetailRow(r)}
+                fields={[
+                  { label: 'Total', value: money(r.totalAmount) },
+                  { label: 'Added by', value: r.addedBy || '—' },
+                  { label: 'Bags by brand', value: brandBags },
+                  {
+                    label: 'Tokyo / Samudra',
+                    value: `${r.tokyoBags ?? 0} / ${r.samudraBags ?? 0}`,
+                  },
+                  {
+                    label: 'Atlas / Nippon',
+                    value: `${r.atlasBags ?? 0} / ${r.nipponBags ?? 0}`,
+                  },
+                ]}
+              />
+            );
+          })
+        )}
+      </div>
+      <div className={`hidden sm:block ${scrollTableWrap}`}>
+        <table className="w-full min-w-[1680px] border-separate border-spacing-0 text-left text-sm">
+          <thead className={stickyTheadTransparent}>
+            <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th
+                rowSpan={2}
+                className={`whitespace-nowrap px-3 py-3 align-bottom ${stickyFirstThTransparent}`}
+              >
+                Date
+              </th>
+              <th rowSpan={2} className="whitespace-nowrap px-3 py-3 align-bottom">
+                Stock ID
+              </th>
+              <th rowSpan={2} className="whitespace-nowrap px-3 py-3 align-bottom">
+                Vehicle No.
+              </th>
+              {BRANDS.map((b) => (
+                <th
+                  key={b.key}
+                  colSpan={4}
+                  className={`px-2 py-2 text-center font-bold tracking-wide ${b.ledger.head}`}
+                >
+                  {b.label}
+                </th>
+              ))}
+              <th rowSpan={2} className="whitespace-nowrap border-l border-slate-100 px-3 py-3 align-bottom text-right">
+                Total
+              </th>
+              <th rowSpan={2} className="whitespace-nowrap px-3 py-3 align-bottom">
+                Added by
+              </th>
+            </tr>
+            <tr className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-semibold uppercase text-slate-400">
+              {BRANDS.map((b) => (
+                <Fragment key={b.key}>
+                  <th className={`px-2 py-2 text-center ${b.ledger.sub}`}>Bags</th>
+                  <th className={`px-2 py-2 text-center ${b.ledger.sub}`}>Cost</th>
+                  <th className={`px-2 py-2 text-center ${b.ledger.sub}`}>Invoice</th>
+                  <th className={`px-2 py-2 text-center ${b.ledger.sub}`}>Cheque</th>
+                </Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 text-slate-800">
+            {loading ? (
+              <tr>
+                <td colSpan={21} className="px-4 py-10 text-center text-slate-500">
+                  <LoadingSpinner />
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={21} className="px-4 py-10 text-center text-slate-500">
+                  No stock loads yet. Use &quot;Add a Stock&quot; to create a record.
+                </td>
+              </tr>
+            ) : filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={21} className="px-4 py-10 text-center text-slate-500">
+                  No loads match your search or filters.
+                </td>
+              </tr>
+            ) : (
+              pagedRows.map((r) => {
+                const rowLine = 'border-b border-slate-100/90';
+                return (
+                  <tr
+                    key={r.id}
+                    {...detailRowAttrs(() => setDetailRow(r))}
+                    aria-label={`Load ${r.stockId ?? r.id ?? ''} details`}
+                  >
+                    <td
+                      className={`whitespace-nowrap px-3 py-3 font-medium ${rowLine} bg-slate-50/70 text-slate-800 ${stickyFirstTdMuted}`}
+                    >
+                      {r.date}
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-3 ${rowLine} bg-slate-50/70`}>{r.stockId}</td>
+                    <td className={`whitespace-nowrap px-3 py-3 ${rowLine} bg-slate-50/70`}>
+                      {r.vehicleNumber}
+                    </td>
+                    {BRANDS.map((b) => {
+                      const inv = String(r[`${b.key}Invoice`] ?? '').trim();
+                      const chq = String(r[`${b.key}Cheque`] ?? '').trim();
+                      return (
+                        <Fragment key={b.key}>
+                          <td
+                            className={`px-2 py-3 text-center tabular-nums transition-colors hover:brightness-[0.98] ${rowLine} ${b.ledger.cellLead}`}
+                          >
+                            {r[`${b.key}Bags`] ?? 0}
+                          </td>
+                          <td
+                            className={`px-2 py-3 text-right tabular-nums transition-colors hover:brightness-[0.98] ${rowLine} ${b.ledger.cell} text-slate-900`}
+                          >
+                            {money(r[`${b.key}Cost`])}
+                          </td>
+                          <td
+                            className={`max-w-[7rem] truncate px-2 py-3 text-xs text-slate-700 ${rowLine} ${b.ledger.cell}`}
+                            title={inv || undefined}
+                          >
+                            {inv || '—'}
+                          </td>
+                          <td
+                            className={`max-w-[7rem] truncate px-2 py-3 text-xs text-slate-700 ${rowLine} ${b.ledger.cell}`}
+                            title={chq || undefined}
+                          >
+                            {chq || '—'}
+                          </td>
+                        </Fragment>
+                      );
+                    })}
+                    <td
+                      className={`border-l border-slate-100 px-3 py-3 text-right font-semibold text-slate-900 tabular-nums ${rowLine} bg-white`}
+                    >
+                      {money(r.totalAmount)}
+                    </td>
+                    <td className={`whitespace-nowrap px-3 py-3 text-slate-600 ${rowLine} bg-white`}>
+                      {r.addedBy}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+          {!loading && filteredRows.length > 0 ? (
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+                <td colSpan={3} className={`bg-slate-100/80 px-3 py-3 ${stickyFirstTdMuted}`}>
+                  Totals (filtered)
+                </td>
+                {BRANDS.map((b) => (
+                  <Fragment key={b.key}>
+                    <td
+                      className={`px-2 py-3 text-center tabular-nums ${b.ledger.cellLead} brightness-[1.02]`}
+                    >
+                      {filteredTotals[`${b.key}Bags`]}
+                    </td>
+                    <td className={`px-2 py-3 text-right tabular-nums text-slate-900 ${b.ledger.cell} brightness-[1.02]`}>
+                      {money(filteredTotals[`${b.key}Cost`])}
+                    </td>
+                    <td className={`px-2 py-3 ${b.ledger.cell} brightness-[1.02]`} />
+                    <td className={`px-2 py-3 ${b.ledger.cell} brightness-[1.02]`} />
+                  </Fragment>
+                ))}
+                <td className="border-l border-slate-200 bg-indigo-50/60 px-3 py-3 text-right text-indigo-900 tabular-nums">
+                  {money(filteredTotals.totalAmount)}
+                </td>
+                <td className="bg-slate-50/90 px-3 py-3" />
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+      {!loading && rows.length > 0 ? (
+        <TablePaginationBar
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          pageSize={pagination.pageSize}
+          totalCount={filteredRows.length}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+        />
+      ) : null}
+      </div>
+
+      {modalOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="loads-modal-title">
+          <button type="button" className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" aria-label="Close" onClick={closeModal} />
+          <div className={modalPanelClass4xl}>
+            <h2 id="loads-modal-title" className="text-lg font-bold text-slate-900">
+              {editingLoadId ? 'Edit stock load' : 'Add a stock load'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">Recorded as user: {getUsername() || '—'}</p>
+            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+              {saveError ? (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-slate-600">
+                  Date
+                  <input
+                    type="date"
+                    required
+                    value={form.date}
+                    onChange={(e) => handleFormChange('date', e.target.value)}
+                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  />
+                </label>
+                <label className="block text-sm font-medium text-slate-600">
+                  Stock ID
+                  <input
+                    type="text"
+                    required
+                    value={form.stockId}
+                    onChange={(e) => handleFormChange('stockId', e.target.value)}
+                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                    placeholder="STK-0001"
+                    autoComplete="off"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-slate-400">
+                    Suggested next ID — you can edit before saving.
+                  </span>
+                </label>
+                <label className="col-span-full block text-sm font-medium text-slate-600 sm:col-span-2">
+                  Vehicle number
+                  <select
+                    required
+                    value={form.vehicleNumber}
+                    onChange={(e) => handleFormChange('vehicleNumber', e.target.value)}
+                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  >
+                    <option value="">Select vehicle…</option>
+                    {VEHICLE_OPTIONS.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">Incentive pricing</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Used on the Incentive page to calculate transport, margin, and unloading price per bag.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-600">
+                    Transport cost per bag (LKR)
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.transportCostPerBag}
+                      onChange={(e) => handleFormChange('transportCostPerBag', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      placeholder="0"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-600">
+                    Margin per bag (LKR)
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.marginPerBag}
+                      onChange={(e) => handleFormChange('marginPerBag', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                    />
+                    <span className="mt-1 block text-xs font-normal text-slate-400">Default {DEFAULT_MARGIN_PER_BAG} LKR</span>
+                  </label>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Cement bags, cost, invoice & cheque (per brand)
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  If bags are <span className="font-medium text-slate-600">1 or more</span> for a brand, enter invoice and cheque number for that brand. Converting date is optional — if left blank, the load date is used.
+                </p>
+                <div className="mt-3 space-y-4">
+                  {BRANDS.map((b) => {
+                    const needRefs = brandNeedsInvoiceCheque(form[`${b.key}Bags`]);
+                    const refRing = needRefs ? 'ring-amber-200' : 'ring-slate-200';
+                    return (
+                    <div
+                      key={b.key}
+                      className="rounded-lg border border-slate-100 bg-white/90 p-3 shadow-sm ring-1 ring-slate-100/80"
+                    >
+                      <p className="mb-2 text-sm font-semibold text-slate-800">{b.label}</p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                        <label className="text-xs text-slate-500">
+                          Bags
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={form[`${b.key}Bags`]}
+                            onChange={(e) => handleFormChange(`${b.key}Bags`, e.target.value)}
+                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                          />
+                        </label>
+                        <label className="text-xs text-slate-500">
+                          Cost (LKR)
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={form[`${b.key}Cost`]}
+                            onChange={(e) => handleFormChange(`${b.key}Cost`, e.target.value)}
+                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                          />
+                        </label>
+                        <label className="text-xs text-slate-500">
+                          Cut-off price (per bag)
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={form[`${b.key}CutOffPrice`]}
+                            onChange={(e) => handleFormChange(`${b.key}CutOffPrice`, e.target.value)}
+                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                            placeholder=""
+                          />
+                        </label>
+                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
+                          Invoice no.{needRefs ? ' *' : ''}
+                          <input
+                            type="text"
+                            inputMode="text"
+                            value={form[`${b.key}Invoice`]}
+                            onChange={(e) => handleFormChange(`${b.key}Invoice`, e.target.value)}
+                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-required={needRefs}
+                          />
+                        </label>
+                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
+                          Cheque no.{needRefs ? ' *' : ''}
+                          <input
+                            type="text"
+                            inputMode="text"
+                            value={form[`${b.key}Cheque`]}
+                            onChange={(e) => handleFormChange(`${b.key}Cheque`, e.target.value)}
+                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-required={needRefs}
+                          />
+                        </label>
+                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
+                          Converting date
+                          <input
+                            type="date"
+                            value={form[`${b.key}ConvertingDate`]}
+                            onChange={(e) => handleFormChange(`${b.key}ConvertingDate`, e.target.value)}
+                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md disabled:opacity-60"
+                >
+                  {saving ? 'Saving…' : editingLoadId ? 'Update record' : 'Save record'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      <RowDetailModal
+        open={!!detailRow}
+        row={detailRow}
+        variant="load"
+        onClose={() => setDetailRow(null)}
+        actions={
+          detailRow?.id ? (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  openEditModal(detailRow);
+                  setDetailRow(null);
+                }}
+                className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+              >
+                Edit load
+              </button>
+            </div>
+          ) : null
+        }
+      />
+    </div>
+  );
+}

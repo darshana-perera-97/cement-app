@@ -1,0 +1,24 @@
+# dependencies
+/node_modules
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# local JSON stores + WhatsApp session
+/data
+
+# logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+.idea
+.vscode
+*.swp
+*.swo
