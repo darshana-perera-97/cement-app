@@ -142,7 +142,7 @@ function emailLayout({ preheader, accent, accentLight, title, subtitle, rows, hi
 </html>`;
 }
 
-function buildBillEmail({ customer, bill, remainingAmount, company }) {
+function buildBillEmail({ customer, bill, remainingAmount, company, hideFinancialDetails = false }) {
   const rows = [
     { label: 'Customer', value: customer.name },
     { label: 'Date', value: formatDate(bill.date) },
@@ -158,29 +158,42 @@ function buildBillEmail({ customer, bill, remainingAmount, company }) {
       title: 'Credit sale recorded',
       subtitle: 'New bill',
       rows,
-      highlight: {
-        label: 'Balance to pay',
-        value: formatMoney(remainingAmount),
-      },
+      highlight: hideFinancialDetails
+        ? null
+        : {
+            label: 'Balance to pay',
+            value: formatMoney(remainingAmount),
+          },
       footer: 'This is an automated notification from your cement distributor account.',
       company,
     }),
   };
 }
 
-function buildPaymentEmail({ customer, payment, remainingAmount, company }) {
+function buildPaymentEmail({ customer, payment, remainingAmount, company, hideFinancialDetails = false }) {
   const rows = [
     { label: 'Customer', value: customer.name },
     { label: 'Date', value: formatDate(payment.date) },
-    { label: 'Amount received', value: formatMoney(payment.amount) },
   ];
-  const cash = Number(payment.cashAmount) || 0;
-  if (cash > 0) rows.push({ label: 'Cash', value: formatMoney(cash) });
-  if (payment.cheques?.length) {
+  if (!hideFinancialDetails) {
+    rows.push({ label: 'Amount received', value: formatMoney(payment.amount) });
+    const cash = Number(payment.cashAmount) || 0;
+    if (cash > 0) rows.push({ label: 'Cash', value: formatMoney(cash) });
+    if (payment.cheques?.length) {
+      const chequeSummary = payment.cheques
+        .map((c) => {
+          let s = formatMoney(c.amount);
+          if (c.chequeNumber) s += ` #${c.chequeNumber}`;
+          if (c.chequeDate) s += ` · ${formatDate(c.chequeDate)}`;
+          return s;
+        })
+        .join('; ');
+      rows.push({ label: 'Cheques', value: chequeSummary });
+    }
+  } else if (payment.cheques?.length) {
     const chequeSummary = payment.cheques
       .map((c) => {
-        let s = formatMoney(c.amount);
-        if (c.chequeNumber) s += ` #${c.chequeNumber}`;
+        let s = c.chequeNumber ? `#${c.chequeNumber}` : 'Cheque';
         if (c.chequeDate) s += ` · ${formatDate(c.chequeDate)}`;
         return s;
       })
@@ -192,18 +205,24 @@ function buildPaymentEmail({ customer, payment, remainingAmount, company }) {
   if (payment.recordedBy) rows.push({ label: 'Recorded by', value: payment.recordedBy });
 
   return {
-    subject: `Payment received — ${formatMoney(payment.amount)} · ${customer.name}`,
+    subject: hideFinancialDetails
+      ? `Payment received · ${customer.name}`
+      : `Payment received — ${formatMoney(payment.amount)} · ${customer.name}`,
     html: emailLayout({
-      preheader: `We received your payment of ${formatMoney(payment.amount)}. Thank you, ${customer.name}.`,
+      preheader: hideFinancialDetails
+        ? `We received your payment. Thank you, ${customer.name}.`
+        : `We received your payment of ${formatMoney(payment.amount)}. Thank you, ${customer.name}.`,
       accent: '#059669',
       accentLight: '#ecfdf5',
       title: 'Payment received',
       subtitle: 'Thank you',
       rows,
-      highlight: {
-        label: 'Remaining balance',
-        value: formatMoney(remainingAmount),
-      },
+      highlight: hideFinancialDetails
+        ? null
+        : {
+            label: 'Remaining balance',
+            value: formatMoney(remainingAmount),
+          },
       footer: 'This is an automated notification from your cement distributor account.',
       company,
     }),
@@ -245,8 +264,59 @@ function buildPromotionEmail({ customer, promotion, company }) {
   };
 }
 
+function buildOverdueBalanceEmail({
+  customer,
+  overdueBills = [],
+  totalOverdueAmount = 0,
+  totalPendingAmount = 0,
+  shareMode = 'both',
+  company,
+  hideFinancialDetails = false,
+}) {
+  const rows = [{ label: 'Customer', value: customer.name }];
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  rows.push({ label: 'Date', value: formatDate(todayYmd) });
+
+  if (shareMode === 'overdue_only' || shareMode === 'both') {
+    for (const bill of overdueBills) {
+      const label = bill.daysOverdue > 0 ? `Overdue bill (${bill.daysOverdue}d)` : 'Overdue bill';
+      const value = hideFinancialDetails
+        ? `${formatDate(bill.billDate)} · due ${formatDate(bill.dueDate)}${bill.details ? ` · ${bill.details}` : ''}`
+        : `${formatDate(bill.billDate)} · ${formatMoney(bill.outstandingAmount)}${bill.details ? ` · ${bill.details}` : ''}`;
+      rows.push({ label, value });
+    }
+  }
+
+  let highlight = null;
+  if (!hideFinancialDetails) {
+    if (shareMode === 'pending_only' && totalPendingAmount > 0) {
+      highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
+    } else if (shareMode === 'overdue_only' && totalOverdueAmount > 0) {
+      highlight = { label: 'Total overdue', value: formatMoney(totalOverdueAmount) };
+    } else if (shareMode === 'both' && totalPendingAmount > 0) {
+      highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
+    }
+  }
+
+  return {
+    subject: `Balance reminder · ${customer.name}`,
+    html: emailLayout({
+      preheader: `Outstanding balance reminder for ${customer.name}.`,
+      accent: '#e11d48',
+      accentLight: '#fff1f2',
+      title: 'Balance reminder',
+      subtitle: 'Outstanding amount',
+      rows,
+      highlight,
+      footer: 'Please arrange payment at your earliest convenience. This is an automated notification from your cement distributor account.',
+      company,
+    }),
+  };
+}
+
 module.exports = {
   buildBillEmail,
   buildPaymentEmail,
   buildPromotionEmail,
+  buildOverdueBalanceEmail,
 };

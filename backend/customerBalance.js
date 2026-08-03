@@ -1,4 +1,5 @@
 const { toNonNegMoney } = require('./customersStore');
+const { getPaymentCheques } = require('./paymentCheques');
 
 function normalizeCustomerName(s) {
   return String(s ?? '')
@@ -8,13 +9,33 @@ function normalizeCustomerName(s) {
 }
 
 /**
- * Total applied against the customer’s balance for one payment (cash + cheque).
- * Uses stored `amount`; if missing, sums cash and cheque parts.
+ * Total applied against the customer’s balance for one payment (cash + non-returned cheques).
  */
 function paymentCreditToCustomer(p) {
+  const cheques = getPaymentCheques(p);
+  if (cheques.length > 0) {
+    const cash = toNonNegMoney(p?.cashAmount);
+    const activeCheques = cheques
+      .filter((c) => !c.chequeReturned)
+      .reduce((s, c) => s + toNonNegMoney(c.amount), 0);
+    return roundMoney(cash + activeCheques);
+  }
   const total = toNonNegMoney(p?.amount);
   if (total > 0) return total;
-  return toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount);
+  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount));
+}
+
+/** Full payment amount recorded (before any returned cheques). */
+function paymentGrossCredit(p) {
+  const total = toNonNegMoney(p?.amount);
+  if (total > 0) return total;
+  const cheques = getPaymentCheques(p);
+  if (cheques.length > 0) {
+    const cash = toNonNegMoney(p?.cashAmount);
+    const chequeSum = cheques.reduce((s, c) => s + toNonNegMoney(c.amount), 0);
+    return roundMoney(cash + chequeSum);
+  }
+  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount));
 }
 
 function roundMoney(n) {
@@ -56,4 +77,5 @@ module.exports = {
   computeCustomerBalance,
   computeRemainingAmount,
   paymentCreditToCustomer,
+  paymentGrossCredit,
 };

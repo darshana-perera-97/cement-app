@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_DEV_API_URL, getApiBase } from './apiBase';
-import { isAuthed, setAuth } from './auth';
+import { isAuthed, setAuth, getFirstAllowedDashboardPath } from './auth';
 import { shopNameInitials, useShopName } from './shopConfig';
 
 const apiBase = getApiBase();
@@ -16,7 +16,7 @@ function Login() {
 
   useEffect(() => {
     if (isAuthed()) {
-      navigate('/dashboard/analytics', { replace: true });
+      navigate(getFirstAllowedDashboardPath(), { replace: true });
     }
   }, [navigate]);
 
@@ -60,8 +60,8 @@ function Login() {
         setError('Server did not return an auth token. Update the backend and sign in again.');
         return;
       }
-      setAuth(resolvedUser, role, token);
-      navigate('/dashboard/analytics', { replace: true });
+      setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess);
+      navigate(getFirstAllowedDashboardPath(), { replace: true });
     } catch {
       setError(
         `Could not reach the server. Is the backend running at ${DEFAULT_DEV_API_URL}?`
@@ -113,7 +113,7 @@ function Login() {
                   className="block text-sm font-medium text-slate-600"
                   htmlFor="login-username"
                 >
-                  Username
+                  Username or NIC
                 </label>
                 <input
                   id="login-username"
@@ -121,7 +121,7 @@ function Login() {
                   type="text"
                   name="username"
                   autoComplete="username"
-                  placeholder="admin"
+                  placeholder="admin or NIC"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={loading}

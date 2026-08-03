@@ -9,6 +9,9 @@
 # local JSON stores + WhatsApp session
 /data
 
+.WhatsApp
+.wwebjs_cache
+
 # logs
 logs
 *.log

@@ -4,7 +4,14 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
-const { readStocks, writeStocks, toNonNegNumber, sumLoadBagsByBrand } = require('./stocksStore');
+const {
+  readStocks,
+  writeStocks,
+  toNonNegNumber,
+  sumLoadBagsByBrand,
+  lastCutOffPricesByBrand,
+  normalizePurchaseOrderIds,
+} = require('./stocksStore');
 const {
   refreshLiveStockFromSources,
   getLiveStockSummary,
@@ -15,12 +22,15 @@ const {
   writeCustomers,
   toNonNegMoney,
   defaultDueDateYmd,
+  normalizeCustomerRecordId,
+  customerRecordIdKey,
 } = require('./customersStore');
 const {
   normalizeCustomerName,
   computeCustomerBalance,
   computeRemainingAmount,
   paymentCreditToCustomer,
+  paymentGrossCredit,
 } = require('./customerBalance');
 const {
   readOverdueDates,
@@ -31,7 +41,29 @@ const {
 } = require('./overdueDatesStore');
 const { readEmailConfig, writeEmailConfig, maskEmailConfig } = require('./emailConfigsStore');
 const { readWhatsAppConfig, writeWhatsAppConfig } = require('./whatsappConfigsStore');
+const {
+  readNotificationSettings,
+  writeNotificationSettings,
+  normalizeNotificationSettings,
+  normalizeTimeHHMM,
+} = require('./notificationSettingsStore');
+const { startOverdueReminderScheduler } = require('./overdueReminderService');
 const { readCompanyData, writeCompanyData } = require('./companyDataStore');
+const { readShopData, writeShopData, addBankAccount, updateBankAccount, deleteBankAccount } = require('./shopDataStore');
+const {
+  readDistributors,
+  writeDistributors,
+  normalizeProducts,
+  normalizeLocations,
+  withNormalizedLists,
+} = require('./distributorsStore');
+const {
+  readLorries,
+  writeLorries,
+  normalizeNumber: normalizeLorryNumber,
+  normalizeLorry,
+  findDuplicate: findDuplicateLorry,
+} = require('./lorriesStore');
 const { readSentEmails } = require('./sentEmailsStore');
 const { readSentWhatsapp } = require('./sentWhatsappStore');
 const { notifyBillEmail, notifyPaymentEmail, notifyPromotionEmail } = require('./emailService');
@@ -39,9 +71,13 @@ const {
   getWhatsAppStatus,
   startWhatsAppClient,
   applyWhatsAppConfigChange,
+  reconnectWhatsAppClient,
+  bootstrapWhatsAppOnStartup,
   notifyBillWhatsApp,
   notifyPaymentWhatsApp,
   notifyPromotionWhatsApp,
+  notifyUnloadWhatsApp,
+  notifyChequeReturnWhatsApp,
 } = require('./whatsappService');
 
 function enrichCustomerBalance(customer, bills, payments, overdueDates = {}) {
@@ -51,7 +87,46 @@ function enrichCustomerBalance(customer, bills, payments, overdueDates = {}) {
     remainingAmount: amountToPay,
     overpaymentAmount,
     overdueDays: getOverdueDaysForCustomer(overdueDates, customer.id),
+    ...monthlyTargetFieldsForCustomer(customer, bills),
   };
+}
+
+function collectorDisplayName(user) {
+  if (!user) return '';
+  return String(user.name || '').trim() || user.username || '';
+}
+
+function enrichCustomerWithCollector(customer, users) {
+  const collectorUserId = String(customer.collectorUserId ?? '').trim();
+  if (!collectorUserId) {
+    return { ...customer, collectorName: '' };
+  }
+  const u = users.find((x) => x.id === collectorUserId);
+  return { ...customer, collectorName: collectorDisplayName(u) };
+}
+
+async function listCollectorStaff() {
+  const users = await readUsers();
+  return users
+    .filter((u) => String(u.role || '').trim() === 'Collector')
+    .map((u) => ({
+      id: u.id,
+      name: collectorDisplayName(u),
+      contact: u.contact || '',
+      nic: u.nic || u.username || '',
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+async function validateCollectorUserId(collectorUserId) {
+  const id = String(collectorUserId ?? '').trim();
+  if (!id) return { ok: true, collectorUserId: '' };
+  const users = await readUsers();
+  const u = users.find((x) => x.id === id);
+  if (!u || String(u.role || '').trim() !== 'Collector') {
+    return { ok: false, error: 'Select a valid collector from the list' };
+  }
+  return { ok: true, collectorUserId: id };
 }
 const { readBills, writeBills, lineTotal, sumAllBillBagsByBrand } = require('./billsStore');
 const {
@@ -62,6 +137,9 @@ const {
   buildChequesForUpdate,
   applyLegacyChequeFields,
   chequeDepositQueueItem,
+  bankAccountSnapshot,
+  markChequeDepositedOnPayment,
+  markChequeReturnedOnPayment,
 } = require('./paymentCheques');
 const {
   readPayments,
@@ -69,23 +147,95 @@ const {
   todayYmdLocal: paymentDateDefaultYmd,
   normalizePaymentBillNumber,
   isPaymentBillNumberTaken,
+  allocatePaymentReceiptNumber,
 } = require('./paymentsStore');
-const { signToken, requireAdmin } = require('./authToken');
+const { inferStockIdForBillBags } = require('./billStockId');
+const {
+  normalizeMonthlyTargetBags,
+  monthlyTargetFieldsForCustomer,
+} = require('./customerMonthlyTarget');
+const { signToken, requireAdmin, getAuthFromRequest } = require('./authToken');
+const { getEffectiveManagerAccess } = require('./managerAccess');
+const { getEffectiveCollectorAccess } = require('./collectorAccess');
 const {
   readUsers,
   verifyStoredUser,
   findUserByUsername,
   createUser,
+  updateUser,
   deleteUserById,
   toPublicUser,
 } = require('./usersStore');
+
+async function resolveStaffUser(auth) {
+  if (!auth || auth.role === 'admin') return null;
+  return findUserByUsername(auth.username);
+}
+
+function isCollectorStaff(user) {
+  return Boolean(user && String(user.role || '').trim() === 'Collector');
+}
+
+async function collectorAssignedCustomerNames(collectorUserId) {
+  const customers = await readCustomers();
+  const names = new Set();
+  const id = String(collectorUserId ?? '').trim();
+  if (!id) return names;
+  for (const c of customers) {
+    if (String(c.collectorUserId ?? '').trim() === id) {
+      const nk = normalizeCustomerName(c.name);
+      if (nk) names.add(nk);
+    }
+  }
+  return names;
+}
+
+async function filterRowsForCollector(rows, auth, nameFromRow) {
+  const user = await resolveStaffUser(auth);
+  if (!isCollectorStaff(user)) return rows;
+  const names = await collectorAssignedCustomerNames(user.id);
+  return rows.filter((row) => names.has(normalizeCustomerName(nameFromRow(row))));
+}
+
+function customerAssignedToCollector(customer, collectorUserId) {
+  return String(customer.collectorUserId ?? '').trim() === String(collectorUserId ?? '').trim();
+}
+
 const { readPromotions, writePromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
+const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./unloadsStore');
+const {
+  readPurchaseOrders,
+  writePurchaseOrders,
+  lineTotal: poLineTotal,
+  nextSuggestedPoNumber,
+  parseCheques: parsePoCheques,
+  validatePoCheques,
+  findLastUnitPrice,
+  lastPricesByProduct,
+  cancelIssuedCheque,
+  isPoCashPayment,
+} = require('./purchaseOrdersStore');
+const { computeBankAccountBalances } = require('./bankAccountBalance');
+const {
+  readCashBookEntries,
+  writeCashBookEntries,
+  normalizeEntry,
+  validateCreateBody,
+  CATEGORIES: CASH_BOOK_CATEGORIES,
+} = require('./cashBookStore');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 1249;
 const SHOP_NAME = String(process.env.SHOP_NAME || 'CS Store').trim() || 'CS Store';
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
+function resolveCorsOrigin() {
+  const raw = String(process.env.CORS_ORIGIN ?? '').trim();
+  if (!raw || raw === 'true' || raw === '*') return true;
+  if (raw === 'false') return false;
+  return raw;
+}
+
+app.use(cors({ origin: resolveCorsOrigin() }));
 app.use(express.json());
 
 app.get('/api/health', (req, res) => {
@@ -93,8 +243,292 @@ app.get('/api/health', (req, res) => {
 });
 
 /** Public app config (shop branding). No auth — used on login and chrome. */
-app.get('/api/config', (req, res) => {
-  res.json({ shopName: SHOP_NAME });
+app.get('/api/config', async (req, res) => {
+  try {
+    const shopData = await readShopData();
+    const shopName = String(shopData.shopName || '').trim() || SHOP_NAME;
+    res.json({ shopName });
+  } catch (e) {
+    console.error(e);
+    res.json({ shopName: SHOP_NAME });
+  }
+});
+
+app.get('/api/shop', async (req, res) => {
+  try {
+    const data = await readShopData();
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load shop details' });
+  }
+});
+
+app.put('/api/shop', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const current = await readShopData();
+    const next = await writeShopData({
+      shopName: body.shopName,
+      addressLine1: body.addressLine1,
+      addressLine2: body.addressLine2,
+      contactNumber: body.contactNumber,
+      email: body.email,
+      ownerName: body.ownerName,
+      registrationNo: body.registrationNo,
+      dealerCode: body.dealerCode,
+      dealerTagline: body.dealerTagline,
+      deliveryNote: body.deliveryNote,
+      collectorSeparateBillSettlement:
+        body.collectorSeparateBillSettlement != null
+          ? Boolean(body.collectorSeparateBillSettlement)
+          : current.collectorSeparateBillSettlement,
+      bankAccounts: current.bankAccounts,
+    });
+    res.json(next);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save shop details' });
+  }
+});
+
+app.post('/api/shop/bank-accounts', async (req, res) => {
+  try {
+    const result = await addBankAccount(req.body || {});
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.status(201).json(result.account);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to add bank account' });
+  }
+});
+
+app.patch('/api/shop/bank-accounts/:id', async (req, res) => {
+  try {
+    const result = await updateBankAccount(req.params.id, req.body || {});
+    if (result.error) {
+      const status = result.error === 'Bank account not found' ? 404 : 400;
+      return res.status(status).json({ error: result.error });
+    }
+    res.json(result.account);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update bank account' });
+  }
+});
+
+app.delete('/api/shop/bank-accounts/:id', async (req, res) => {
+  try {
+    const result = await deleteBankAccount(req.params.id);
+    if (result.error) {
+      const status = result.error === 'Bank account not found' ? 404 : 400;
+      return res.status(status).json({ error: result.error });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to delete bank account' });
+  }
+});
+
+app.get('/api/lorries', async (req, res) => {
+  try {
+    const rows = await readLorries();
+    const sorted = [...rows].sort((a, b) =>
+      String(a.number || '').localeCompare(String(b.number || ''), undefined, {
+        sensitivity: 'base',
+      }),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read lorries' });
+  }
+});
+
+app.post('/api/lorries', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const number = normalizeLorryNumber(body.number ?? body.vehicleNumber ?? body.name);
+    const note = String(body.note ?? '').trim();
+    if (!number) {
+      return res.status(400).json({ error: 'lorry number is required' });
+    }
+
+    const lorries = await readLorries();
+    if (findDuplicateLorry(lorries, number)) {
+      return res.status(400).json({ error: 'A lorry with this number already exists' });
+    }
+
+    const row = normalizeLorry({
+      id: `lorry-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      number,
+      note,
+      createdAt: new Date().toISOString(),
+    });
+
+    lorries.push(row);
+    await writeLorries(lorries);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save lorry' });
+  }
+});
+
+app.patch('/api/lorries/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const lorries = await readLorries();
+    const idx = lorries.findIndex((l) => l.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Lorry not found' });
+    }
+
+    const current = lorries[idx];
+    const hasNumber = body.number !== undefined || body.vehicleNumber !== undefined || body.name !== undefined;
+    const hasNote = body.note !== undefined;
+    if (!hasNumber && !hasNote) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    const next = { ...current };
+    if (hasNumber) {
+      const number = normalizeLorryNumber(body.number ?? body.vehicleNumber ?? body.name);
+      if (!number) return res.status(400).json({ error: 'lorry number cannot be empty' });
+      if (findDuplicateLorry(lorries, number, id)) {
+        return res.status(400).json({ error: 'A lorry with this number already exists' });
+      }
+      next.number = number;
+    }
+    if (hasNote) {
+      next.note = String(body.note ?? '').trim();
+    }
+    next.updatedAt = new Date().toISOString();
+
+    lorries[idx] = normalizeLorry(next);
+    await writeLorries(lorries);
+    res.json(lorries[idx]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update lorry' });
+  }
+});
+
+app.get('/api/distributors', async (req, res) => {
+  try {
+    const rows = await readDistributors();
+    const normalized = rows.map((d) => withNormalizedLists(d));
+    const sorted = [...normalized].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), undefined, {
+        sensitivity: 'base',
+      }),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read distributors' });
+  }
+});
+
+app.post('/api/distributors', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = String(body.name ?? '').trim();
+    const email = String(body.email ?? '').trim();
+    const contact = String(body.contact ?? '').trim();
+    const locations = normalizeLocations(body.locations, body.location);
+    const products = normalizeProducts(body.products);
+
+    if (!name || !contact) {
+      return res.status(400).json({ error: 'name and contact are required' });
+    }
+    if (locations.length === 0) {
+      return res.status(400).json({ error: 'at least one location is required' });
+    }
+
+    const row = {
+      id: `dist-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      name,
+      locations,
+      location: locations[0],
+      contact,
+      ...(email ? { email } : {}),
+      products,
+      createdAt: new Date().toISOString(),
+    };
+
+    const distributors = await readDistributors();
+    distributors.push(row);
+    await writeDistributors(distributors);
+    res.status(201).json(withNormalizedLists(row));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save distributor' });
+  }
+});
+
+app.patch('/api/distributors/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const distributors = await readDistributors();
+    const idx = distributors.findIndex((d) => d.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Distributor not found' });
+    }
+
+    const current = distributors[idx];
+    const hasName = body.name !== undefined;
+    const hasLocation = body.location !== undefined;
+    const hasLocations = body.locations !== undefined;
+    const hasContact = body.contact !== undefined;
+    const hasEmail = body.email !== undefined;
+    const hasProducts = body.products !== undefined;
+    if (!hasName && !hasLocation && !hasLocations && !hasContact && !hasEmail && !hasProducts) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    const next = { ...current };
+
+    if (hasName) {
+      const name = String(body.name ?? '').trim();
+      if (!name) return res.status(400).json({ error: 'name cannot be empty' });
+      next.name = name;
+    }
+    if (hasLocations || hasLocation) {
+      const resolved = hasLocations
+        ? normalizeLocations(body.locations, hasLocation ? body.location : undefined)
+        : normalizeLocations(undefined, body.location);
+      if (resolved.length === 0) {
+        return res.status(400).json({ error: 'at least one location is required' });
+      }
+      next.locations = resolved;
+      next.location = resolved[0];
+    }
+    if (hasContact) {
+      const contact = String(body.contact ?? '').trim();
+      if (!contact) return res.status(400).json({ error: 'contact cannot be empty' });
+      next.contact = contact;
+    }
+    if (hasEmail) {
+      const email = String(body.email ?? '').trim();
+      if (email) next.email = email;
+      else delete next.email;
+    }
+    if (hasProducts) {
+      next.products = normalizeProducts(body.products);
+    }
+
+    next.updatedAt = new Date().toISOString();
+    distributors[idx] = next;
+    await writeDistributors(distributors);
+    res.json(withNormalizedLists(next));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update distributor' });
+  }
 });
 
 /** Aggregates for dashboard "Your card": receivables, stock spend, payments in */
@@ -163,6 +597,105 @@ function lastNDaysYmdLocal(n) {
 /** Default credit bill settlement window when a customer has no override in overduedates.json. */
 const BILL_SETTLEMENT_DAYS = DEFAULT_OVERDUE_DAYS;
 
+function parseAppliedBillIdsFromBody(body) {
+  const raw = body?.appliedBillIds;
+  if (raw == null || raw === '') return { ids: [] };
+  if (!Array.isArray(raw)) {
+    return { error: 'appliedBillIds must be an array of bill ids' };
+  }
+  const ids = [...new Set(raw.map((x) => String(x ?? '').trim()).filter(Boolean))];
+  return { ids };
+}
+
+function validateAppliedBillIdsForCustomer(bills, cust, ids) {
+  if (!ids.length) return null;
+  const nk = normalizeCustomerName(cust.name);
+  for (const id of ids) {
+    const bill = bills.find((b) => String(b.id ?? '').trim() === id);
+    if (!bill) return 'One or more selected bills were not found';
+    if (normalizeCustomerName(bill.customerName) !== nk) {
+      return 'Each selected bill must belong to the payment customer';
+    }
+  }
+  return null;
+}
+
+function appliedBillSnapshots(bills, ids) {
+  if (!ids.length) return [];
+  return ids.map((id) => {
+    const bill = bills.find((b) => String(b.id ?? '').trim() === id);
+    if (!bill) return null;
+    return {
+      id: bill.id,
+      date: bill.date,
+      totalAmount: toNonNegMoney(bill.totalAmount),
+    };
+  }).filter(Boolean);
+}
+
+function attachAppliedBillsToPaymentRow(row, bills, ids) {
+  if (!ids.length) {
+    delete row.appliedBillIds;
+    delete row.appliedBills;
+    return;
+  }
+  row.appliedBillIds = ids;
+  row.appliedBills = appliedBillSnapshots(bills, ids);
+}
+
+function parseBillCashAllocationsFromBody(body) {
+  const raw = body?.billCashAllocations;
+  if (raw == null || raw === '') return { allocations: [] };
+  if (!Array.isArray(raw)) {
+    return { error: 'billCashAllocations must be an array' };
+  }
+  const byBillId = new Map();
+  for (const item of raw) {
+    const billId = String(item?.billId ?? item?.id ?? '').trim();
+    const cashAmount = toNonNegMoney(item?.cashAmount ?? item?.amount ?? 0);
+    if (!billId || cashAmount <= 0) continue;
+    byBillId.set(billId, cashAmount);
+  }
+  const allocations = [...byBillId.entries()].map(([billId, cashAmount]) => ({ billId, cashAmount }));
+  return { allocations };
+}
+
+function validateBillCashAllocationsForCustomer(bills, cust, allocations) {
+  if (!allocations.length) return null;
+  const nk = normalizeCustomerName(cust.name);
+  for (const { billId, cashAmount } of allocations) {
+    const bill = bills.find((b) => String(b.id ?? '').trim() === billId);
+    if (!bill) return 'One or more bill allocations were not found';
+    if (normalizeCustomerName(bill.customerName) !== nk) {
+      return 'Each bill allocation must belong to the payment customer';
+    }
+    if (cashAmount <= 0) return 'Each bill allocation must have an amount greater than 0';
+    const billTotal = toNonNegMoney(bill.totalAmount);
+    if (billTotal > 0 && cashAmount > billTotal) {
+      return `Amount for bill ${bill.date || billId} cannot exceed the bill total`;
+    }
+  }
+  return null;
+}
+
+function attachBillCashAllocationsToPaymentRow(row, bills, allocations) {
+  if (!allocations.length) {
+    delete row.billCashAllocations;
+    return;
+  }
+  row.billCashAllocations = allocations.map(({ billId, cashAmount }) => {
+    const bill = bills.find((b) => String(b.id ?? '').trim() === billId);
+    return {
+      billId,
+      cashAmount: toNonNegMoney(cashAmount),
+      billDate: bill?.date,
+      billTotal: bill ? toNonNegMoney(bill.totalAmount) : undefined,
+    };
+  });
+  const ids = allocations.map((a) => a.billId);
+  attachAppliedBillsToPaymentRow(row, bills, ids);
+}
+
 /** How a payment settled the account (customer transaction list). */
 function paymentSettlementSummary(p) {
   const credit = paymentCreditToCustomer(p);
@@ -218,14 +751,21 @@ const BILL_BRAND_LABEL = {
  * (sum of all load arrivals) − (all credit bills) − (promotional outs).
  * Matches live stock; loads.json rows are not mutated when bills are saved.
  */
-function validateBillAgainstPooledStock(loads, existingBills, promotions, billBagFields) {
+function validateBillAgainstPooledStock(loads, existingBills, promotions, billBagFields, pendingUnloads = [], excludeRequestId = null) {
   const loaded = sumLoadBagsByBrand(loads);
   const soldSoFar = sumAllBillBagsByBrand(existingBills);
   const promoOut = sumAllPromotionBagsByBrand(promotions);
+  const pendingRows = Array.isArray(pendingUnloads) ? pendingUnloads : [];
+  const pending = sumPendingUnloadBagsByBrand(
+    excludeRequestId ? pendingRows.filter((r) => r.id !== excludeRequestId) : pendingRows,
+  );
   for (const k of BILL_BAG_BRANDS) {
     const available = Math.max(
       0,
-      toNonNegNumber(loaded[k]) - toNonNegNumber(soldSoFar[k]) - toNonNegNumber(promoOut[k]),
+      toNonNegNumber(loaded[k]) -
+        toNonNegNumber(soldSoFar[k]) -
+        toNonNegNumber(promoOut[k]) -
+        toNonNegNumber(pending[k]),
     );
     const need = toNonNegNumber(billBagFields[`${k}Bags`]);
     if (need > available) {
@@ -506,6 +1046,90 @@ app.get('/api/cash-flow', async (req, res) => {
   }
 });
 
+/** Running balance per shop bank account (deposits + deposited cheques − cleared PO cheques; pending until converting date). */
+app.get('/api/bank-account-balances', async (req, res) => {
+  try {
+    const shop = await readShopData();
+    const [cashBookEntries, payments, purchaseOrders] = await Promise.all([
+      readCashBookEntries(),
+      readPayments(),
+      readPurchaseOrders(),
+    ]);
+    const payload = computeBankAccountBalances({
+      bankAccounts: shop.bankAccounts || [],
+      cashBookEntries,
+      payments,
+      purchaseOrders,
+      asOf: req.query.asOf,
+    });
+    res.json(payload);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load bank account balances' });
+  }
+});
+
+app.get('/api/cash-book-entries', async (req, res) => {
+  try {
+    const from = String(req.query.from ?? '').trim().slice(0, 10);
+    const to = String(req.query.to ?? '').trim().slice(0, 10);
+    const category = String(req.query.category ?? '').trim();
+    const excludeCategory = String(req.query.excludeCategory ?? '').trim();
+
+    let rows = await readCashBookEntries();
+    if (category && CASH_BOOK_CATEGORIES.includes(category)) {
+      rows = rows.filter((r) => r.category === category);
+    }
+    if (excludeCategory && CASH_BOOK_CATEGORIES.includes(excludeCategory)) {
+      rows = rows.filter((r) => r.category !== excludeCategory);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      rows = rows.filter((r) => r.date >= from);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      rows = rows.filter((r) => r.date <= to);
+    }
+
+    rows.sort((a, b) => {
+      const d = b.date.localeCompare(a.date);
+      if (d !== 0) return d;
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read cash book entries' });
+  }
+});
+
+app.post('/api/cash-book-entries', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const [users, lorries, shop] = await Promise.all([readUsers(), readLorries(), readShopData()]);
+    const staffById = new Map(users.map((u) => [u.id, u]));
+    const lorryById = new Map(lorries.map((l) => [l.id, l]));
+    const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+
+    const validated = validateCreateBody(body, { staffById, lorryById, bankAccountById });
+    if (validated.error) {
+      return res.status(400).json({ error: validated.error });
+    }
+
+    const entries = await readCashBookEntries();
+    const row = normalizeEntry({
+      id: `cbe-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...validated.payload,
+      createdAt: new Date().toISOString(),
+    });
+    entries.push(row);
+    await writeCashBookEntries(entries);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save cash book entry' });
+  }
+});
+
 /** Daily bag totals from credit bills (Tokyo / Samudra / Atlas / Nippon) */
 app.get('/api/bag-sales-by-day', async (req, res) => {
   try {
@@ -587,13 +1211,16 @@ app.get('/api/recent-transfers', async (req, res) => {
  */
 app.get('/api/overdue-bills', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const [customers, bills, payments, overdueDates] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readOverdueDates(),
     ]);
-    res.json(collectOverdueBillRows(customers, bills, payments, overdueDates));
+    let rows = collectOverdueBillRows(customers, bills, payments, overdueDates);
+    rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
+    res.json(rows);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load overdue bills' });
@@ -642,9 +1269,20 @@ app.post('/api/login', async (req, res) => {
       if (!u) {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
+      const userRole = String(u.role || '').trim();
+      if (userRole === 'Admin') {
+        return res.json({
+          ok: true,
+          role: 'admin',
+          token: signToken(u.username, 'admin'),
+          username: u.username,
+        });
+      }
       return res.json({
         ok: true,
         role: 'staff',
+        staffRole: userRole,
+        managerAccess: userRole === 'Manager' ? getEffectiveManagerAccess(u.access) : undefined,
         token: signToken(u.username, 'staff'),
         username: u.username,
       });
@@ -653,6 +1291,447 @@ app.post('/api/login', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.get('/api/me', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Not signed in' });
+  }
+  try {
+    if (auth.role === 'admin') {
+      return res.json({ username: auth.username, role: 'admin' });
+    }
+    const u = await findUserByUsername(auth.username);
+    if (!u) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    const staffRole = String(u.role || '').trim();
+    const payload = {
+      username: u.username,
+      role: 'staff',
+      staffRole,
+      name: String(u.name || '').trim() || u.username,
+    };
+    if (staffRole === 'Manager') {
+      payload.managerAccess = getEffectiveManagerAccess(u.access);
+    }
+    if (staffRole === 'Collector') {
+      payload.collectorAccess = getEffectiveCollectorAccess();
+      payload.staffUserId = u.id;
+    }
+    res.json(payload);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load session' });
+  }
+});
+
+/** Driver portal sign-in (NIC + password, Driver role only). */
+app.post('/api/driver/login', async (req, res) => {
+  const body = req.body || {};
+  const username = String(body.username ?? '').trim();
+  const password = String(body.password ?? '').trim();
+  if (!username || !password) {
+    return res.status(400).json({ error: 'NIC and password are required' });
+  }
+  try {
+    if (!(await verifyStoredUser(username, password))) {
+      return res.status(401).json({ error: 'Invalid NIC or password' });
+    }
+    const u = await findUserByUsername(username);
+    if (!u) {
+      return res.status(401).json({ error: 'Invalid NIC or password' });
+    }
+    if (String(u.role || '').trim() !== 'Driver') {
+      return res.status(403).json({ error: 'This sign-in is for driver accounts only' });
+    }
+    return res.json({
+      ok: true,
+      role: 'staff',
+      staffRole: 'Driver',
+      token: signToken(u.username, 'staff'),
+      username: u.username,
+      name: String(u.name || '').trim() || u.username,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+async function requireDriverOrAdmin(req, res) {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: 'Sign in as driver to continue' });
+    return null;
+  }
+  if (auth.role === 'admin') {
+    return { ...auth, name: auth.username, driverName: auth.username };
+  }
+  const u = await findUserByUsername(auth.username);
+  if (!u || String(u.role || '').trim() !== 'Driver') {
+    res.status(403).json({ error: 'Only drivers can use this action' });
+    return null;
+  }
+  const name = String(u.name || '').trim() || u.username;
+  return { ...auth, name, driverName: name };
+}
+
+async function requireManagerOrAdmin(req, res) {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: 'Sign in again to continue' });
+    return null;
+  }
+  if (auth.role === 'admin') {
+    return auth;
+  }
+  const u = await findUserByUsername(auth.username);
+  if (!u || String(u.role || '').trim() !== 'Manager') {
+    res.status(403).json({ error: 'Only managers or admin can perform this action' });
+    return null;
+  }
+  return auth;
+}
+
+const UNLOAD_BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
+
+app.get('/api/unloads', async (req, res) => {
+  const auth = await requireDriverOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    let rows = await readUnloads();
+    if (auth.role !== 'admin') {
+      const u = await findUserByUsername(auth.username);
+      if (u && String(u.role || '').trim() === 'Driver') {
+        rows = rows.filter((r) => String(r.recordedBy || '') === auth.username);
+      }
+    }
+    const sorted = [...rows].sort((a, b) => {
+      const da = String(a.date || '');
+      const db = String(b.date || '');
+      if (da !== db) return db.localeCompare(da);
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read unloads' });
+  }
+});
+
+/** Manager/admin: pending driver unload requests. */
+app.get('/api/unload-requests', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const statusFilter = String(req.query.status ?? 'pending').trim().toLowerCase();
+    let rows = await readUnloads();
+    if (statusFilter !== 'all') {
+      rows = rows.filter((r) => normalizeStatus(r.status) === statusFilter);
+    }
+    const sorted = [...rows].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read unload requests' });
+  }
+});
+
+function lastBillUnitPricesForCustomer(bills, customerName) {
+  const nk = normalizeCustomerName(customerName);
+  if (!nk) return null;
+  const matches = bills.filter((b) => normalizeCustomerName(b.customerName) === nk);
+  if (!matches.length) return null;
+  matches.sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+  const bill = matches[0];
+  return {
+    billId: bill.id,
+    date: bill.date,
+    customerName: bill.customerName,
+    tokyoUnitPrice: bill.tokyoUnitPrice,
+    samudraUnitPrice: bill.samudraUnitPrice,
+    atlasUnitPrice: bill.atlasUnitPrice,
+    nipponUnitPrice: bill.nipponUnitPrice,
+  };
+}
+
+app.get('/api/bills/last-unit-prices', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const customerId = String(req.query.customerId ?? '').trim();
+    if (!customerId) {
+      return res.status(400).json({ error: 'customerId is required' });
+    }
+    const customers = await readCustomers();
+    const cust = customers.find((c) => c.id === customerId);
+    if (!cust) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    const bills = await readBills();
+    const last = lastBillUnitPricesForCustomer(bills, cust.name);
+    if (!last) {
+      return res.json({ found: false, customerId: cust.id, customerName: cust.name });
+    }
+    res.json({ found: true, customerId: cust.id, customerName: cust.name, ...last });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load last unit prices' });
+  }
+});
+
+app.post('/api/unload-requests/:id/approve', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const enteredBy = String(body.enteredBy ?? auth.username ?? '').trim();
+    if (!enteredBy) {
+      return res.status(400).json({ error: 'enteredBy is required' });
+    }
+
+    const unloads = await readUnloads();
+    const idx = unloads.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    const requestRow = unloads[idx];
+    if (normalizeStatus(requestRow.status) !== 'pending') {
+      return res.status(400).json({ error: 'This request is no longer pending' });
+    }
+
+    const billBody = {
+      tokyoBags: requestRow.tokyoBags,
+      samudraBags: requestRow.samudraBags,
+      atlasBags: requestRow.atlasBags,
+      nipponBags: requestRow.nipponBags,
+      tokyoUnitPrice: body.tokyoUnitPrice,
+      samudraUnitPrice: body.samudraUnitPrice,
+      atlasUnitPrice: body.atlasUnitPrice,
+      nipponUnitPrice: body.nipponUnitPrice,
+    };
+    const fields = parseBillBagFields(billBody);
+    const bagSum = fields.tokyoBags + fields.samudraBags + fields.atlasBags + fields.nipponBags;
+    if (bagSum <= 0) {
+      return res.status(400).json({ error: 'Request has no bags' });
+    }
+    if (fields.totalAmount <= 0) {
+      return res.status(400).json({ error: 'Enter unit price for at least one brand with bags' });
+    }
+
+    const stocks = await readStocks();
+    const bills = await readBills();
+    const promotions = await readPromotions();
+    const check = validateBillAgainstPooledStock(
+      stocks,
+      bills,
+      promotions,
+      {
+        tokyoBags: fields.tokyoBags,
+        samudraBags: fields.samudraBags,
+        atlasBags: fields.atlasBags,
+        nipponBags: fields.nipponBags,
+      },
+      unloads,
+      id,
+    );
+    if (!check.ok) {
+      return res.status(400).json({ error: check.error });
+    }
+
+    const customerName = String(requestRow.customerName ?? '').trim();
+    const stockId = inferStockIdForBillBags(stocks, bills, {
+      tokyoBags: fields.tokyoBags,
+      samudraBags: fields.samudraBags,
+      atlasBags: fields.atlasBags,
+      nipponBags: fields.nipponBags,
+    });
+    const billRow = {
+      id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      date: String(requestRow.date ?? '').trim(),
+      customerName,
+      stockId,
+      ...fields,
+      enteredBy,
+      unloadRequestId: requestRow.id,
+      createdAt: new Date().toISOString(),
+    };
+
+    bills.push(billRow);
+    await writeBills(bills);
+
+    unloads[idx] = {
+      ...requestRow,
+      status: 'approved',
+      billId: billRow.id,
+      approvedAt: new Date().toISOString(),
+      approvedBy: enteredBy,
+    };
+    await writeUnloads(unloads);
+
+    const paymentsList = await readPayments();
+    await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
+
+    try {
+      await refreshLiveStockFromSources();
+    } catch (err) {
+      console.error('liveStock refresh after request approve', err);
+    }
+
+    const customersForNotify = await readCustomers();
+    const custForNotify = customersForNotify.find(
+      (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
+    );
+    if (custForNotify?.email) {
+      notifyBillEmail(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+        console.error('bill email notification', err),
+      );
+    }
+    if (custForNotify?.contactNumber) {
+      notifyBillWhatsApp(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+        console.error('bill whatsapp notification', err),
+      );
+      notifyUnloadWhatsApp(custForNotify, {
+        ...requestRow,
+        date: billRow.date,
+        tokyoBags: fields.tokyoBags,
+        samudraBags: fields.samudraBags,
+        atlasBags: fields.atlasBags,
+        nipponBags: fields.nipponBags,
+      }).catch((err) => console.error('unload whatsapp notification', err));
+    }
+
+    res.status(201).json({ request: unloads[idx], bill: billRow });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to approve request' });
+  }
+});
+
+app.post('/api/unload-requests/:id/reject', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const rejectedBy = String(body.rejectedBy ?? auth.username ?? '').trim();
+    const unloads = await readUnloads();
+    const idx = unloads.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    if (normalizeStatus(unloads[idx].status) !== 'pending') {
+      return res.status(400).json({ error: 'This request is no longer pending' });
+    }
+    unloads[idx] = {
+      ...unloads[idx],
+      status: 'rejected',
+      rejectedAt: new Date().toISOString(),
+      rejectedBy,
+      rejectReason: String(body.reason ?? '').trim(),
+    };
+    await writeUnloads(unloads);
+    res.json(unloads[idx]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to reject request' });
+  }
+});
+
+app.post('/api/unloads', async (req, res) => {
+  const auth = await requireDriverOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const body = req.body || {};
+    const customerId = String(body.customerId ?? '').trim();
+    if (!customerId) {
+      return res.status(400).json({ error: 'customerId (shop) is required' });
+    }
+
+    let date = String(body.date ?? '').trim();
+    if (auth.role !== 'admin') {
+      date = paymentDateDefaultYmd();
+    } else if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      date = paymentDateDefaultYmd();
+    }
+
+    const tokyoBags = toNonNegNumber(body.tokyoBags);
+    const samudraBags = toNonNegNumber(body.samudraBags);
+    const atlasBags = toNonNegNumber(body.atlasBags);
+    const nipponBags = toNonNegNumber(body.nipponBags);
+    const bagSum = tokyoBags + samudraBags + atlasBags + nipponBags;
+    if (bagSum <= 0) {
+      return res.status(400).json({ error: 'Enter at least one bag to unload (any brand).' });
+    }
+
+    const customers = await readCustomers();
+    const cust = customers.find((c) => c.id === customerId);
+    if (!cust) {
+      return res.status(400).json({ error: 'Shop (customer) not found' });
+    }
+
+    const summary = await getLiveStockSummary();
+    const unloadsExisting = await readUnloads();
+    const pending = sumPendingUnloadBagsByBrand(unloadsExisting);
+    const liveByBrand = {};
+    for (const b of summary.brands || []) {
+      const live = Math.max(0, Math.floor(Number(b.bags) || 0));
+      liveByBrand[b.key] = Math.max(0, live - (pending[b.key] ?? 0));
+    }
+    const requested = { tokyo: tokyoBags, samudra: samudraBags, atlas: atlasBags, nippon: nipponBags };
+    const labels = { tokyo: 'Tokyo', samudra: 'Samudra', atlas: 'Atlas', nippon: 'Nippon' };
+    const stockErrors = [];
+    for (const k of UNLOAD_BRAND_KEYS) {
+      const available = liveByBrand[k] ?? 0;
+      const need = requested[k];
+      if (need <= 0) continue;
+      if (available <= 0) {
+        stockErrors.push(`${labels[k]} is out of stock.`);
+      } else if (need > available) {
+        stockErrors.push(
+          `${labels[k]}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock (requested ${need.toLocaleString()}).`,
+        );
+      }
+    }
+    if (stockErrors.length > 0) {
+      return res.status(400).json({ error: stockErrors.join(' ') });
+    }
+
+    const note = String(body.note ?? '').trim();
+    const row = {
+      id: `unload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      date,
+      customerId: cust.id,
+      customerName: cust.name,
+      tokyoBags,
+      samudraBags,
+      atlasBags,
+      nipponBags,
+      recordedBy: auth.username,
+      driverName: auth.driverName || auth.name || auth.username,
+      note,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+
+    const unloads = await readUnloads();
+    unloads.push(row);
+    await writeUnloads(unloads);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save unload' });
   }
 });
 
@@ -673,11 +1752,15 @@ app.post('/api/users', async (req, res) => {
   if (!admin) return;
   try {
     const body = req.body || {};
-    const username = String(body.username ?? '').trim();
-    const password = String(body.password ?? '').trim();
     const result = await createUser({
-      username,
-      password,
+      name: body.name,
+      contact: body.contact,
+      nic: body.nic,
+      driverLicense: body.driverLicense,
+      customerId: body.customerId,
+      role: body.role,
+      password: String(body.password ?? '').trim(),
+      access: body.access,
       createdBy: admin.username,
     });
     if (!result.ok) {
@@ -687,6 +1770,31 @@ app.post('/api/users', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to create user' });
+  }
+});
+
+app.patch('/api/users/:id', async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  try {
+    const body = req.body || {};
+    const result = await updateUser(req.params.id, {
+      name: body.name,
+      contact: body.contact,
+      nic: body.nic,
+      driverLicense: body.driverLicense,
+      customerId: body.customerId,
+      role: body.role,
+      password: body.password,
+      access: body.access,
+    });
+    if (!result.ok) {
+      return res.status(result.error === 'User not found' ? 404 : 400).json({ error: result.error });
+    }
+    res.json(result.user);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
@@ -705,15 +1813,34 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
+app.get('/api/collectors', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    res.json(await listCollectorStaff());
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load collectors' });
+  }
+});
+
 app.get('/api/customers', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const customers = await readCustomers();
-    const [bills, payments, overdueDates] = await Promise.all([
+    const [bills, payments, overdueDates, users] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
+      readUsers(),
     ]);
-    const enriched = customers.map((c) => enrichCustomerBalance(c, bills, payments, overdueDates));
+    let enriched = customers.map((c) =>
+      enrichCustomerWithCollector(enrichCustomerBalance(c, bills, payments, overdueDates), users),
+    );
+    const staffUser = await resolveStaffUser(auth);
+    if (isCollectorStaff(staffUser)) {
+      enriched = enriched.filter((c) => customerAssignedToCollector(c, staffUser.id));
+    }
     const sorted = [...enriched].sort((a, b) =>
       String(a.name || '').localeCompare(String(b.name || ''), undefined, {
         sensitivity: 'base',
@@ -728,18 +1855,24 @@ app.get('/api/customers', async (req, res) => {
 
 app.get('/api/customers/:id/transactions', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const id = String(req.params.id ?? '').trim();
     const customers = await readCustomers();
     const cust = customers.find((c) => c.id === id);
     if (!cust) {
       return res.status(404).json({ error: 'Customer not found' });
     }
+    const staffUser = await resolveStaffUser(auth);
+    if (isCollectorStaff(staffUser) && !customerAssignedToCollector(cust, staffUser.id)) {
+      return res.status(403).json({ error: 'Not assigned to this customer' });
+    }
     const nameKey = normalizeCustomerName(cust.name);
 
-    const [bills, payments, overdueDates] = await Promise.all([
+    const [bills, payments, overdueDates, users] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
+      readUsers(),
     ]);
     const transactions = [];
 
@@ -795,9 +1928,29 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
         ]
           .filter(Boolean)
           .join(' · ') || '—',
-        amount: paymentCreditToCustomer(p),
+        amount: paymentGrossCredit(p),
         direction: 'credit',
       });
+      for (const c of getPaymentCheques(p)) {
+        if (!c.chequeReturned) continue;
+        const returnDate = String(c.chequeReturnedAt ?? '').trim().slice(0, 10) || p.date;
+        transactions.push({
+          kind: 'cheque_return',
+          id: `${p.id}::${c.id}`,
+          date: returnDate,
+          sortAt: c.chequeReturnedAt || p.createdAt || `${returnDate}T12:00:00`,
+          type: 'Returned cheque',
+          details: [
+            c.chequeNumber ? `#${c.chequeNumber}` : null,
+            c.chequeDate ? `converting ${c.chequeDate}` : null,
+            c.chequeReturnedBy ? `by ${c.chequeReturnedBy}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'Cheque returned',
+          amount: Number(c.amount) || 0,
+          direction: 'charge',
+        });
+      }
     }
 
     transactions.sort((a, b) => {
@@ -807,7 +1960,10 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
     });
 
     res.json({
-      customer: enrichCustomerBalance(cust, bills, payments, overdueDates),
+      customer: enrichCustomerWithCollector(
+        enrichCustomerBalance(cust, bills, payments, overdueDates),
+        users,
+      ),
       transactions,
     });
   } catch (e) {
@@ -838,12 +1994,37 @@ app.post('/api/customers', async (req, res) => {
       dueDate = defaultDueDateYmd();
     }
 
+    const customerId = normalizeCustomerRecordId(body.id);
+    if (!customerId) {
+      return res.status(400).json({ error: 'Customer ID is required' });
+    }
+    const customerIdNorm = customerRecordIdKey(customerId);
+
+    const customers = await readCustomers();
+    if (customers.some((c) => customerRecordIdKey(c.id) === customerIdNorm)) {
+      return res.status(400).json({ error: 'A customer with this ID already exists' });
+    }
+
+    let collectorUserId = '';
+    const collectorRaw = String(body.collectorUserId ?? '').trim();
+    if (!collectorRaw) {
+      return res.status(400).json({ error: 'Assigned collector is required' });
+    }
+    const auth = await requireManagerOrAdmin(req, res);
+    if (!auth) return;
+    const collectorCheck = await validateCollectorUserId(body.collectorUserId);
+    if (!collectorCheck.ok) {
+      return res.status(400).json({ error: collectorCheck.error });
+    }
+    collectorUserId = collectorCheck.collectorUserId;
+
     const row = {
-      id: `cust-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      id: customerId,
       name,
       location,
       contactNumber,
       ...(email ? { email } : {}),
+      collectorUserId,
       pastBill,
       remainingAmount: pastBill,
       dueDate,
@@ -851,7 +2032,6 @@ app.post('/api/customers', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    const customers = await readCustomers();
     customers.push(row);
     await writeCustomers(customers);
     res.status(201).json(row);
@@ -877,8 +2057,31 @@ app.patch('/api/customers/:id', async (req, res) => {
     const hasDueDate = body.dueDate !== undefined;
     const hasPastBill = body.pastBill !== undefined;
     const hasOverdueDays = body.overdueDays !== undefined;
-    if (!hasName && !hasLocation && !hasContact && !hasEmail && !hasDueDate && !hasPastBill && !hasOverdueDays) {
+    const hasOverdueNotifyEnabled = body.overdueNotifyEnabled !== undefined;
+    const hasOverdueNotifyWeekday = body.overdueNotifyWeekday !== undefined;
+    const hasOverdueNotifyTime = body.overdueNotifyTime !== undefined;
+    const hasMonthlyTargetBags = body.monthlyTargetBags !== undefined;
+    const hasCollectorUserId = body.collectorUserId !== undefined;
+    if (
+      !hasName &&
+      !hasLocation &&
+      !hasContact &&
+      !hasEmail &&
+      !hasDueDate &&
+      !hasPastBill &&
+      !hasOverdueDays &&
+      !hasOverdueNotifyEnabled &&
+      !hasOverdueNotifyWeekday &&
+      !hasOverdueNotifyTime &&
+      !hasMonthlyTargetBags &&
+      !hasCollectorUserId
+    ) {
       return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    if (hasMonthlyTargetBags || hasCollectorUserId || hasOverdueNotifyEnabled || hasOverdueNotifyWeekday || hasOverdueNotifyTime) {
+      const auth = await requireManagerOrAdmin(req, res);
+      if (!auth) return;
     }
 
     const customers = await readCustomers();
@@ -946,6 +2149,64 @@ app.patch('/api/customers/:id', async (req, res) => {
       overdueDates = await setCustomerOverdueDays(id, nextOverdueDays);
     }
 
+    if (hasOverdueNotifyEnabled) {
+      if (body.overdueNotifyEnabled === false) {
+        cust.overdueNotifyEnabled = false;
+      } else {
+        delete cust.overdueNotifyEnabled;
+      }
+    }
+    if (hasOverdueNotifyWeekday) {
+      const raw = body.overdueNotifyWeekday;
+      if (raw === null || raw === '' || raw === false) {
+        delete cust.overdueNotifyWeekday;
+      } else {
+        const n = parseInt(String(raw), 10);
+        if (!Number.isFinite(n) || n < 0 || n > 6) {
+          return res.status(400).json({ error: 'overdueNotifyWeekday must be 0–6 (Sunday–Saturday)' });
+        }
+        cust.overdueNotifyWeekday = n;
+      }
+    }
+    if (hasOverdueNotifyTime) {
+      const raw = String(body.overdueNotifyTime ?? '').trim();
+      if (!raw) {
+        delete cust.overdueNotifyTime;
+      } else {
+        const t = normalizeTimeHHMM(raw);
+        if (!t) {
+          return res.status(400).json({ error: 'overdueNotifyTime must be HH:MM (24-hour)' });
+        }
+        cust.overdueNotifyTime = t;
+      }
+    }
+
+    if (hasMonthlyTargetBags) {
+      const nextTarget = normalizeMonthlyTargetBags(body.monthlyTargetBags);
+      if (nextTarget === null) {
+        return res.status(400).json({
+          error: 'monthlyTargetBags must be a whole number from 0 to 999999 (0 clears the target)',
+        });
+      }
+      if (nextTarget === 0) {
+        delete cust.monthlyTargetBags;
+      } else {
+        cust.monthlyTargetBags = nextTarget;
+      }
+    }
+
+    if (hasCollectorUserId) {
+      const collectorCheck = await validateCollectorUserId(body.collectorUserId);
+      if (!collectorCheck.ok) {
+        return res.status(400).json({ error: collectorCheck.error });
+      }
+      if (collectorCheck.collectorUserId) {
+        cust.collectorUserId = collectorCheck.collectorUserId;
+      } else {
+        delete cust.collectorUserId;
+      }
+    }
+
     cust.updatedAt = new Date().toISOString();
     cust.updatedBy = updatedBy;
 
@@ -986,7 +2247,10 @@ app.patch('/api/customers/:id', async (req, res) => {
     customers[idx] = cust;
     await writeCustomers(customers);
 
-    res.json(enrichCustomerBalance(cust, bills, payments, overdueDates));
+    const users = await readUsers();
+    res.json(
+      enrichCustomerWithCollector(enrichCustomerBalance(cust, bills, payments, overdueDates), users),
+    );
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update customer' });
@@ -995,11 +2259,13 @@ app.patch('/api/customers/:id', async (req, res) => {
 
 app.get('/api/payments', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const payments = await readPayments();
-    const sorted = [...payments].sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    let rows = [...payments].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
     );
-    res.json(sorted);
+    rows = await filterRowsForCollector(rows, auth, (p) => p.customerName);
+    res.json(rows);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read payments' });
@@ -1040,11 +2306,20 @@ app.post('/api/payments', async (req, res) => {
     }
     const note = String(body.note ?? '').trim();
 
-    const billNumber = normalizePaymentBillNumber(body.billNumber);
-    if (!billNumber) {
+    const payments = await readPayments();
+    const normalizedReceipt = normalizePaymentBillNumber(body.billNumber);
+    let billNumber;
+    if (normalizedReceipt) {
+      billNumber = normalizedReceipt;
+      if (isPaymentBillNumberTaken(payments, billNumber)) {
+        return res.status(400).json({ error: 'This payment receipt number is already used.' });
+      }
+    } else if (body.billNumber != null && String(body.billNumber).trim() !== '') {
       return res.status(400).json({
-        error: 'billNumber is required (1–3 digits, stored as 001–999)',
+        error: 'Payment receipt # must use letters and/or numbers (up to 40 characters).',
       });
+    } else {
+      billNumber = allocatePaymentReceiptNumber(payments, null);
     }
 
     const customers = await readCustomers();
@@ -1053,9 +2328,36 @@ app.post('/api/payments', async (req, res) => {
       return res.status(400).json({ error: 'Customer not found' });
     }
 
-    const payments = await readPayments();
-    if (isPaymentBillNumberTaken(payments, billNumber)) {
-      return res.status(400).json({ error: 'This bill number is already used for another payment.' });
+    const parsedApplied = parseAppliedBillIdsFromBody(body);
+    if (parsedApplied.error) {
+      return res.status(400).json({ error: parsedApplied.error });
+    }
+    const parsedBillCash = parseBillCashAllocationsFromBody(body);
+    if (parsedBillCash.error) {
+      return res.status(400).json({ error: parsedBillCash.error });
+    }
+    const billsList = await readBills();
+    const appliedErr = validateAppliedBillIdsForCustomer(billsList, cust, parsedApplied.ids);
+    if (appliedErr) {
+      return res.status(400).json({ error: appliedErr });
+    }
+    const billCashErr = validateBillCashAllocationsForCustomer(billsList, cust, parsedBillCash.allocations);
+    if (billCashErr) {
+      return res.status(400).json({ error: billCashErr });
+    }
+    let finalCashAmount = cashAmount;
+    let finalChequeAmount = chequeAmount;
+    if (parsedBillCash.allocations.length > 0) {
+      const allocationTotal = Math.round(
+        parsedBillCash.allocations.reduce((s, a) => s + a.cashAmount, 0) * 100,
+      ) / 100;
+      if (Math.abs(allocationTotal - amount) > 0.009) {
+        return res.status(400).json({ error: 'Total payment must equal the sum of per-bill amounts.' });
+      }
+    }
+    const finalAmount = Math.round((finalCashAmount + finalChequeAmount) * 100) / 100;
+    if (finalAmount <= 0) {
+      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
     }
 
     const storedCheques = buildChequesForStorage(parsedCheques.cheques);
@@ -1065,8 +2367,8 @@ app.post('/api/payments', async (req, res) => {
       customerId: cust.id,
       customerName: cust.name,
       billNumber,
-      amount,
-      cashAmount,
+      amount: finalAmount,
+      cashAmount: finalCashAmount,
       note,
       recordedBy,
       createdAt: new Date().toISOString(),
@@ -1075,9 +2377,13 @@ app.post('/api/payments', async (req, res) => {
       row.cheques = storedCheques;
     }
     applyLegacyChequeFields(row, storedCheques);
+    if (parsedBillCash.allocations.length > 0) {
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
+    } else {
+      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids);
+    }
 
     payments.push(row);
-    const billsList = await readBills();
     cust.remainingAmount = computeRemainingAmount(cust, billsList, payments);
     await writeCustomers(customers);
     await writePayments(payments);
@@ -1139,7 +2445,7 @@ app.patch('/api/payments/:id', async (req, res) => {
     const billNumber = normalizePaymentBillNumber(body.billNumber);
     if (!billNumber) {
       return res.status(400).json({
-        error: 'billNumber is required (1–3 digits, stored as 001–999)',
+        error: 'Payment receipt # is required (letters and/or numbers, up to 40 characters).',
       });
     }
 
@@ -1155,7 +2461,39 @@ app.patch('/api/payments/:id', async (req, res) => {
       return res.status(404).json({ error: 'Payment not found' });
     }
     if (isPaymentBillNumberTaken(payments, billNumber, id)) {
-      return res.status(400).json({ error: 'This bill number is already used for another payment.' });
+      return res.status(400).json({ error: 'This payment receipt number is already used.' });
+    }
+
+    const parsedApplied = parseAppliedBillIdsFromBody(body);
+    if (parsedApplied.error) {
+      return res.status(400).json({ error: parsedApplied.error });
+    }
+    const parsedBillCash = parseBillCashAllocationsFromBody(body);
+    if (parsedBillCash.error) {
+      return res.status(400).json({ error: parsedBillCash.error });
+    }
+    const billsList = await readBills();
+    const appliedErr = validateAppliedBillIdsForCustomer(billsList, cust, parsedApplied.ids);
+    if (appliedErr) {
+      return res.status(400).json({ error: appliedErr });
+    }
+    const billCashErr = validateBillCashAllocationsForCustomer(billsList, cust, parsedBillCash.allocations);
+    if (billCashErr) {
+      return res.status(400).json({ error: billCashErr });
+    }
+    let finalCashAmount = cashAmount;
+    let finalChequeAmount = chequeAmount;
+    if (parsedBillCash.allocations.length > 0) {
+      const allocationTotal = Math.round(
+        parsedBillCash.allocations.reduce((s, a) => s + a.cashAmount, 0) * 100,
+      ) / 100;
+      if (Math.abs(allocationTotal - amount) > 0.009) {
+        return res.status(400).json({ error: 'Total payment must equal the sum of per-bill amounts.' });
+      }
+    }
+    const finalAmount = Math.round((finalCashAmount + finalChequeAmount) * 100) / 100;
+    if (finalAmount <= 0) {
+      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
     }
 
     const existing = payments[idx];
@@ -1171,8 +2509,8 @@ app.patch('/api/payments/:id', async (req, res) => {
       customerId: cust.id,
       customerName: cust.name,
       billNumber,
-      amount,
-      cashAmount,
+      amount: finalAmount,
+      cashAmount: finalCashAmount,
       note,
       updatedBy,
       updatedAt: new Date().toISOString(),
@@ -1183,11 +2521,15 @@ app.patch('/api/payments/:id', async (req, res) => {
       delete row.cheques;
     }
     applyLegacyChequeFields(row, storedCheques);
+    if (parsedBillCash.allocations.length > 0) {
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
+    } else {
+      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids);
+    }
 
     payments[idx] = row;
     await writePayments(payments);
 
-    const billsList = await readBills();
     await refreshCustomerBalancesForCustomerIds(
       billsList,
       payments,
@@ -1205,6 +2547,7 @@ app.patch('/api/payments/:id', async (req, res) => {
 /** Cheques (by cheque date) not yet marked as deposited to the bank — default `date` is today (server local). */
 app.get('/api/cheque-deposit-queue', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const fromDate = String(req.query.date ?? '').trim() || paymentDateDefaultYmd();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
       return res.status(400).json({ error: 'Invalid date' });
@@ -1219,7 +2562,7 @@ app.get('/api/cheque-deposit-queue', async (req, res) => {
     const items = [];
     for (const p of payments) {
       for (const cheque of getPaymentCheques(p)) {
-        if (cheque.chequeDeposited) continue;
+        if (cheque.chequeDeposited || cheque.chequeReturned) continue;
         const cd = String(cheque.chequeDate ?? '').slice(0, 10);
         if (!cd || cd < fromDate || cd > throughDate) continue;
         items.push(chequeDepositQueueItem(p, cheque));
@@ -1234,7 +2577,8 @@ app.get('/api/cheque-deposit-queue', async (req, res) => {
       if (idCmp !== 0) return idCmp;
       return String(a.chequeId || '').localeCompare(String(b.chequeId || ''));
     });
-    res.json({ asOfDate: fromDate, throughDate, days, items: sorted });
+    const filtered = await filterRowsForCollector(sorted, auth, (row) => row.customerName);
+    res.json({ asOfDate: fromDate, throughDate, days, items: filtered });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load cheque deposit queue' });
@@ -1257,47 +2601,191 @@ app.patch('/api/payments/:id/cheque-deposited', async (req, res) => {
     if (idx < 0) {
       return res.status(404).json({ error: 'Payment not found' });
     }
-    const p = { ...payments[idx] };
     const chequeId = String(body.chequeId ?? '').trim();
-    const chequeLines = getPaymentCheques(p);
-    if (chequeLines.length === 0) {
-      return res.status(400).json({ error: 'This payment has no cheque' });
+    let bankAccountId = String(body.bankAccountId ?? '').trim();
+    let bankAccount = null;
+    if (bankAccountId) {
+      const shop = await readShopData();
+      const acct = (shop.bankAccounts || []).find((a) => a.id === bankAccountId);
+      if (!acct) {
+        return res.status(400).json({ error: 'Invalid bank account' });
+      }
+      bankAccount = bankAccountSnapshot(acct);
     }
-
-    const now = new Date().toISOString();
-    if (Array.isArray(p.cheques) && p.cheques.length > 0) {
-      const targetId = chequeId || (p.cheques.length === 1 ? String(p.cheques[0].id || '') : '');
-      if (!targetId) {
-        return res.status(400).json({ error: 'chequeId is required when a payment has multiple cheques' });
-      }
-      const chIdx = p.cheques.findIndex((c) => String(c.id) === targetId);
-      if (chIdx < 0) {
-        return res.status(404).json({ error: 'Cheque not found on this payment' });
-      }
-      const ch = { ...p.cheques[chIdx] };
-      if (ch.chequeDeposited) {
-        return res.status(400).json({ error: 'This cheque is already marked as deposited' });
-      }
-      ch.chequeDeposited = true;
-      ch.chequeDepositedAt = now;
-      ch.chequeDepositedBy = recordedBy;
-      p.cheques = [...p.cheques];
-      p.cheques[chIdx] = ch;
-      applyLegacyChequeFields(p, getPaymentCheques(p));
-    } else {
-      if (p.chequeDeposited) {
-        return res.status(400).json({ error: 'This cheque is already marked as deposited' });
-      }
-      p.chequeDeposited = true;
-      p.chequeDepositedAt = now;
-      p.chequeDepositedBy = recordedBy;
+    const depositedAt = new Date().toISOString();
+    const note = String(body.note ?? body.description ?? '').trim();
+    const result = markChequeDepositedOnPayment(payments[idx], {
+      chequeId,
+      recordedBy,
+      depositedAt,
+      bankAccountId: bankAccountId || undefined,
+      bankAccount: bankAccount || undefined,
+      note: note || undefined,
+    });
+    if (result.error) {
+      const status = result.error.includes('not found') ? 404 : 400;
+      return res.status(status).json({ error: result.error });
     }
-    payments[idx] = p;
+    payments[idx] = result.payment;
     await writePayments(payments);
-    res.json(p);
+    res.json(result.payment);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update payment' });
+  }
+});
+
+app.patch('/api/payments/:id/cheque-returned', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Payment id is required' });
+    }
+    const body = req.body || {};
+    const recordedBy = String(body.recordedBy ?? '').trim();
+    if (!recordedBy) {
+      return res.status(400).json({ error: 'recordedBy (username) is required' });
+    }
+    const payments = await readPayments();
+    const idx = payments.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+    const chequeId = String(body.chequeId ?? '').trim();
+    let returnedAt = String(body.returnedAt ?? body.date ?? '').trim();
+    if (returnedAt && /^\d{4}-\d{2}-\d{2}$/.test(returnedAt)) {
+      returnedAt = `${returnedAt}T12:00:00.000Z`;
+    } else {
+      returnedAt = new Date().toISOString();
+    }
+    const note = String(body.note ?? body.description ?? '').trim();
+    const result = markChequeReturnedOnPayment(payments[idx], {
+      chequeId,
+      recordedBy,
+      returnedAt,
+      note: note || undefined,
+    });
+    if (result.error) {
+      const status = result.error.includes('not found') ? 404 : 400;
+      return res.status(status).json({ error: result.error });
+    }
+    payments[idx] = result.payment;
+    await writePayments(payments);
+
+    const customers = await readCustomers();
+    const bills = await readBills();
+    const cust = customers.find((c) => c.id === result.payment.customerId);
+    if (cust) {
+      cust.remainingAmount = computeRemainingAmount(cust, bills, payments);
+      const custIdx = customers.findIndex((c) => c.id === cust.id);
+      if (custIdx >= 0) {
+        customers[custIdx] = { ...customers[custIdx], remainingAmount: cust.remainingAmount };
+        await writeCustomers(customers);
+      }
+      if (cust.contactNumber && result.cheque) {
+        notifyChequeReturnWhatsApp(cust, {
+          payment: result.payment,
+          cheque: result.cheque,
+          remainingAmount: cust.remainingAmount,
+        }).catch((err) => console.error('cheque return whatsapp notification', err));
+      }
+    }
+
+    res.json(result.payment);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to mark cheque as returned' });
+  }
+});
+
+/** Mark multiple cheques as deposited to one shop bank account. */
+app.post('/api/cheque-deposits', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const recordedBy = String(body.recordedBy ?? '').trim();
+    if (!recordedBy) {
+      return res.status(400).json({ error: 'recordedBy (username) is required' });
+    }
+    const bankAccountId = String(body.bankAccountId ?? '').trim();
+    if (!bankAccountId) {
+      return res.status(400).json({ error: 'bankAccountId is required' });
+    }
+    const shop = await readShopData();
+    const acct = (shop.bankAccounts || []).find((a) => a.id === bankAccountId);
+    if (!acct) {
+      return res.status(400).json({ error: 'Invalid bank account' });
+    }
+    const bankAccount = bankAccountSnapshot(acct);
+    const rawList = Array.isArray(body.cheques) ? body.cheques : [];
+    if (rawList.length === 0) {
+      return res.status(400).json({ error: 'Select at least one cheque to deposit' });
+    }
+    let date = String(body.date ?? '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = paymentDateDefaultYmd();
+    const depositedAt = `${date}T12:00:00.000Z`;
+    const note = String(body.description ?? body.note ?? '').trim();
+
+    const targets = [];
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i] || {};
+      const paymentId = String(item.paymentId ?? item.id ?? '').trim();
+      if (!paymentId) {
+        return res.status(400).json({ error: `Cheque ${i + 1}: payment id is required` });
+      }
+      targets.push({
+        paymentId,
+        chequeId: String(item.chequeId ?? '').trim(),
+      });
+    }
+
+    const payments = await readPayments();
+    const byId = new Map(payments.map((p, i) => [p.id, i]));
+    const updatedIds = new Set();
+
+    for (let i = 0; i < targets.length; i++) {
+      const { paymentId, chequeId } = targets[i];
+      const idx = byId.get(paymentId);
+      if (idx === undefined) {
+        return res.status(404).json({ error: `Payment not found for cheque ${i + 1}` });
+      }
+      const current = payments[idx];
+      const lines = getPaymentCheques(current);
+      const targetId = chequeId || (lines.length === 1 ? String(lines[0].id || '') : '');
+      const targetLine = lines.find((c) => String(c.id) === targetId);
+      if (targetLine) {
+        const converting = String(targetLine.chequeDate ?? '').trim().slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(converting) && converting > date) {
+          return res.status(400).json({
+            error: `Cheque ${i + 1}: converting date (${converting}) has not arrived yet`,
+          });
+        }
+      }
+      const result = markChequeDepositedOnPayment(current, {
+        chequeId,
+        recordedBy,
+        depositedAt,
+        bankAccountId,
+        bankAccount,
+        note: note || undefined,
+      });
+      if (result.error) {
+        return res.status(400).json({ error: `${result.error} (cheque ${i + 1})` });
+      }
+      payments[idx] = result.payment;
+      updatedIds.add(paymentId);
+    }
+
+    await writePayments(payments);
+    res.status(201).json({
+      date,
+      bankAccountId,
+      bankAccount,
+      count: targets.length,
+      paymentIds: [...updatedIds],
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to record cheque deposits' });
   }
 });
 
@@ -1612,7 +3100,17 @@ app.post('/api/bills', async (req, res) => {
     }
 
     const fields = parseBillBagFields(body);
-    const stockId = '';
+    const stockIdFromBody = String(body.stockId ?? '').trim();
+    const stocks = await readStocks();
+    const bills = await readBills();
+    const stockId =
+      stockIdFromBody ||
+      inferStockIdForBillBags(stocks, bills, {
+        tokyoBags: fields.tokyoBags,
+        samudraBags: fields.samudraBags,
+        atlasBags: fields.atlasBags,
+        nipponBags: fields.nipponBags,
+      });
 
     const row = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -1624,15 +3122,20 @@ app.post('/api/bills', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    const stocks = await readStocks();
-    const bills = await readBills();
     const promotions = await readPromotions();
-    const check = validateBillAgainstPooledStock(stocks, bills, promotions, {
-      tokyoBags: fields.tokyoBags,
-      samudraBags: fields.samudraBags,
-      atlasBags: fields.atlasBags,
-      nipponBags: fields.nipponBags,
-    });
+    const pendingUnloads = await readUnloads();
+    const check = validateBillAgainstPooledStock(
+      stocks,
+      bills,
+      promotions,
+      {
+        tokyoBags: fields.tokyoBags,
+        samudraBags: fields.samudraBags,
+        atlasBags: fields.atlasBags,
+        nipponBags: fields.nipponBags,
+      },
+      pendingUnloads,
+    );
     if (!check.ok) {
       return res.status(400).json({ error: check.error });
     }
@@ -1702,13 +3205,20 @@ app.patch('/api/bills/:id', async (req, res) => {
     const fields = parseBillBagFields(body);
     const stocks = await readStocks();
     const promotions = await readPromotions();
+    const pendingUnloads = await readUnloads();
     const otherBills = bills.filter((b) => b.id !== id);
-    const check = validateBillAgainstPooledStock(stocks, otherBills, promotions, {
-      tokyoBags: fields.tokyoBags,
-      samudraBags: fields.samudraBags,
-      atlasBags: fields.atlasBags,
-      nipponBags: fields.nipponBags,
-    });
+    const check = validateBillAgainstPooledStock(
+      stocks,
+      otherBills,
+      promotions,
+      {
+        tokyoBags: fields.tokyoBags,
+        samudraBags: fields.samudraBags,
+        atlasBags: fields.atlasBags,
+        nipponBags: fields.nipponBags,
+      },
+      pendingUnloads,
+    );
     if (!check.ok) {
       return res.status(400).json({ error: check.error });
     }
@@ -1768,10 +3278,33 @@ app.get('/api/daily-stock', async (req, res) => {
 app.get('/api/stocks/summary', async (req, res) => {
   try {
     const payload = await getLiveStockSummary();
-    res.json(payload);
+    const unloads = await readUnloads();
+    const pending = sumPendingUnloadBagsByBrand(unloads);
+    const brands = (payload.brands || []).map((b) => {
+      const bags = Math.max(0, Math.floor(Number(b.bags) || 0));
+      const reserved = Math.max(0, Math.floor(Number(pending[b.key]) || 0));
+      return {
+        ...b,
+        bags,
+        availableForRequest: Math.max(0, bags - reserved),
+        pendingReserved: reserved,
+      };
+    });
+    res.json({ ...payload, brands });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to summarize stock' });
+  }
+});
+
+/** Latest cut-off price per brand from previous stock loads. */
+app.get('/api/stocks/last-cut-off-prices', async (req, res) => {
+  try {
+    const stocks = await readStocks();
+    res.json({ prices: lastCutOffPricesByBrand(stocks) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load last cut-off prices' });
   }
 });
 
@@ -1803,6 +3336,7 @@ app.post('/api/stocks', async (req, res) => {
       date,
       stockId,
       vehicleNumber,
+      purchaseOrderIds: normalizePurchaseOrderIds(body.purchaseOrderIds),
       tokyoBags: toNonNegNumber(body.tokyoBags),
       tokyoCost: toNonNegNumber(body.tokyoCost),
       tokyoCutOffPrice: cutOffNumberOrUndef(body.tokyoCutOffPrice),
@@ -1917,6 +3451,9 @@ app.patch('/api/stocks/:id', async (req, res) => {
       date,
       stockId,
       vehicleNumber,
+      purchaseOrderIds: normalizePurchaseOrderIds(
+        body.purchaseOrderIds !== undefined ? body.purchaseOrderIds : existing.purchaseOrderIds,
+      ),
       tokyoBags: toNonNegNumber(body.tokyoBags),
       tokyoCost: toNonNegNumber(body.tokyoCost),
       tokyoCutOffPrice: cutOffNumberOrUndef(body.tokyoCutOffPrice),
@@ -1993,20 +3530,36 @@ app.patch('/api/stocks/:id', async (req, res) => {
 
 app.get('/api/messages/settings', async (req, res) => {
   try {
-    const [emailConfig, whatsappConfig, companyData] = await Promise.all([
+    const [emailConfig, whatsappConfig, companyData, notificationSettings] = await Promise.all([
       readEmailConfig(),
       readWhatsAppConfig(),
       readCompanyData(),
+      readNotificationSettings(),
     ]);
     res.json({
       emailConfig: maskEmailConfig(emailConfig),
-      whatsappConfig,
+      whatsappConfig: {
+        enabled: Boolean(whatsappConfig.enabled),
+        lastConnection: whatsappConfig.lastConnection || null,
+      },
+      notificationSettings,
       whatsappStatus: getWhatsAppStatus(),
       companyData,
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load message settings' });
+  }
+});
+
+app.put('/api/messages/notification-settings', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const next = await writeNotificationSettings(normalizeNotificationSettings(body));
+    res.json({ notificationSettings: next });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save notification settings' });
   }
 });
 
@@ -2094,16 +3647,29 @@ app.put('/api/messages/whatsapp-config', async (req, res) => {
     const body = req.body || {};
     const current = await readWhatsAppConfig();
     const enabled = body.enabled !== undefined ? Boolean(body.enabled) : current.enabled;
-    const next = { enabled };
+    const next = { ...current, enabled };
     await writeWhatsAppConfig(next);
     const whatsappStatus = await applyWhatsAppConfigChange(enabled);
     res.json({
-      whatsappConfig: next,
+      whatsappConfig: { enabled: next.enabled, lastConnection: next.lastConnection || null },
       whatsappStatus,
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save WhatsApp config' });
+  }
+});
+
+app.post('/api/messages/whatsapp/reconnect', async (req, res) => {
+  try {
+    const result = await reconnectWhatsAppClient();
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ whatsappStatus: result.status });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to reconnect WhatsApp' });
   }
 });
 
@@ -2114,6 +3680,480 @@ app.get('/api/messages/sent-whatsapp', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load sent WhatsApp history' });
+  }
+});
+
+/** Staff drivers for PO / load assignment (no passwords). */
+app.get('/api/drivers', async (req, res) => {
+  try {
+    const users = await readUsers();
+    const drivers = users
+      .filter((u) => String(u.role || '').toLowerCase() === 'driver')
+      .map((u) => ({
+        id: u.id,
+        name: String(u.name || '').trim() || String(u.username || '').trim(),
+        username: u.username,
+        nic: String(u.nic || u.username || '').trim(),
+        driverLicense: String(u.driverLicense || '').trim(),
+      }))
+      .sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }),
+      );
+    res.json(drivers);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read drivers' });
+  }
+});
+
+/** Staff list for salary / assignments (no passwords). */
+app.get('/api/staff', async (req, res) => {
+  try {
+    const users = await readUsers();
+    const staff = users
+      .map((u) => ({
+        id: u.id,
+        name: String(u.name || '').trim() || String(u.username || '').trim(),
+        role: String(u.role || '').trim(),
+      }))
+      .filter((u) => u.id && u.name && u.role !== 'Admin')
+      .sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }),
+      );
+    res.json(staff);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read staff' });
+  }
+});
+
+app.get('/api/purchase-orders', async (req, res) => {
+  try {
+    const rows = await readPurchaseOrders();
+    const sorted = [...rows].sort((a, b) => {
+      const da = String(a.date || '');
+      const db = String(b.date || '');
+      if (da !== db) return db.localeCompare(da);
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read purchase orders' });
+  }
+});
+
+app.get('/api/purchase-orders/last-prices', async (req, res) => {
+  try {
+    const distributorId = String(req.query.distributorId ?? '').trim();
+    if (!distributorId) {
+      return res.status(400).json({ error: 'distributorId is required' });
+    }
+    const rows = await readPurchaseOrders();
+    res.json({ prices: lastPricesByProduct(rows, distributorId) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load last prices' });
+  }
+});
+
+app.get('/api/purchase-orders/last-price', async (req, res) => {
+  try {
+    const distributorId = String(req.query.distributorId ?? '').trim();
+    const product = String(req.query.product ?? '').trim();
+    if (!distributorId || !product) {
+      return res.status(400).json({ error: 'distributorId and product are required' });
+    }
+    const rows = await readPurchaseOrders();
+    const unitPrice = findLastUnitPrice(rows, distributorId, product);
+    res.json({ unitPrice: unitPrice == null ? null : unitPrice });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load last price' });
+  }
+});
+
+/**
+ * Create one PO per product line.
+ * Body: date, distributorId, vehicleNumber, driverName, driverId?, cheques[], createdBy,
+ *       items: [{ product, quantity, unitPrice }]
+ */
+app.post('/api/purchase-orders', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const createdBy = String(body.createdBy ?? body.enteredBy ?? body.addedBy ?? '').trim();
+    if (!createdBy) {
+      return res.status(400).json({ error: 'createdBy (username) is required' });
+    }
+
+    const date = String(body.date ?? '').trim();
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    const distributorId = String(body.distributorId ?? '').trim();
+    if (!distributorId) {
+      return res.status(400).json({ error: 'distributorId is required' });
+    }
+
+    const distributors = await readDistributors();
+    const distributor = distributors.map((d) => withNormalizedLists(d)).find((d) => d.id === distributorId);
+    if (!distributor) {
+      return res.status(400).json({ error: 'Distributor not found' });
+    }
+
+    const distLocations = normalizeLocations(distributor);
+    const distributionLocationRaw = String(
+      body.distributionLocation ?? body.distributorLocation ?? '',
+    ).trim();
+    let distributionLocation = '';
+    if (distLocations.length > 0) {
+      if (!distributionLocationRaw) {
+        return res.status(400).json({ error: 'distributionLocation is required' });
+      }
+      const match = distLocations.find(
+        (l) => l.toLowerCase() === distributionLocationRaw.toLowerCase(),
+      );
+      if (!match) {
+        return res.status(400).json({ error: 'Invalid distribution location for this distributor' });
+      }
+      distributionLocation = match;
+    } else if (distributionLocationRaw) {
+      distributionLocation = distributionLocationRaw;
+    }
+
+    const vehicleNumber = String(body.vehicleNumber ?? body.lorry ?? '').trim();
+    if (!vehicleNumber) {
+      return res.status(400).json({ error: 'lorry / vehicleNumber is required' });
+    }
+
+    const driverName = String(body.driverName ?? '').trim();
+    if (!driverName) {
+      return res.status(400).json({ error: 'driverName is required' });
+    }
+    const driverId = String(body.driverId ?? '').trim();
+
+    const shop = await readShopData();
+    const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+
+    const chequePerProduct = Boolean(body.chequePerProduct);
+    let sharedCheques = [];
+    if (!chequePerProduct) {
+      const validatedShared = validatePoCheques(body.cheques, bankAccountById, 'Payment');
+      if (!validatedShared.ok) {
+        return res.status(400).json({ error: validatedShared.error });
+      }
+      sharedCheques = validatedShared.cheques;
+    }
+
+    const allowedProducts = new Set(
+      (distributor.products || []).map((p) => String(p).trim().toLowerCase()).filter(Boolean),
+    );
+
+    let rawItems = Array.isArray(body.items) ? body.items : null;
+    if (!rawItems) {
+      const singleProduct = String(body.product ?? '').trim();
+      if (singleProduct) {
+        rawItems = [
+          {
+            product: singleProduct,
+            quantity: body.quantity,
+            unitPrice: body.unitPrice,
+            cheques: body.cheques,
+          },
+        ];
+      } else {
+        rawItems = [];
+      }
+    }
+
+    const items = [];
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i] || {};
+      const product = String(item.product ?? '').trim();
+      if (!product) {
+        return res.status(400).json({ error: `Item ${i + 1}: product is required` });
+      }
+      if (allowedProducts.size > 0 && !allowedProducts.has(product.toLowerCase())) {
+        return res.status(400).json({
+          error: `Item ${i + 1}: "${product}" is not a product of ${distributor.name}`,
+        });
+      }
+      const quantity = toNonNegNumber(item.quantity);
+      if (quantity <= 0) {
+        return res.status(400).json({ error: `Item ${i + 1}: quantity must be greater than 0` });
+      }
+      const unitPrice = toNonNegMoney(item.unitPrice);
+      if (unitPrice <= 0) {
+        return res.status(400).json({ error: `Item ${i + 1}: unit price must be greater than 0` });
+      }
+
+      let itemCheques = sharedCheques;
+      if (chequePerProduct) {
+        const validatedItem = validatePoCheques(item.cheques, bankAccountById, `Item ${i + 1} payment`);
+        if (!validatedItem.ok) {
+          return res.status(400).json({ error: validatedItem.error });
+        }
+        itemCheques = validatedItem.cheques;
+      }
+
+      items.push({
+        product,
+        quantity,
+        unitPrice,
+        lineTotal: poLineTotal(quantity, unitPrice),
+        cheques: itemCheques,
+      });
+    }
+
+    if (items.length === 0) {
+      return res.status(400).json({ error: 'Add at least one product line' });
+    }
+
+    const existing = await readPurchaseOrders();
+    let nextPo = nextSuggestedPoNumber(existing);
+    const batchId = `pobatch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const createdAt = new Date().toISOString();
+    const chequeMode = chequePerProduct ? 'perProduct' : 'shared';
+    const created = [];
+
+    for (const item of items) {
+      const poNumber = nextPo;
+      const m = /^PO-(\d+)$/i.exec(nextPo);
+      const n = m ? parseInt(m[1], 10) + 1 : existing.length + created.length + 2;
+      nextPo = `PO-${String(n).padStart(4, '0')}`;
+
+      created.push({
+        id: `po-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        poNumber,
+        batchId,
+        date,
+        distributorId: distributor.id,
+        distributorName: distributor.name,
+        ...(distributionLocation ? { distributionLocation } : {}),
+        product: item.product,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        lineTotal: item.lineTotal,
+        totalAmount: item.lineTotal,
+        chequeMode,
+        cheques: item.cheques,
+        vehicleNumber,
+        driverName,
+        ...(driverId ? { driverId } : {}),
+        createdBy,
+        createdAt,
+      });
+    }
+
+    existing.push(...created);
+    await writePurchaseOrders(existing);
+
+    const cashBookLines = [];
+    if (!chequePerProduct) {
+      for (const p of sharedCheques) {
+        if (!isPoCashPayment(p)) continue;
+        const poNumbers = created.map((po) => po.poNumber).filter(Boolean);
+        cashBookLines.push({
+          amount: p.amount,
+          poId: created[0]?.id,
+          poNumber: poNumbers.length === 1 ? poNumbers[0] : poNumbers.join(', '),
+        });
+      }
+    } else {
+      for (const po of created) {
+        for (const p of po.cheques || []) {
+          if (!isPoCashPayment(p)) continue;
+          cashBookLines.push({
+            amount: p.amount,
+            poId: po.id,
+            poNumber: po.poNumber,
+            product: po.product,
+          });
+        }
+      }
+    }
+
+    if (cashBookLines.length > 0) {
+      const cashBook = await readCashBookEntries();
+      const bookedAt = new Date().toISOString();
+      for (const line of cashBookLines) {
+        const descParts = [
+          line.poNumber ? `PO ${line.poNumber}` : 'Purchase order',
+          distributor.name,
+          line.product,
+        ].filter(Boolean);
+        cashBook.push(
+          normalizeEntry({
+            id: `cbe-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            date,
+            category: 'purchase_order',
+            amount: line.amount,
+            description: descParts.join(' · '),
+            recordedBy: createdBy,
+            poId: line.poId,
+            poNumber: line.poNumber,
+            batchId,
+            createdAt: bookedAt,
+          }),
+        );
+      }
+      await writeCashBookEntries(cashBook);
+    }
+
+    res.status(201).json({ created, count: created.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to create purchase orders' });
+  }
+});
+
+app.patch('/api/purchase-orders/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Purchase order id is required' });
+    }
+    const body = req.body || {};
+    const updatedBy = String(body.updatedBy ?? body.createdBy ?? '').trim();
+    if (!updatedBy) {
+      return res.status(400).json({ error: 'updatedBy (username) is required' });
+    }
+
+    const rows = await readPurchaseOrders();
+    const idx = rows.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Purchase order not found' });
+    }
+
+    const current = rows[idx];
+    const date = body.date !== undefined ? String(body.date ?? '').trim() : current.date;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    let distributorId = current.distributorId;
+    let distributorName = current.distributorName;
+    if (body.distributorId !== undefined) {
+      distributorId = String(body.distributorId ?? '').trim();
+      const distributors = await readDistributors();
+      const distributor = distributors.map((d) => withNormalizedLists(d)).find((d) => d.id === distributorId);
+      if (!distributor) {
+        return res.status(400).json({ error: 'Distributor not found' });
+      }
+      distributorId = distributor.id;
+      distributorName = distributor.name;
+    }
+
+    const product =
+      body.product !== undefined ? String(body.product ?? '').trim() : String(current.product || '').trim();
+    if (!product) {
+      return res.status(400).json({ error: 'product is required' });
+    }
+
+    const quantity =
+      body.quantity !== undefined ? toNonNegNumber(body.quantity) : toNonNegNumber(current.quantity);
+    if (quantity <= 0) {
+      return res.status(400).json({ error: 'quantity must be greater than 0' });
+    }
+
+    const unitPrice =
+      body.unitPrice !== undefined ? toNonNegMoney(body.unitPrice) : toNonNegMoney(current.unitPrice);
+    if (unitPrice <= 0) {
+      return res.status(400).json({ error: 'unit price must be greater than 0' });
+    }
+
+    const vehicleNumber =
+      body.vehicleNumber !== undefined || body.lorry !== undefined
+        ? String(body.vehicleNumber ?? body.lorry ?? '').trim()
+        : String(current.vehicleNumber || '').trim();
+    if (!vehicleNumber) {
+      return res.status(400).json({ error: 'lorry / vehicleNumber is required' });
+    }
+
+    const driverName =
+      body.driverName !== undefined
+        ? String(body.driverName ?? '').trim()
+        : String(current.driverName || '').trim();
+    if (!driverName) {
+      return res.status(400).json({ error: 'driverName is required' });
+    }
+
+    const driverId =
+      body.driverId !== undefined ? String(body.driverId ?? '').trim() : String(current.driverId || '').trim();
+
+    let cheques = current.cheques || [];
+    if (body.cheques !== undefined) {
+      const shop = await readShopData();
+      const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+      const validated = validatePoCheques(body.cheques, bankAccountById, 'Payment');
+      if (!validated.ok) {
+        return res.status(400).json({ error: validated.error });
+      }
+      cheques = validated.cheques;
+    }
+    const total = poLineTotal(quantity, unitPrice);
+
+    const next = {
+      ...current,
+      date,
+      distributorId,
+      distributorName,
+      product,
+      quantity,
+      unitPrice,
+      lineTotal: total,
+      totalAmount: total,
+      cheques,
+      vehicleNumber,
+      driverName,
+      updatedBy,
+      updatedAt: new Date().toISOString(),
+    };
+    if (driverId) next.driverId = driverId;
+    else delete next.driverId;
+
+    rows[idx] = next;
+    await writePurchaseOrders(rows);
+    res.json(next);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update purchase order' });
+  }
+});
+
+/** Manager/admin: cancel an issued PO cheque (removed from bank balance / transaction lists). */
+app.post('/api/purchase-orders/:id/cancel-cheque', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const poId = String(req.params.id ?? '').trim();
+    if (!poId) {
+      return res.status(400).json({ error: 'Purchase order id is required' });
+    }
+    const body = req.body || {};
+    const cancelledBy = String(body.cancelledBy ?? auth.username ?? '').trim();
+    if (!cancelledBy) {
+      return res.status(400).json({ error: 'cancelledBy (username) is required' });
+    }
+
+    const rows = await readPurchaseOrders();
+    const result = cancelIssuedCheque(rows, {
+      poId,
+      cancelledBy,
+      chequeNumber: body.chequeNumber,
+      chequeDate: body.chequeDate,
+      bankAccountId: body.bankAccountId,
+      amount: body.amount,
+    });
+    if (!result.ok) {
+      return res.status(result.error === 'Purchase order not found' ? 404 : 400).json({ error: result.error });
+    }
+    await writePurchaseOrders(rows);
+    res.json({ ok: true, updated: result.updated, cancelledAt: result.cancelledAt });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to cancel cheque' });
   }
 });
 
@@ -2147,16 +4187,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
-  if (fs.existsSync(FRONTEND_INDEX)) {
-    console.log(`Serving SPA from ${FRONTEND_BUILD}`);
+(async () => {
+  try {
+    await bootstrapWhatsAppOnStartup();
+  } catch (err) {
+    console.error('whatsapp bootstrap', err);
   }
-  readWhatsAppConfig()
-    .then((config) => {
-      if (config.enabled) {
-        startWhatsAppClient().catch((err) => console.error('whatsapp startup', err));
-      }
-    })
-    .catch((err) => console.error('whatsapp config read', err));
-});
+
+  app.listen(PORT, () => {
+    console.log(`Server listening on http://localhost:${PORT}`);
+    if (fs.existsSync(FRONTEND_INDEX)) {
+      console.log(`Serving SPA from ${FRONTEND_BUILD}`);
+    }
+    startOverdueReminderScheduler();
+  });
+})();

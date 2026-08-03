@@ -56,7 +56,11 @@ function getAuthFromRequest(req) {
 
 function requireAdmin(req, res) {
   const auth = getAuthFromRequest(req);
-  if (!auth || auth.role !== 'admin') {
+  if (!auth) {
+    res.status(401).json({ error: 'Sign in again as admin to manage users' });
+    return null;
+  }
+  if (auth.role !== 'admin') {
     res.status(403).json({ error: 'Only the admin can manage users' });
     return null;
   }

@@ -21,18 +21,13 @@ import {
   modalPanelClass4xl,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
 
 const apiBase = getApiBase();
 
-const VEHICLE_OPTIONS = ['LA 9899', 'GQ 4665', 'PD 1306', 'Other'];
 const DEFAULT_MARGIN_PER_BAG = 70;
 
-const emptyForm = () => ({
-  date: new Date().toISOString().slice(0, 10),
-  stockId: '',
-  vehicleNumber: '',
-  transportCostPerBag: '',
-  marginPerBag: String(DEFAULT_MARGIN_PER_BAG),
+const emptyBrandFields = () => ({
   tokyoBags: '',
   tokyoCost: '',
   tokyoCutOffPrice: '',
@@ -58,6 +53,76 @@ const emptyForm = () => ({
   nipponCheque: '',
   nipponConvertingDate: '',
 });
+
+const emptyForm = () => ({
+  date: new Date().toISOString().slice(0, 10),
+  stockId: '',
+  vehicleNumber: '',
+  transportCostPerBag: '',
+  marginPerBag: String(DEFAULT_MARGIN_PER_BAG),
+  ...emptyBrandFields(),
+});
+
+/** Map distributor product name (e.g. "Tokyo 50KG") → brand key. */
+function productToBrandKey(product) {
+  const p = String(product || '').toLowerCase();
+  if (!p) return null;
+  for (const b of BRANDS) {
+    if (p.includes(b.key) || p.includes(b.label.toLowerCase())) return b.key;
+  }
+  return null;
+}
+
+function formatAmount(n) {
+  const v = Number(n) || 0;
+  if (v <= 0) return '';
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+}
+
+/** Aggregate selected POs into per-brand bags / cost / cheque / converting date + vehicle. */
+function aggregateFromPurchaseOrders(selectedPos, lastCutOffs, prevForm = {}) {
+  const brandAgg = {};
+  for (const b of BRANDS) {
+    brandAgg[b.key] = { bags: 0, cost: 0, cheques: [], convertingDate: '' };
+  }
+  let vehicleNumber = '';
+  for (const po of selectedPos) {
+    const key = productToBrandKey(po.product);
+    if (!key || !brandAgg[key]) continue;
+    brandAgg[key].bags += Number(po.quantity) || 0;
+    brandAgg[key].cost += Number(po.lineTotal ?? po.totalAmount) || 0;
+    const cheques = Array.isArray(po.cheques) ? po.cheques : [];
+    for (const c of cheques) {
+      const label = formatPoChequeWithBank(c);
+      if (label && label !== '—' && !brandAgg[key].cheques.includes(label)) {
+        brandAgg[key].cheques.push(label);
+      }
+      const conv = String(c.chequeDate || '').trim().slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(conv) && !brandAgg[key].convertingDate) {
+        brandAgg[key].convertingDate = conv;
+      }
+    }
+    if (!vehicleNumber) {
+      vehicleNumber = String(po.vehicleNumber || '').trim();
+    }
+  }
+
+  const activeKeys = BRANDS.map((b) => b.key).filter((k) => brandAgg[k].bags > 0 || brandAgg[k].cost > 0);
+  const next = { ...emptyBrandFields() };
+  for (const key of activeKeys) {
+    const agg = brandAgg[key];
+    next[`${key}Bags`] = formatAmount(agg.bags) || String(agg.bags || '');
+    next[`${key}Cost`] = formatAmount(agg.cost);
+    next[`${key}Cheque`] = agg.cheques.join(', ');
+    const prevCut = String(prevForm[`${key}CutOffPrice`] ?? '').trim();
+    const last = lastCutOffs && lastCutOffs[key] != null ? lastCutOffs[key] : null;
+    next[`${key}CutOffPrice`] = prevCut || (last != null ? formatAmount(last) : '');
+    next[`${key}Invoice`] = String(prevForm[`${key}Invoice`] ?? '');
+    const prevConv = String(prevForm[`${key}ConvertingDate`] ?? '').trim();
+    next[`${key}ConvertingDate`] = agg.convertingDate || prevConv || '';
+  }
+  return { fields: next, activeKeys, vehicleNumber };
+}
 
 /** Next ID after the highest existing STK-nnnn (or plain number); defaults to STK-0001. */
 function nextSuggestedStockId(records) {
@@ -105,6 +170,10 @@ export default function LoadsPage() {
   const [dateTo, setDateTo] = useState('');
   const [detailRow, setDetailRow] = useState(null);
   const [editingLoadId, setEditingLoadId] = useState('');
+  const [lorryNumbers, setLorryNumbers] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [lastCutOffPrices, setLastCutOffPrices] = useState({});
+  const [selectedPoIds, setSelectedPoIds] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -122,9 +191,150 @@ export default function LoadsPage() {
     }
   }, []);
 
+  const loadLorries = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/lorries`);
+      if (!res.ok) throw new Error('Failed to load lorries');
+      const data = await res.json();
+      const numbers = (Array.isArray(data) ? data : [])
+        .map((l) => String(l.number ?? '').trim())
+        .filter(Boolean);
+      setLorryNumbers(numbers);
+    } catch {
+      setLorryNumbers([]);
+    }
+  }, []);
+
+  const loadPurchaseOrders = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/purchase-orders`);
+      if (!res.ok) throw new Error('Failed to load purchase orders');
+      const data = await res.json();
+      setPurchaseOrders(Array.isArray(data) ? data : []);
+    } catch {
+      setPurchaseOrders([]);
+    }
+  }, []);
+
+  const loadLastCutOffPrices = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/stocks/last-cut-off-prices`);
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      setLastCutOffPrices(data.prices && typeof data.prices === 'object' ? data.prices : {});
+    } catch {
+      setLastCutOffPrices({});
+    }
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadLorries();
+  }, [load, loadLorries]);
+
+  // Fill empty cut-off fields once last prices arrive (e.g. after PO selection).
+  useEffect(() => {
+    if (!modalOpen || Object.keys(lastCutOffPrices).length === 0) return;
+    setForm((f) => {
+      let changed = false;
+      const next = { ...f };
+      for (const b of BRANDS) {
+        const hasBrand =
+          brandNeedsInvoiceCheque(next[`${b.key}Bags`]) || Number(next[`${b.key}Cost`]) > 0;
+        if (!hasBrand) continue;
+        if (String(next[`${b.key}CutOffPrice`] ?? '').trim()) continue;
+        const last = lastCutOffPrices[b.key];
+        if (last == null) continue;
+        next[`${b.key}CutOffPrice`] = formatAmount(last);
+        changed = true;
+      }
+      return changed ? next : f;
+    });
+  }, [lastCutOffPrices, modalOpen]);
+
+  const usedPoIds = useMemo(() => {
+    const used = new Set();
+    for (const row of rows) {
+      if (editingLoadId && row.id === editingLoadId) continue;
+      const ids = Array.isArray(row.purchaseOrderIds) ? row.purchaseOrderIds : [];
+      for (const id of ids) {
+        const sid = String(id || '').trim();
+        if (sid) used.add(sid);
+      }
+    }
+    return used;
+  }, [rows, editingLoadId]);
+
+  const selectablePurchaseOrders = useMemo(() => {
+    return purchaseOrders
+      .filter((po) => {
+        const id = String(po.id || '').trim();
+        if (!id) return false;
+        if (selectedPoIds.includes(id)) return true;
+        return !usedPoIds.has(id);
+      })
+      .slice()
+      .sort((a, b) => {
+        const da = String(a.date || '');
+        const db = String(b.date || '');
+        if (da !== db) return db.localeCompare(da);
+        return String(b.poNumber || '').localeCompare(String(a.poNumber || ''));
+      });
+  }, [purchaseOrders, usedPoIds, selectedPoIds]);
+
+  const selectedPos = useMemo(() => {
+    const set = new Set(selectedPoIds);
+    return purchaseOrders.filter((po) => set.has(String(po.id)));
+  }, [purchaseOrders, selectedPoIds]);
+
+  const activeBrands = useMemo(() => {
+    if (selectedPoIds.length > 0) {
+      const keys = new Set();
+      for (const po of selectedPos) {
+        const key = productToBrandKey(po.product);
+        if (key) keys.add(key);
+      }
+      // Also include brands that still have bags in the form (after edits)
+      for (const b of BRANDS) {
+        if (brandNeedsInvoiceCheque(form[`${b.key}Bags`]) || Number(form[`${b.key}Cost`]) > 0) {
+          keys.add(b.key);
+        }
+      }
+      return BRANDS.filter((b) => keys.has(b.key));
+    }
+    // Edit without POs: show brands that already have data
+    if (editingLoadId) {
+      return BRANDS.filter(
+        (b) => brandNeedsInvoiceCheque(form[`${b.key}Bags`]) || Number(form[`${b.key}Cost`]) > 0,
+      );
+    }
+    return [];
+  }, [selectedPoIds, selectedPos, form, editingLoadId]);
+
+  const applyPosToForm = useCallback(
+    (poIds, prevForm) => {
+      const set = new Set(poIds);
+      const selected = purchaseOrders.filter((po) => set.has(String(po.id)));
+      const { fields, vehicleNumber } = aggregateFromPurchaseOrders(
+        selected,
+        lastCutOffPrices,
+        prevForm,
+      );
+      return {
+        ...fields,
+        vehicleNumber: vehicleNumber || String(prevForm.vehicleNumber || ''),
+      };
+    },
+    [purchaseOrders, lastCutOffPrices],
+  );
+
+  const vehicleSelectOptions = useMemo(() => {
+    const current = String(form.vehicleNumber ?? '').trim();
+    if (current && !lorryNumbers.includes(current)) {
+      return [current, ...lorryNumbers];
+    }
+    return lorryNumbers;
+  }, [lorryNumbers, form.vehicleNumber]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -181,11 +391,15 @@ export default function LoadsPage() {
 
   const openModal = () => {
     setEditingLoadId('');
+    setSelectedPoIds([]);
     setForm({
       ...emptyForm(),
       stockId: nextSuggestedStockId(rows),
     });
     setSaveError(null);
+    loadLorries();
+    loadPurchaseOrders();
+    loadLastCutOffPrices();
     setModalOpen(true);
   };
 
@@ -193,15 +407,20 @@ export default function LoadsPage() {
     setModalOpen(false);
     setSaveError(null);
     setEditingLoadId('');
+    setSelectedPoIds([]);
   };
 
   const openEditModal = (row) => {
     if (!row || !row.id) return;
     setEditingLoadId(String(row.id));
+    const linkedIds = Array.isArray(row.purchaseOrderIds)
+      ? row.purchaseOrderIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    setSelectedPoIds(linkedIds);
     setForm({
       date: String(row.date ?? '').slice(0, 10),
       stockId: String(row.stockId ?? ''),
-      vehicleNumber: String(row.vehicleNumber ?? ''),
+      vehicleNumber: String(row.vehicleNumber ?? '').trim(),
       transportCostPerBag: String(row.transportCostPerBag ?? ''),
       marginPerBag: String(row.marginPerBag ?? DEFAULT_MARGIN_PER_BAG),
       tokyoBags: String(row.tokyoBags ?? ''),
@@ -230,6 +449,9 @@ export default function LoadsPage() {
       nipponConvertingDate: String(row.nipponConvertingDate ?? '').slice(0, 10),
     });
     setSaveError(null);
+    loadLorries();
+    loadPurchaseOrders();
+    loadLastCutOffPrices();
     setModalOpen(true);
   };
 
@@ -237,11 +459,36 @@ export default function LoadsPage() {
     setForm((f) => ({ ...f, [field]: value }));
   };
 
+  const togglePoSelection = (poId) => {
+    const id = String(poId || '').trim();
+    if (!id) return;
+    setSelectedPoIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      setForm((f) => {
+        const applied = applyPosToForm(next, f);
+        return {
+          ...f,
+          ...applied,
+          // Keep date/stockId/incentive fields
+          date: f.date,
+          stockId: f.stockId,
+          transportCostPerBag: f.transportCostPerBag,
+          marginPerBag: f.marginPerBag,
+        };
+      });
+      return next;
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const username = getUsername();
     if (!username) {
       setSaveError('You need to be signed in with a username.');
+      return;
+    }
+    if (!editingLoadId && selectedPoIds.length === 0) {
+      setSaveError('Select at least one purchase order.');
       return;
     }
     const missingRefs = [];
@@ -258,6 +505,15 @@ export default function LoadsPage() {
       );
       return;
     }
+    const resolvedVehicle = String(form.vehicleNumber || '').trim();
+    if (!resolvedVehicle) {
+      setSaveError(
+        lorryNumbers.length === 0
+          ? 'Add a lorry under Shop → Lorries before recording a load.'
+          : 'Select a lorry.',
+      );
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -271,7 +527,8 @@ export default function LoadsPage() {
           ...(isEditing ? { updatedBy: username } : { addedBy: username }),
           date: form.date,
           stockId: form.stockId.trim(),
-          vehicleNumber: form.vehicleNumber.trim(),
+          vehicleNumber: resolvedVehicle,
+          purchaseOrderIds: selectedPoIds,
           tokyoBags: form.tokyoBags,
           tokyoCost: form.tokyoCost,
           tokyoCutOffPrice: form.tokyoCutOffPrice,
@@ -613,21 +870,94 @@ export default function LoadsPage() {
                     Suggested next ID — you can edit before saving.
                   </span>
                 </label>
+              </div>
+
+              <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Purchase orders
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Select one or more POs. Vehicle, bags, cost, and cheque are filled from the selection
+                  (you can still edit them). Enter invoice no. and cut-off price per brand.
+                </p>
+                {selectablePurchaseOrders.length === 0 ? (
+                  <p className="mt-3 text-sm text-amber-800">
+                    No available purchase orders. Create POs under Purchase Order first
+                    {usedPoIds.size > 0 ? ' (some may already be linked to other loads).' : '.'}
+                  </p>
+                ) : (
+                  <div className="mt-3 max-h-48 space-y-2 overflow-y-auto rounded-xl bg-white p-2 ring-1 ring-slate-200/80">
+                    {selectablePurchaseOrders.map((po) => {
+                      const id = String(po.id);
+                      const checked = selectedPoIds.includes(id);
+                      const brandKey = productToBrandKey(po.product);
+                      const brandLabel = BRANDS.find((b) => b.key === brandKey)?.label;
+                      return (
+                        <label
+                          key={id}
+                          className={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 transition ${
+                            checked ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => togglePoSelection(id)}
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className="min-w-0 flex-1 text-sm text-slate-800">
+                            <span className="font-semibold tabular-nums">{po.poNumber || id}</span>
+                            <span className="text-slate-400"> · </span>
+                            <span className="tabular-nums text-slate-600">{po.date || '—'}</span>
+                            <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                              {po.product || '—'}
+                              {brandLabel ? ` (${brandLabel})` : ''}
+                              {' · '}
+                              {Number(po.quantity) || 0} bags
+                              {' · '}
+                              {money(po.lineTotal ?? po.totalAmount)}
+                              {Array.isArray(po.cheques) && po.cheques.length > 0 ? (
+                                <>
+                                  {' · '}
+                                  {formatPoChequesList(po.cheques)}
+                                </>
+                              ) : null}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {selectedPoIds.length > 0 ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    {selectedPoIds.length} PO{selectedPoIds.length === 1 ? '' : 's'} selected
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className="col-span-full block text-sm font-medium text-slate-600 sm:col-span-2">
-                  Vehicle number
+                  Vehicle / lorry number
                   <select
                     required
                     value={form.vehicleNumber}
                     onChange={(e) => handleFormChange('vehicleNumber', e.target.value)}
                     className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                    disabled={lorryNumbers.length === 0 && !form.vehicleNumber}
                   >
-                    <option value="">Select vehicle…</option>
-                    {VEHICLE_OPTIONS.map((v) => (
+                    <option value="">
+                      {lorryNumbers.length === 0 ? 'No lorries — add under Shop' : 'Select lorry…'}
+                    </option>
+                    {vehicleSelectOptions.map((v) => (
                       <option key={v} value={v}>
                         {v}
                       </option>
                     ))}
                   </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-400">
+                    Filled from selected PO when available — you can change it.
+                  </span>
                 </label>
               </div>
               <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
@@ -667,93 +997,106 @@ export default function LoadsPage() {
                   Cement bags, cost, invoice & cheque (per brand)
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  If bags are <span className="font-medium text-slate-600">1 or more</span> for a brand, enter invoice and cheque number for that brand. Converting date is optional — if left blank, the load date is used.
+                  Only brands from the selected POs are shown. Bags, cost, cheque, and converting date come
+                  from POs and stay editable. Enter <span className="font-medium text-slate-700">invoice no.</span> and{' '}
+                  <span className="font-medium text-slate-700">cut-off price</span> (cut-off loads last
+                  price when available).
                 </p>
-                <div className="mt-3 space-y-4">
-                  {BRANDS.map((b) => {
-                    const needRefs = brandNeedsInvoiceCheque(form[`${b.key}Bags`]);
-                    const refRing = needRefs ? 'ring-amber-200' : 'ring-slate-200';
-                    return (
-                    <div
-                      key={b.key}
-                      className="rounded-lg border border-slate-100 bg-white/90 p-3 shadow-sm ring-1 ring-slate-100/80"
-                    >
-                      <p className="mb-2 text-sm font-semibold text-slate-800">{b.label}</p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
-                        <label className="text-xs text-slate-500">
-                          Bags
-                          <input
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={form[`${b.key}Bags`]}
-                            onChange={(e) => handleFormChange(`${b.key}Bags`, e.target.value)}
-                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
-                          />
-                        </label>
-                        <label className="text-xs text-slate-500">
-                          Cost (LKR)
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={form[`${b.key}Cost`]}
-                            onChange={(e) => handleFormChange(`${b.key}Cost`, e.target.value)}
-                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
-                          />
-                        </label>
-                        <label className="text-xs text-slate-500">
-                          Cut-off price (per bag)
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={form[`${b.key}CutOffPrice`]}
-                            onChange={(e) => handleFormChange(`${b.key}CutOffPrice`, e.target.value)}
-                            className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
-                            placeholder=""
-                          />
-                        </label>
-                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
-                          Invoice no.{needRefs ? ' *' : ''}
-                          <input
-                            type="text"
-                            inputMode="text"
-                            value={form[`${b.key}Invoice`]}
-                            onChange={(e) => handleFormChange(`${b.key}Invoice`, e.target.value)}
-                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
-                            autoComplete="off"
-                            spellCheck={false}
-                            aria-required={needRefs}
-                          />
-                        </label>
-                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
-                          Cheque no.{needRefs ? ' *' : ''}
-                          <input
-                            type="text"
-                            inputMode="text"
-                            value={form[`${b.key}Cheque`]}
-                            onChange={(e) => handleFormChange(`${b.key}Cheque`, e.target.value)}
-                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
-                            autoComplete="off"
-                            spellCheck={false}
-                            aria-required={needRefs}
-                          />
-                        </label>
-                        <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
-                          Converting date
-                          <input
-                            type="date"
-                            value={form[`${b.key}ConvertingDate`]}
-                            onChange={(e) => handleFormChange(`${b.key}ConvertingDate`, e.target.value)}
-                            className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
+                {activeBrands.length === 0 ? (
+                  <p className="mt-3 text-sm text-slate-500">
+                    Select purchase orders above to load brand lines.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-4">
+                    {activeBrands.map((b) => {
+                      const needRefs = brandNeedsInvoiceCheque(form[`${b.key}Bags`]);
+                      const refRing = needRefs ? 'ring-amber-200' : 'ring-slate-200';
+                      const lastCut = lastCutOffPrices[b.key];
+                      return (
+                        <div
+                          key={b.key}
+                          className="rounded-lg border border-slate-100 bg-white/90 p-3 shadow-sm ring-1 ring-slate-100/80"
+                        >
+                          <p className="mb-2 text-sm font-semibold text-slate-800">{b.label}</p>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            <label className="text-xs text-slate-500">
+                              Bags
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={form[`${b.key}Bags`]}
+                                onChange={(e) => handleFormChange(`${b.key}Bags`, e.target.value)}
+                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                              />
+                            </label>
+                            <label className="text-xs text-slate-500">
+                              Cost (LKR)
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                value={form[`${b.key}Cost`]}
+                                onChange={(e) => handleFormChange(`${b.key}Cost`, e.target.value)}
+                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                              />
+                            </label>
+                            <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
+                              Cheque no.{needRefs ? ' *' : ''}
+                              <input
+                                type="text"
+                                inputMode="text"
+                                value={form[`${b.key}Cheque`]}
+                                onChange={(e) => handleFormChange(`${b.key}Cheque`, e.target.value)}
+                                className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
+                                autoComplete="off"
+                                spellCheck={false}
+                                aria-required={needRefs}
+                              />
+                            </label>
+                            <label className="block text-xs font-medium text-slate-700">
+                              Invoice no. *
+                              <input
+                                type="text"
+                                required={needRefs}
+                                inputMode="text"
+                                value={form[`${b.key}Invoice`]}
+                                onChange={(e) => handleFormChange(`${b.key}Invoice`, e.target.value)}
+                                className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                autoComplete="off"
+                                spellCheck={false}
+                              />
+                            </label>
+                            <label className="block text-xs font-medium text-slate-700">
+                              Cut-off price (per bag)
+                              {lastCut != null ? (
+                                <span className="ml-1 font-normal text-indigo-600">(last)</span>
+                              ) : null}
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                value={form[`${b.key}CutOffPrice`]}
+                                onChange={(e) => handleFormChange(`${b.key}CutOffPrice`, e.target.value)}
+                                className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm tabular-nums ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                placeholder={lastCut != null ? String(lastCut) : ''}
+                              />
+                            </label>
+                            <label className="block text-xs text-slate-500">
+                              Converting date
+                              <input
+                                type="date"
+                                value={form[`${b.key}ConvertingDate`]}
+                                onChange={(e) => handleFormChange(`${b.key}ConvertingDate`, e.target.value)}
+                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button

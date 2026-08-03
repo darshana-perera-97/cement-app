@@ -91,6 +91,18 @@ export const modalPanelClass2xl =
 export const modalPanelClass4xl =
   'relative z-10 min-h-0 w-full max-h-[min(90vh,calc(100dvh-3rem))] max-w-6xl overflow-y-auto overscroll-contain rounded-t-2xl rounded-b-none bg-white p-4 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl sm:p-6';
 
+/** Full-screen dimmed layer; clicking it should call `onClose`. Place before the dialog panel. */
+export function ModalBackdrop({ onClose, className = '' }) {
+  return (
+    <button
+      type="button"
+      className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm ${className}`.trim()}
+      aria-label="Close"
+      onClick={onClose}
+    />
+  );
+}
+
 /**
  * Wrapper for data tables: vertical + horizontal scroll with a max height so
  * `position: sticky` on `<thead>` keeps headers visible while scrolling rows.

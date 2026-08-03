@@ -7,6 +7,15 @@ export const DEFAULT_SHOP_NAME = 'CS Store';
 let cachedShopName = null;
 let inflight = null;
 
+/** Clear cached shop name so chrome reloads after Shop details are saved. */
+export function clearShopNameCache() {
+  cachedShopName = null;
+  inflight = null;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('shop-name-updated'));
+  }
+}
+
 /**
  * Initials for the logo badge (e.g. "CS Store" → "CS", "Acme" → "AC").
  */
@@ -47,9 +56,16 @@ export async function fetchShopName() {
   return inflight;
 }
 
-/** React hook — returns shop name from backend `.env` `SHOP_NAME`. */
+/** React hook — returns shop name from shopData.json (falls back to `.env` `SHOP_NAME`). */
 export function useShopName() {
   const [shopName, setShopName] = useState(cachedShopName || DEFAULT_SHOP_NAME);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const onShopUpdated = () => setTick((n) => n + 1);
+    window.addEventListener('shop-name-updated', onShopUpdated);
+    return () => window.removeEventListener('shop-name-updated', onShopUpdated);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +75,7 @@ export function useShopName() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tick]);
 
   return shopName;
 }

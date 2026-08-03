@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { clearAuth, getToken, getUsername, isAdmin, isAuthed } from '../auth';
+import { clearAuth, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole } from '../auth';
 import { getApiBase } from '../apiBase';
 import { shopNameInitials, useShopName } from '../shopConfig';
 import { DASHBOARD_NAV } from './navConfig';
@@ -146,6 +146,7 @@ function WhatsAppNavStatus({ enabled, state, connected }) {
 
 export default function DashboardLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [permissionsTick, setPermissionsTick] = useState(0);
   const [sidebarCashSummary, setSidebarCashSummary] = useState(null);
   const [sidebarStockSummary, setSidebarStockSummary] = useState(null);
   const [sidebarStockLoading, setSidebarStockLoading] = useState(true);
@@ -159,6 +160,7 @@ export default function DashboardLayout() {
   const shopName = useShopName();
   const section = getSectionTitle(location.pathname);
   const headerTitle = section === 'Analytics' ? 'Main Dashboard' : section;
+  const hideRightPanel = location.pathname.startsWith('/dashboard/bank');
 
   const normalizedOverdue =
     sidebarCashSummary == null
@@ -218,7 +220,7 @@ export default function DashboardLayout() {
       }
     }
     loadStock();
-    const id = window.setInterval(loadStock, 15000);
+    const id = window.setInterval(loadStock, 5000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -265,13 +267,36 @@ export default function DashboardLayout() {
     }
   }, [navigate]);
 
-  const navItems = DASHBOARD_NAV.filter((item) => item.to !== '/dashboard/users' || isAdmin());
+  useEffect(() => {
+    if (!isAuthed() || !getToken()) return;
+    refreshSessionFromServer(getApiBase()).then(() => setPermissionsTick((t) => t + 1));
+  }, []);
+
+  const navItems = DASHBOARD_NAV.filter((item) => {
+    if (item.to === '/dashboard/users') return isAdmin();
+    if (isAdmin()) return true;
+    if (getStaffRole() === 'Manager') {
+      return item.accessKey ? hasDashboardAccess(item.accessKey) : false;
+    }
+    if (isCollector()) {
+      return item.accessKey ? hasDashboardAccess(item.accessKey) : false;
+    }
+    if (item.to === '/dashboard/requests') return isManagerOrAdmin();
+    return true;
+  });
   const signedInName = getUsername().trim() || 'Signed in';
   const userInitial = signedInName.charAt(0).toUpperCase() || '?';
-  const roleLabel = isAdmin() ? 'Administrator' : 'Staff';
+  const roleLabel = isAdmin()
+    ? 'Administrator'
+    : isCollector()
+      ? 'Collector'
+      : getStaffRole() === 'Manager'
+        ? 'Manager'
+        : 'Staff';
 
   const renderSidebarFooter = () => (
     <>
+      {!isCollector() ? (
       <div
         className={`rounded-2xl bg-gradient-to-br p-3 shadow-lg ring-1 ${overdueCardTint}`}
         aria-live="polite"
@@ -290,6 +315,7 @@ export default function DashboardLayout() {
           {normalizedOverdue == null ? <LoadingSpinner size="sm" className="text-[11px]" /> : overduePriorityCopy(normalizedOverdue)}
         </p>
       </div>
+      ) : null}
       <div className="flex items-center gap-3 rounded-2xl bg-slate-50/90 px-3 py-2.5 ring-1 ring-slate-100">
         <div
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-200 to-violet-200 text-sm font-semibold text-indigo-900"
@@ -437,8 +463,8 @@ export default function DashboardLayout() {
         </div>
       </aside>
 
-      <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col pt-[3.75rem] sm:pt-[4.5rem] md:pl-[260px] md:pt-0">
-        <header className="fixed inset-x-0 top-0 z-30 shrink-0 border-b border-white/50 bg-[#F4F7FE]/95 px-3 py-2 backdrop-blur-md sm:px-6 sm:py-3 md:sticky md:left-auto md:right-auto lg:px-8">
+      <div className="flex min-h-0 min-w-0 w-full flex-1 flex-col pt-[3.75rem] sm:pt-[4.75rem] md:pl-[260px]">
+        <header className="fixed inset-x-0 top-0 z-30 shrink-0 border-b border-white/50 bg-[#F4F7FE]/95 px-3 py-2 backdrop-blur-md sm:px-6 sm:py-3 md:left-[260px] lg:px-8">
           <div className="flex h-11 items-center justify-between gap-2 sm:h-auto sm:gap-3">
             <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-2.5">
               <button
@@ -506,10 +532,14 @@ export default function DashboardLayout() {
         </header>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-x-hidden px-4 pb-8 pt-3 sm:px-6 sm:pt-4 lg:px-8 lg:pb-10">
-          <main className="min-w-0 shrink-0 overflow-x-hidden pr-0 lg:pr-[calc(300px+1.5rem)] xl:pr-[calc(320px+1.5rem)]">
+          <main
+            className={`min-w-0 shrink-0 overflow-x-hidden pr-0 ${
+              hideRightPanel ? '' : 'lg:pr-[calc(300px+1.5rem)] xl:pr-[calc(320px+1.5rem)]'
+            }`}
+          >
             <Outlet />
           </main>
-          <RightPanel />
+          {hideRightPanel ? null : <RightPanel />}
         </div>
       </div>
     </div>

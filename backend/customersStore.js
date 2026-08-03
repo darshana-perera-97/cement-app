@@ -46,10 +46,21 @@ function defaultDueDateYmd() {
   return addDaysYmd(todayYmdLocal(), 30);
 }
 
+function normalizeCustomerRecordId(id) {
+  return String(id ?? '').trim();
+}
+
+function customerRecordIdKey(id) {
+  const raw = normalizeCustomerRecordId(id);
+  return raw ? raw.toLowerCase() : '';
+}
+
 module.exports = {
   readCustomers,
   writeCustomers,
   toNonNegMoney,
   defaultDueDateYmd,
+  normalizeCustomerRecordId,
+  customerRecordIdKey,
   CUSTOMERS_FILE,
 };

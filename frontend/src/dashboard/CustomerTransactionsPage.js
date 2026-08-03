@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { getUsername } from '../auth';
+import { authFetch, getUsername, isCollector, isManagerOrAdmin } from '../auth';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -19,6 +19,14 @@ import {
   useTablePagination,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import CustomerProfilePanel from './CustomerProfilePanel';
+import CustomerChequesPanel from './CustomerChequesPanel';
+import CustomerInvoicesModal from './CustomerInvoicesModal';
+import CustomerLedgerModal from './CustomerLedgerModal';
+import RecordPaymentModal from './RecordPaymentModal';
+import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
+import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
+import { CollectorSelectField, useCollectors } from './useCollectors';
 
 const apiBase = getApiBase();
 
@@ -27,9 +35,26 @@ const KIND_FILTERS = [
   { value: 'opening', label: 'Opening' },
   { value: 'bill', label: 'Sales' },
   { value: 'payment', label: 'Payments' },
+  { value: 'cheque_return', label: 'Returned cheques' },
+];
+
+const PROFILE_SECTIONS = [
+  { id: 'activity', label: 'Activity' },
+  { id: 'cheques', label: 'Cheques' },
 ];
 
 const DEFAULT_OVERDUE_DAYS = 14;
+
+const WEEKDAY_OPTIONS = [
+  { value: '', label: 'Use default (Messages settings)' },
+  { value: '0', label: 'Sunday' },
+  { value: '1', label: 'Monday' },
+  { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' },
+  { value: '4', label: 'Thursday' },
+  { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+];
 
 const emptyCustomerForm = () => ({
   name: '',
@@ -39,6 +64,11 @@ const emptyCustomerForm = () => ({
   dueDate: '',
   pastBill: '',
   overdueDays: String(DEFAULT_OVERDUE_DAYS),
+  monthlyTargetBags: '',
+  collectorUserId: '',
+  overdueNotifyEnabled: true,
+  overdueNotifyWeekday: '',
+  overdueNotifyTime: '',
 });
 
 function customerToForm(c) {
@@ -53,6 +83,13 @@ function customerToForm(c) {
     dueDate: c.dueDate ?? '',
     pastBill: c.pastBill === 0 || c.pastBill ? String(c.pastBill) : '',
     overdueDays,
+    monthlyTargetBags:
+      c.monthlyTargetBags === 0 || c.monthlyTargetBags ? String(c.monthlyTargetBags) : '',
+    collectorUserId: c.collectorUserId ?? '',
+    overdueNotifyEnabled: c.overdueNotifyEnabled !== false,
+    overdueNotifyWeekday:
+      c.overdueNotifyWeekday === 0 || c.overdueNotifyWeekday ? String(c.overdueNotifyWeekday) : '',
+    overdueNotifyTime: c.overdueNotifyTime ?? '',
   };
 }
 
@@ -104,6 +141,8 @@ function txKindMeta(kind) {
       return { short: 'Sale', badge: 'bg-amber-50 text-amber-900 ring-amber-100' };
     case 'payment':
       return { short: 'Payment', badge: 'bg-emerald-50 text-emerald-800 ring-emerald-100' };
+    case 'cheque_return':
+      return { short: 'Returned', badge: 'bg-rose-50 text-rose-800 ring-rose-100' };
     default:
       return { short: 'Other', badge: 'bg-slate-100 text-slate-600 ring-slate-200/80' };
   }
@@ -120,7 +159,7 @@ function compareTransactionsByDateDesc(a, b) {
 function summarizeTransactions(transactions) {
   let totalCharged = 0;
   let totalPaid = 0;
-  const counts = { all: transactions.length, opening: 0, bill: 0, payment: 0 };
+  const counts = { all: transactions.length, opening: 0, bill: 0, payment: 0, cheque_return: 0 };
   for (const tx of transactions) {
     const amt = Number(tx.amount) || 0;
     if (tx.kind && counts[tx.kind] != null) counts[tx.kind] += 1;
@@ -130,38 +169,14 @@ function summarizeTransactions(transactions) {
   return { totalCharged, totalPaid, counts };
 }
 
-function SummaryStat({ label, amount, hint, highlight = false, valueClassName = '', action = null }) {
-  return (
-    <div
-      className={`px-4 py-3.5 sm:px-5 ${
-        highlight ? 'bg-indigo-50/90 ring-1 ring-inset ring-indigo-100' : 'bg-white'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {label}
-          <span className="ml-1.5 text-[10px] font-semibold normal-case text-slate-400">LKR</span>
-        </p>
-        {action}
-      </div>
-      <p className={`mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl ${valueClassName}`}>
-        {formatAmount(amount)}
-      </p>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
-    </div>
-  );
-}
-
 function CustomerHeaderSkeleton() {
   return (
     <div className="animate-pulse overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200">
-      <div className="h-28 bg-slate-100" />
-      <div className="grid grid-cols-2 gap-px bg-slate-100 sm:grid-cols-4">
+      <div className="h-12 bg-slate-100" />
+      <div className="h-24 bg-white px-4 py-3" />
+      <div className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50 px-4 py-2.5 sm:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="h-20 bg-white px-5 py-4">
-            <div className="h-3 w-16 rounded bg-slate-100" />
-            <div className="mt-3 h-6 w-24 rounded bg-slate-100" />
-          </div>
+          <div key={i} className="h-12 rounded-lg bg-white ring-1 ring-slate-100" />
         ))}
       </div>
     </div>
@@ -173,8 +188,11 @@ export default function CustomerTransactionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [customer, setCustomer] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [paymentsLoading, setPaymentsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [profileSection, setProfileSection] = useState('activity');
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState('all');
   const [detailTx, setDetailTx] = useState(null);
@@ -182,6 +200,12 @@ export default function CustomerTransactionsPage() {
   const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
   const [customerSaveError, setCustomerSaveError] = useState(null);
   const [customerSaving, setCustomerSaving] = useState(false);
+  const [invoicesOpen, setInvoicesOpen] = useState(false);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
+  const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
+  const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
+  const { collectors, loading: collectorsLoading } = useCollectors();
 
   const today = useMemo(() => todayYmdLocal(), []);
 
@@ -211,19 +235,27 @@ export default function CustomerTransactionsPage() {
     setCustomerSaving(true);
     setCustomerSaveError(null);
     try {
-      const res = await fetch(`${apiBase}/api/customers/${encodeURIComponent(customerId)}`, {
+      const payload = {
+        name: customerForm.name.trim(),
+        location: customerForm.location.trim(),
+        contactNumber: customerForm.contactNumber.trim(),
+        email: customerForm.email.trim(),
+        dueDate: customerForm.dueDate.trim(),
+        pastBill: customerForm.pastBill,
+        overdueDays: customerForm.overdueDays,
+        updatedBy: username,
+      };
+      if (isManagerOrAdmin()) {
+        payload.monthlyTargetBags = customerForm.monthlyTargetBags;
+        payload.collectorUserId = customerForm.collectorUserId.trim();
+        payload.overdueNotifyEnabled = Boolean(customerForm.overdueNotifyEnabled);
+        payload.overdueNotifyWeekday = customerForm.overdueNotifyWeekday;
+        payload.overdueNotifyTime = customerForm.overdueNotifyTime.trim();
+      }
+      const res = await authFetch(`${apiBase}/api/customers/${encodeURIComponent(customerId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: customerForm.name.trim(),
-          location: customerForm.location.trim(),
-          contactNumber: customerForm.contactNumber.trim(),
-          email: customerForm.email.trim(),
-          dueDate: customerForm.dueDate.trim(),
-          pastBill: customerForm.pastBill,
-          overdueDays: customerForm.overdueDays,
-          updatedBy: username,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -247,23 +279,34 @@ export default function CustomerTransactionsPage() {
   const load = useCallback(async () => {
     if (!customerId) return;
     setLoading(true);
+    setPaymentsLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `${apiBase}/api/customers/${encodeURIComponent(customerId)}/transactions`
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const [txRes, payRes] = await Promise.all([
+        authFetch(`${apiBase}/api/customers/${encodeURIComponent(customerId)}/transactions`),
+        authFetch(`${apiBase}/api/payments`),
+      ]);
+      const data = await txRes.json().catch(() => ({}));
+      if (!txRes.ok) {
         throw new Error(data.error || 'Failed to load transactions');
       }
       setCustomer(data.customer || null);
       setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
+
+      if (payRes.ok) {
+        const payData = await payRes.json().catch(() => []);
+        setPayments(Array.isArray(payData) ? payData : []);
+      } else {
+        setPayments([]);
+      }
     } catch (e) {
       setError(e.message || 'Could not load data');
       setCustomer(null);
       setTransactions([]);
+      setPayments([]);
     } finally {
       setLoading(false);
+      setPaymentsLoading(false);
     }
   }, [customerId]);
 
@@ -302,9 +345,6 @@ export default function CustomerTransactionsPage() {
     [filteredTransactions, pagination.offset, pagination.pageSize]
   );
 
-  const recordPaymentHref = customerId
-    ? `/dashboard/payments?customerId=${encodeURIComponent(customerId)}&record=1`
-    : '/dashboard/payments';
 
   return (
     <div className="space-y-6">
@@ -319,26 +359,13 @@ export default function CustomerTransactionsPage() {
           {customer ? (
             <>
               <h1 className="mt-2 truncate text-2xl font-bold tracking-tight text-slate-900">{customer.name}</h1>
-              {[customer.location, customer.contactNumber, customer.email].some(Boolean) ? (
-                <p className="mt-1 truncate text-sm text-slate-600">
-                  {[customer.location, customer.contactNumber, customer.email].filter(Boolean).join(' · ')}
-                </p>
-              ) : null}
             </>
           ) : (
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">Customer account</h1>
           )}
-          <p className="mt-1 text-sm text-slate-500">Opening credit, sales, and payments for this account.</p>
+          <p className="mt-1 text-sm text-slate-500">Credit sales, payments, and account summary.</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={load}
-            disabled={loading || !customerId}
-            className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
-          >
-            Refresh
-          </button>
           {customer ? (
             <>
               <button
@@ -348,12 +375,30 @@ export default function CustomerTransactionsPage() {
               >
                 Edit details
               </button>
-              <Link
-                to={recordPaymentHref}
-                className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03]"
+              <button
+                type="button"
+                onClick={() => setInvoicesOpen(true)}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-800"
+              >
+                Invoices
+              </button>
+              <button
+                type="button"
+                onClick={() => setLedgerOpen(true)}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 hover:text-sky-900"
+              >
+                Ledger
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  useSeparateBillSettlement ? setSeparateBillModalOpen(true) : setRecordPaymentOpen(true)
+                }
+                disabled={collectorSettingsLoading}
+                className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60"
               >
                 Record payment
-              </Link>
+              </button>
             </>
           ) : null}
         </div>
@@ -368,136 +413,54 @@ export default function CustomerTransactionsPage() {
       {loading && !customer ? <CustomerHeaderSkeleton /> : null}
 
       {customer ? (
-        <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
-          <div className="border-b border-slate-100 bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 px-5 py-5 sm:px-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <button
-                  type="button"
-                  onClick={openCustomerEdit}
-                  className="float-right ml-2 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-indigo-600 shadow-sm hover:bg-indigo-50 sm:hidden"
-                >
-                  Edit
-                </button>
-                <div className="flex flex-wrap items-center gap-2">
-                  {overdue ? (
-                    <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-rose-800">
-                      Overdue
-                    </span>
-                  ) : allPaid ? (
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-emerald-800">
-                      Settled
-                    </span>
-                  ) : amountToPay > 0 ? (
-                    <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-900">
-                      Balance due
-                    </span>
-                  ) : null}
-                  {overpayment > 0 ? (
-                    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-emerald-800 ring-1 ring-emerald-100">
-                      Credit balance
-                    </span>
-                  ) : null}
-                </div>
-                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                  {customer.location ? (
-                    <div>
-                      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Location</dt>
-                      <dd className="mt-0.5 font-medium text-slate-800">{customer.location}</dd>
-                    </div>
-                  ) : null}
-                  {customer.contactNumber ? (
-                    <div>
-                      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Contact</dt>
-                      <dd className="mt-0.5 font-medium text-slate-800">
-                        <a href={`tel:${customer.contactNumber}`} className="text-indigo-700 hover:text-indigo-900">
-                          {customer.contactNumber}
-                        </a>
-                      </dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Email</dt>
-                    <dd className="mt-0.5 font-medium text-slate-800">
-                      {customer.email ? (
-                        <a href={`mailto:${customer.email}`} className="text-indigo-700 hover:text-indigo-900">
-                          {customer.email}
-                        </a>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </dd>
-                  </div>
-                  {customer.dueDate ? (
-                    <div className="sm:col-span-2">
-                      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Payment due</dt>
-                      <dd
-                        className={`mt-0.5 font-medium ${
-                          dueHint?.tone === 'overdue' ? 'text-rose-800' : 'text-slate-800'
-                        }`}
-                      >
-                        {dueHint?.text || formatDisplayDate(customer.dueDate)}
-                      </dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Bill overdue days</dt>
-                    <dd className="mt-0.5 font-medium text-slate-800">
-                      {customer.overdueDays ?? DEFAULT_OVERDUE_DAYS} day
-                      {(customer.overdueDays ?? DEFAULT_OVERDUE_DAYS) === 1 ? '' : 's'} after bill date
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className={`grid gap-px bg-slate-100 ${
-              overpayment > 0 ? 'sm:grid-cols-2 lg:grid-cols-5' : 'sm:grid-cols-2 lg:grid-cols-4'
-            }`}
-          >
-            <SummaryStat
-              label="Amount to pay"
-              amount={amountToPay}
-              highlight
-              valueClassName={overdue && amountToPay > 0 ? 'text-rose-800' : ''}
-              hint={overdue && amountToPay > 0 ? 'Collect as soon as possible' : null}
-            />
-            {overpayment > 0 ? (
-              <SummaryStat
-                label="Overpayment"
-                amount={overpayment}
-                valueClassName="text-emerald-800"
-                hint="Customer paid more than owed"
-              />
-            ) : null}
-            <SummaryStat
-              label="Opening balance"
-              amount={customer.pastBill}
-              hint={
-                customer.pastBillUpdatedAt
-                  ? `Updated ${formatDisplayDate(String(customer.pastBillUpdatedAt).slice(0, 10))}${
-                      customer.pastBillUpdatedBy ? ` by ${customer.pastBillUpdatedBy}` : ''
-                    }`
-                  : 'Starting amount'
-              }
-            />
-            <SummaryStat
-              label="Total charged"
-              amount={summary.totalCharged}
-              hint="Opening + credit sales"
-            />
-            <SummaryStat
-              label="Total paid"
-              amount={summary.totalPaid}
-              valueClassName="text-emerald-800"
-              hint="All recorded payments"
-            />
-          </div>
-        </section>
+        <CustomerProfilePanel
+          customer={customer}
+          amountToPay={amountToPay}
+          overpayment={overpayment}
+          overdue={overdue}
+          allPaid={allPaid}
+          dueHint={dueHint}
+          summary={summary}
+          formatMoney={money}
+          formatDisplayDate={formatDisplayDate}
+          defaultOverdueDays={DEFAULT_OVERDUE_DAYS}
+          onEditTarget={isManagerOrAdmin() ? openCustomerEdit : null}
+        />
       ) : null}
 
+      {customer ? (
+        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-1">
+          {PROFILE_SECTIONS.map((sec) => {
+            const active = profileSection === sec.id;
+            return (
+              <button
+                key={sec.id}
+                type="button"
+                onClick={() => setProfileSection(sec.id)}
+                className={`rounded-t-lg px-4 py-2 text-sm font-semibold transition ${
+                  active
+                    ? 'bg-white text-indigo-700 ring-1 ring-slate-200 ring-b-white'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                {sec.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {customer && profileSection === 'cheques' ? (
+        <CustomerChequesPanel
+          customerId={customerId}
+          payments={payments}
+          loading={paymentsLoading}
+          canMarkReturn={isManagerOrAdmin()}
+          onUpdated={load}
+        />
+      ) : null}
+
+      {profileSection === 'activity' ? (
       <section className="space-y-3">
         <div>
           <h2 className="text-base font-bold text-slate-900">Activity</h2>
@@ -566,12 +529,13 @@ export default function CustomerTransactionsPage() {
                   Credit sales and payments will show up here once recorded.
                 </p>
                 {customer ? (
-                  <Link
-                    to={recordPaymentHref}
+                  <button
+                    type="button"
+                    onClick={() => setRecordPaymentOpen(true)}
                     className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:text-indigo-800"
                   >
                     Record a payment →
-                  </Link>
+                  </button>
                 ) : null}
               </div>
             ) : filteredTransactions.length === 0 ? (
@@ -629,12 +593,13 @@ export default function CustomerTransactionsPage() {
                           Credit sales and payments will show up here once recorded.
                         </p>
                         {customer ? (
-                          <Link
-                            to={recordPaymentHref}
+                          <button
+                            type="button"
+                            onClick={() => setRecordPaymentOpen(true)}
                             className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:text-indigo-800"
                           >
                             Record a payment →
-                          </Link>
+                          </button>
                         ) : null}
                       </td>
                     </tr>
@@ -695,6 +660,7 @@ export default function CustomerTransactionsPage() {
           ) : null}
         </div>
       </section>
+      ) : null}
 
       <RowDetailModal open={!!detailTx} row={detailTx} variant="transaction" onClose={() => setDetailTx(null)} />
 
@@ -819,6 +785,80 @@ export default function CustomerTransactionsPage() {
                   placeholder="0.00"
                 />
               </label>
+              {isManagerOrAdmin() ? (
+                <CollectorSelectField
+                  id="edit-customer-collector"
+                  value={customerForm.collectorUserId}
+                  onChange={(v) => handleCustomerFormChange('collectorUserId', v)}
+                  disabled={customerSaving}
+                  collectors={collectors}
+                  loading={collectorsLoading}
+                />
+              ) : null}
+              {isManagerOrAdmin() ? (
+                <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+                  Monthly target bags
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={customerForm.monthlyTargetBags}
+                    onChange={(e) => handleCustomerFormChange('monthlyTargetBags', e.target.value)}
+                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                    placeholder="e.g. 500 (leave empty or 0 for no target)"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Credit sales bags this calendar month vs this target (manager/admin only).
+                  </span>
+                </label>
+              ) : null}
+              {isManagerOrAdmin() ? (
+                <div className="sm:col-span-2 space-y-3 rounded-xl bg-orange-50/50 px-3 py-3 ring-1 ring-orange-100">
+                  <p className="text-sm font-semibold text-slate-800">Balance reminder schedule</p>
+                  <p className="text-xs text-slate-500">
+                    Weekly WhatsApp/email balance reminder for this customer. Leave weekday/time empty to use the
+                    default from Messages settings.
+                  </p>
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(customerForm.overdueNotifyEnabled)}
+                      onChange={(e) => handleCustomerFormChange('overdueNotifyEnabled', e.target.checked)}
+                      disabled={customerSaving}
+                      className="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500/35"
+                    />
+                    <span className="text-sm font-medium text-slate-700">Send balance reminders to this customer</span>
+                  </label>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <label className="block text-sm font-medium text-slate-600">
+                      Reminder weekday
+                      <select
+                        value={customerForm.overdueNotifyWeekday}
+                        onChange={(e) => handleCustomerFormChange('overdueNotifyWeekday', e.target.value)}
+                        disabled={customerSaving}
+                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      >
+                        {WEEKDAY_OPTIONS.map((opt) => (
+                          <option key={opt.value || 'default'} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm font-medium text-slate-600">
+                      Reminder time
+                      <input
+                        type="time"
+                        value={customerForm.overdueNotifyTime}
+                        onChange={(e) => handleCustomerFormChange('overdueNotifyTime', e.target.value)}
+                        disabled={customerSaving}
+                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      />
+                      <span className="mt-1 block text-xs font-normal text-slate-500">Leave blank for default time.</span>
+                    </label>
+                  </div>
+                </div>
+              ) : null}
               </div>
               <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
@@ -841,6 +881,34 @@ export default function CustomerTransactionsPage() {
           </div>
         </div>
       ) : null}
+
+      <CustomerInvoicesModal open={invoicesOpen} customer={customer} onClose={() => setInvoicesOpen(false)} />
+
+      <CustomerLedgerModal
+        open={ledgerOpen}
+        customer={customer}
+        transactions={transactions}
+        loading={loading}
+        onClose={() => setLedgerOpen(false)}
+      />
+
+      <RecordPaymentModal
+        open={recordPaymentOpen}
+        onClose={() => setRecordPaymentOpen(false)}
+        onSaved={load}
+        prefillCustomerId={customerId || ''}
+        lockCustomer
+        customerName={customer?.name || ''}
+      />
+
+      <CollectorSeparateBillSettlementModal
+        open={separateBillModalOpen}
+        onClose={() => setSeparateBillModalOpen(false)}
+        onSaved={load}
+        prefillCustomerId={customerId || ''}
+        lockCustomer
+        customerName={customer?.name || ''}
+      />
     </div>
   );
 }

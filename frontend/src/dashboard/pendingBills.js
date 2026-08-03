@@ -58,7 +58,7 @@ function daysBetweenYmd(fromYmd, toYmd) {
   return Math.max(0, Math.round((t1 - t0) / (24 * 60 * 60 * 1000)));
 }
 
-function billDetailsLine(bill) {
+export function billDetailsLine(bill) {
   const parts = [];
   const stockId = String(bill.stockId ?? '').trim();
   if (stockId) parts.push(`Stock ${stockId}`);
@@ -91,6 +91,58 @@ function sortBillsChronological(bills) {
     if (cmp !== 0) return cmp;
     return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
   });
+}
+
+function compareByDateThenCreated(a, b) {
+  const cmp = String(a.date ?? '').localeCompare(String(b.date ?? ''));
+  if (cmp !== 0) return cmp;
+  return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+}
+
+/** Payment date (YYYY-MM-DD) when each bill was fully cleared, FIFO (past bill first, then oldest bills). */
+function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
+  const settledByBillId = new Map();
+  if (!customer) return settledByBillId;
+
+  const nk = normalizeCustomerName(customer.name);
+  const custBills = (Array.isArray(bills) ? bills : []).filter(
+    (b) => normalizeCustomerName(b.customerName) === nk,
+  );
+  const custPayments = (Array.isArray(payments) ? payments : [])
+    .filter((p) => p.customerId === customer.id)
+    .sort(compareByDateThenCreated);
+
+  const slots = sortBillsChronological(custBills).map((b) => ({
+    id: b.id,
+    remaining: toNonNegMoney(b.totalAmount),
+  }));
+  let pastRemaining = toNonNegMoney(customer.pastBill);
+
+  for (const p of custPayments) {
+    let credit = paymentCreditToCustomer(p);
+    if (credit <= 0) continue;
+    const payDate = String(p.date ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) continue;
+
+    if (pastRemaining > 0) {
+      const toward = Math.min(pastRemaining, credit);
+      pastRemaining = Math.round((pastRemaining - toward) * 100) / 100;
+      credit = Math.round((credit - toward) * 100) / 100;
+    }
+
+    for (const slot of slots) {
+      if (credit <= 0) break;
+      if (slot.remaining <= 0) continue;
+      const toward = Math.min(slot.remaining, credit);
+      slot.remaining = Math.round((slot.remaining - toward) * 100) / 100;
+      credit = Math.round((credit - toward) * 100) / 100;
+      if (slot.remaining <= 0 && slot.id) {
+        settledByBillId.set(slot.id, payDate);
+      }
+    }
+  }
+
+  return settledByBillId;
 }
 
 /**
@@ -194,4 +246,82 @@ export function buildPendingBillRows(customers = [], bills = [], payments = []) 
     return (Number(b.outstandingAmount) || 0) - (Number(a.outstandingAmount) || 0);
   });
   return rows;
+}
+
+/**
+ * All credit bills for one customer with FIFO settlement (paid / partial / open).
+ * Newest bill date first.
+ */
+export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
+  if (!customer) return [];
+  const todayYmd = todayYmdLocal();
+  const settlementDays = settlementDaysForCustomer(customer);
+  const nk = normalizeCustomerName(customer.name);
+  const custBills = (Array.isArray(bills) ? bills : []).filter(
+    (b) => normalizeCustomerName(b.customerName) === nk,
+  );
+  const settledByBillId = buildSettledDateByBillIdForCustomer(customer, bills, payments);
+  let paySum = 0;
+  for (const p of Array.isArray(payments) ? payments : []) {
+    if (p.customerId === customer.id) paySum += paymentCreditToCustomer(p);
+  }
+  let remainingCredit = paySum;
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  remainingCredit -= Math.min(pastOwed, remainingCredit);
+
+  const rows = [];
+  for (const bill of sortBillsChronological(custBills)) {
+    const total = toNonNegMoney(bill.totalAmount);
+    const paidTowardBill = Math.min(total, remainingCredit);
+    remainingCredit -= paidTowardBill;
+    const outstanding = Math.round((total - paidTowardBill) * 100) / 100;
+    const dueDate = addDaysToYmd(bill.date, settlementDays);
+    const isOverdue = Boolean(dueDate && todayYmd > dueDate && outstanding > 0);
+    let status = 'open';
+    if (outstanding <= 0) status = 'settled';
+    else if (paidTowardBill > 0) status = 'partial';
+
+    const settledDate = bill.id ? settledByBillId.get(bill.id) || '' : '';
+    const billDateYmd = String(bill.date ?? '').slice(0, 10);
+    const daysToSettle =
+      settledDate && /^\d{4}-\d{2}-\d{2}$/.test(billDateYmd)
+        ? daysBetweenYmd(billDateYmd, settledDate)
+        : null;
+
+    rows.push({
+      id: bill.id,
+      billDate: bill.date,
+      dueDate,
+      settlementDays,
+      settledDate,
+      daysToSettle,
+      billTotal: total,
+      paidAmount: paidTowardBill,
+      outstandingAmount: outstanding,
+      status,
+      details: billDetailsLine(bill),
+      daysLeftUntilDue: dueDate && todayYmd <= dueDate ? daysBetweenYmd(todayYmd, dueDate) : 0,
+      daysOverdue: isOverdue ? daysBetweenYmd(dueDate, todayYmd) : 0,
+      isOverdue,
+    });
+  }
+
+  rows.sort((a, b) => String(b.billDate).localeCompare(String(a.billDate)));
+  return rows;
+}
+
+/** Outstanding credit bills for one customer (optional: exclude a payment when editing). */
+export function buildCustomerOutstandingBills(
+  customers = [],
+  bills = [],
+  payments = [],
+  customerId,
+  { excludePaymentId = null } = {},
+) {
+  const cust = (Array.isArray(customers) ? customers : []).find((c) => c.id === customerId);
+  if (!cust) return [];
+  const pay = excludePaymentId
+    ? (Array.isArray(payments) ? payments : []).filter((p) => p.id !== excludePaymentId)
+    : payments;
+  return buildPendingBillRows([cust], bills, pay);
 }

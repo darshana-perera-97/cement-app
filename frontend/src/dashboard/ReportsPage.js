@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
+import { isManagerOrAdmin } from '../auth';
 import { BRANDS } from './brandTheme';
 import {
   LoadingSpinner,
@@ -14,11 +15,15 @@ import {
   stickyThead,
 } from './tableToolbar';
 import { buildChequeTableRows, chequePortion } from './paymentCheques';
+import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import {
   buildDailyBagsByShopBrandRows,
   downloadDailyBagsByShopReport,
 } from './dailyBagsByShopExport';
+import { buildShopTargetsRows } from './shopTargetsReport';
+import { downloadShopTargetsPdf } from './shopTargetsPdf';
+import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import {
   buildFinancialCashInRows,
   buildFinancialConvertingChequeRows,
@@ -290,6 +295,22 @@ function money(n) {
     currency: 'LKR',
     maximumFractionDigits: 2,
   }).format(Number(n) || 0);
+}
+
+function formatAmountFixed2(n) {
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(n) || 0);
+}
+
+function SummaryLkrAmount({ value, valueClassName = 'text-slate-900' }) {
+  return (
+    <p className={`mt-1 flex items-baseline gap-1.5 font-bold tabular-nums leading-none ${valueClassName}`}>
+      <span className="text-[10px] font-semibold uppercase tracking-wide opacity-75">LKR</span>
+      <span className="text-xl">{formatAmountFixed2(value)}</span>
+    </p>
+  );
 }
 
 function bagsFromRecord(record, brandKey = '') {
@@ -586,6 +607,46 @@ function buildPendingChequeRows(payments, from, to) {
   return rows;
 }
 
+/** Cheques on payments recorded on a single calendar day (collections day). */
+function buildDailyCollectionChequeRows(payments, ymd) {
+  const rows = buildChequeTableRows(payments, (p, _c, flat) => {
+    const payDate = String(p.date ?? '').slice(0, 10);
+    if (payDate !== ymd) return null;
+    return {
+      id: flat.rowKey,
+      customerName: String(p.customerName ?? '').trim() || '—',
+      chequeDate: flat.chequeDate || '—',
+      chequeNumber: flat.chequeNumber,
+      amount: flat.amount,
+      chequeDeposited: flat.chequeDeposited,
+      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+    };
+  });
+  rows.sort((a, b) => {
+    const byShop = a.customerName.localeCompare(b.customerName);
+    if (byShop !== 0) return byShop;
+    return a.chequeDate.localeCompare(b.chequeDate);
+  });
+  return rows;
+}
+
+function enrichDailyShopRows(baseRows, payments, ymd) {
+  const cashByShop = new Map();
+  const chequeByShop = new Map();
+  for (const p of payments) {
+    const d = String(p.date ?? '').slice(0, 10);
+    if (d !== ymd) continue;
+    const shop = String(p.customerName ?? '').trim() || '—';
+    cashByShop.set(shop, round2((cashByShop.get(shop) || 0) + cashPortion(p)));
+    chequeByShop.set(shop, round2((chequeByShop.get(shop) || 0) + chequePortion(p)));
+  }
+  return baseRows.map((r) => ({
+    ...r,
+    cashCollected: cashByShop.get(r.shop) || 0,
+    chequeCollected: chequeByShop.get(r.shop) || 0,
+  }));
+}
+
 const periodBtn =
   'rounded-lg px-4 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40';
 const periodActive = 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80';
@@ -673,6 +734,10 @@ export default function ReportsPage() {
   const [billsMonth, setBillsMonth] = useState(() => currentMonthValue());
   const [dailyBagsMonth, setDailyBagsMonth] = useState(() => currentMonthValue());
   const [dailyBagsBrand, setDailyBagsBrand] = useState('');
+  const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
+  const [dailyReportDate, setDailyReportDate] = useState(() => localYmd());
+
+  const managerDailyReport = isManagerOrAdmin();
 
   const [fsPeriodMode, setFsPeriodMode] = useState('monthly');
   const [fsSelectedWeek, setFsSelectedWeek] = useState(() => currentIsoWeekValue());
@@ -862,6 +927,13 @@ export default function ReportsPage() {
   const dailyBagsReport = useMemo(
     () => buildDailyBagsByShopBrandRows(bills, dailyBagsMonth, dailyBagsBrand),
     [bills, dailyBagsMonth, dailyBagsBrand],
+  );
+
+  const shopTargetsMonthLabel = useMemo(() => monthDisplayLabel(shopTargetsMonth), [shopTargetsMonth]);
+
+  const shopTargetsReport = useMemo(
+    () => buildShopTargetsRows(bills, customers, shopTargetsMonth),
+    [bills, customers, shopTargetsMonth],
   );
 
   const billSettledDateLookup = useMemo(
@@ -1210,6 +1282,43 @@ export default function ReportsPage() {
     [shopRows],
   );
 
+  const dailyReportShopRows = useMemo(() => {
+    if (!managerDailyReport) return [];
+    const base = buildShopRowsForRange(
+      bills,
+      payments,
+      customerLocationMap,
+      dailyReportDate,
+      dailyReportDate,
+      '',
+    );
+    return enrichDailyShopRows(base, payments, dailyReportDate).filter((r) => r.cashIn > 0);
+  }, [managerDailyReport, bills, payments, customerLocationMap, dailyReportDate]);
+
+  const dailyReportTotals = useMemo(
+    () =>
+      dailyReportShopRows.reduce(
+        (acc, r) => ({
+          collections: round2(acc.collections + r.cashIn),
+          cash: round2(acc.cash + r.cashCollected),
+          cheque: round2(acc.cheque + r.chequeCollected),
+          paymentCount: acc.paymentCount + r.paymentCount,
+        }),
+        { collections: 0, cash: 0, cheque: 0, paymentCount: 0 },
+      ),
+    [dailyReportShopRows],
+  );
+
+  const dailyReportChequeRows = useMemo(() => {
+    if (!managerDailyReport) return [];
+    return buildDailyCollectionChequeRows(payments, dailyReportDate);
+  }, [managerDailyReport, payments, dailyReportDate]);
+
+  const dailyReportChequeTotal = useMemo(
+    () => round2(dailyReportChequeRows.reduce((s, r) => s + r.amount, 0)),
+    [dailyReportChequeRows],
+  );
+
   const bankDailyRows = useMemo(() => {
     const all = buildDailyBankRows(payments);
     return all.filter((r) => inDateRange(r.date, appliedFrom, appliedTo));
@@ -1380,6 +1489,18 @@ export default function ReportsPage() {
     );
   }, [dailyBagsMonth, dailyBagsMonthLabel, dailyBagsActiveBrand, dailyBagsReport]);
 
+  const handleDownloadShopTargets = useCallback(() => {
+    downloadShopTargetsPdf(
+      {
+        monthLabel: shopTargetsMonthLabel,
+        rows: shopTargetsReport.rows,
+        totals: shopTargetsReport.totals,
+        overallProgressPct: shopTargetsReport.overallProgressPct,
+      },
+      { monthSlug: shopTargetsMonth },
+    );
+  }, [shopTargetsMonth, shopTargetsMonthLabel, shopTargetsReport]);
+
   const handleDownloadStockDistribution = useCallback(() => {
     downloadStockDistributionPdf(
       {
@@ -1484,12 +1605,259 @@ export default function ReportsPage() {
     financialConvertingRows,
   ]);
 
+  const handleDownloadDailyCollectionsPdf = useCallback(() => {
+    downloadDailyCollectionsReportPdf(
+      {
+        reportDate: dailyReportDate,
+        totals: dailyReportTotals,
+        shopRows: dailyReportShopRows,
+        chequeRows: dailyReportChequeRows,
+        chequeTotal: dailyReportChequeTotal,
+      },
+      { dateSlug: dailyReportDate },
+    );
+  }, [
+    dailyReportDate,
+    dailyReportTotals,
+    dailyReportShopRows,
+    dailyReportChequeRows,
+    dailyReportChequeTotal,
+  ]);
+
   return (
     <div className="space-y-5">
       <div className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
-        <p className="mt-1 text-sm text-slate-500">Monthly summaries, balances, and downloadable reports.</p>
+        <p className="mt-1 text-sm text-slate-500">
+          {managerDailyReport
+            ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
+            : 'Monthly summaries, balances, and downloadable reports.'}
+        </p>
       </div>
+
+      {managerDailyReport ? (
+        <Card
+          title="Daily collections report"
+          subtitle="Collections and cheques received for the selected day (manager / admin)"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <label className={filterLabelNarrow}>
+              Report date
+              <input
+                type="date"
+                value={dailyReportDate}
+                max={localYmd()}
+                onChange={(e) => setDailyReportDate(e.target.value || localYmd())}
+                className={filterControl}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={handleDownloadDailyCollectionsPdf}
+              disabled={loading || !!error}
+              className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Download report (PDF)
+            </button>
+          </div>
+
+          {loading ? (
+            <p className="mt-5 rounded-[20px] bg-slate-50 px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+              <LoadingSpinner label="Loading daily report…" />
+            </p>
+          ) : (
+            <>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Collections</p>
+                  <SummaryLkrAmount value={dailyReportTotals.collections} valueClassName="text-emerald-900" />
+                  <p className="mt-0.5 text-xs text-emerald-600">
+                    {dailyReportTotals.paymentCount} payment
+                    {dailyReportTotals.paymentCount === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-sky-50 p-4 ring-1 ring-sky-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Cash</p>
+                  <SummaryLkrAmount value={dailyReportTotals.cash} valueClassName="text-sky-900" />
+                </div>
+                <div className="rounded-xl bg-violet-50 p-4 ring-1 ring-violet-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">Cheque</p>
+                  <SummaryLkrAmount value={dailyReportTotals.cheque} valueClassName="text-violet-900" />
+                  <p className="mt-0.5 text-xs text-violet-600">
+                    {dailyReportChequeRows.length} cheque{dailyReportChequeRows.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+              </div>
+
+              <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">By shop</h3>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportShopRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No collections on {dailyReportDate}.
+                  </p>
+                ) : (
+                  dailyReportShopRows.map((r) => (
+                    <MobileRowCard
+                      key={r.shop}
+                      title={r.shop}
+                      subtitle={r.location || '—'}
+                      fields={[
+                        { label: 'Cash', value: money(r.cashCollected) },
+                        { label: 'Cheque', value: money(r.chequeCollected) },
+                        { label: 'Collections', value: money(r.cashIn) },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[600px] border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3">Location</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Cash</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Cheque</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Collections</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportShopRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                          No collections on {dailyReportDate}.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportShopRows.map((r) => (
+                        <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>
+                            {r.shop}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
+                            {r.cashCollected > 0 ? money(r.cashCollected) : '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
+                            {r.chequeCollected > 0 ? money(r.chequeCollected) : '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                            {r.cashIn > 0 ? money(r.cashIn) : '—'}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportShopRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className="px-4 py-3" colSpan={2}>
+                          Total ({dailyReportShopRows.length} shop
+                          {dailyReportShopRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
+                          {money(dailyReportTotals.cash)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
+                          {money(dailyReportTotals.cheque)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
+                          {money(dailyReportTotals.collections)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+
+              <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cheque list</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Cheques recorded on payments dated {dailyReportDate}.
+              </p>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportChequeRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No cheques on this day.
+                  </p>
+                ) : (
+                  dailyReportChequeRows.map((r) => (
+                    <MobileRowCard
+                      key={r.id}
+                      title={r.customerName}
+                      subtitle={r.chequeDate}
+                      fields={[
+                        { label: 'Amount', value: money(r.amount) },
+                        { label: 'Cheque #', value: r.chequeNumber },
+                        { label: 'Bill #', value: r.billNumber },
+                        {
+                          label: 'Deposited',
+                          value: r.chequeDeposited ? 'Yes' : 'Pending',
+                        },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3">Cheque date</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">Cheque #</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
+                      <th className="whitespace-nowrap px-4 py-3">Deposited</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportChequeRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                          No cheques on this day.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportChequeRows.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.chequeDate}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-violet-800">
+                            {money(r.amount)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.chequeNumber}</td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm">
+                            {r.chequeDeposited ? (
+                              <span className="font-semibold text-emerald-700">Deposited</span>
+                            ) : (
+                              <span className="font-semibold text-amber-700">Pending</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportChequeRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={2}>
+                          Total ({dailyReportChequeRows.length} cheque
+                          {dailyReportChequeRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
+                          {money(dailyReportChequeTotal)}
+                        </td>
+                        <td className="px-4 py-3" colSpan={3} />
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+            </>
+          )}
+        </Card>
+      ) : null}
 
       <Card
         title="Bills by month"
@@ -1803,6 +2171,176 @@ export default function ReportsPage() {
                   ))}
                   <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-indigo-900">
                     {dailyBagsReport.grandTotal.toLocaleString()}
+                  </td>
+                </tr>
+              </tfoot>
+            ) : null}
+          </table>
+        </div>
+      </Card>
+
+      <Card
+        title="Shop targets"
+        subtitle={`Monthly bag sales vs target for ${shopTargetsMonthLabel} — from credit bills and customer targets`}
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <label className={filterLabelNarrow}>
+            Month
+            <input
+              type="month"
+              value={shopTargetsMonth}
+              onChange={(e) => setShopTargetsMonth(e.target.value || currentMonthValue())}
+              className={filterControl}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={handleDownloadShopTargets}
+            disabled={loading || !!error}
+            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Download report (PDF)
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-3 sm:hidden">
+          {loading ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              <LoadingSpinner />
+            </p>
+          ) : shopTargetsReport.rows.length === 0 ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              No shop sales or targets in {shopTargetsMonthLabel}.
+            </p>
+          ) : (
+            shopTargetsReport.rows.map((r) => (
+              <MobileRowCard
+                key={r.rowKey}
+                title={r.shop}
+                fields={[
+                  ...BRANDS.map((b) => ({
+                    label: b.label,
+                    value: (r.byBrand[b.key] || 0).toLocaleString(),
+                  })),
+                  { label: 'Total bags', value: r.total.toLocaleString() },
+                  {
+                    label: 'Monthly target',
+                    value: r.monthlyTargetBags > 0 ? r.monthlyTargetBags.toLocaleString() : '—',
+                  },
+                  {
+                    label: 'Completed',
+                    value:
+                      r.progressPct != null ? (
+                        <MonthlyTargetProgressBar
+                          sold={r.total}
+                          target={r.monthlyTargetBags}
+                          progressPct={r.progressPct}
+                          compact
+                        />
+                      ) : (
+                        '—'
+                      ),
+                  },
+                ]}
+              />
+            ))
+          )}
+        </div>
+
+        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
+          <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
+                {BRANDS.map((b) => (
+                  <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
+                    {b.label} bags
+                  </th>
+                ))}
+                <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Monthly target</th>
+                <th className="min-w-[10rem] whitespace-nowrap px-4 py-3">Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={BRANDS.length + 4} className="px-4 py-8 text-center text-slate-500">
+                    <LoadingSpinner />
+                  </td>
+                </tr>
+              ) : shopTargetsReport.rows.length === 0 ? (
+                <tr>
+                  <td colSpan={BRANDS.length + 4} className="px-4 py-8 text-center text-slate-500">
+                    No shop sales or targets in {shopTargetsMonthLabel}.
+                  </td>
+                </tr>
+              ) : (
+                shopTargetsReport.rows.map((r) => (
+                  <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
+                    <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>
+                      {r.shop}
+                    </td>
+                    {BRANDS.map((b) => (
+                      <td
+                        key={b.key}
+                        className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
+                          r.byBrand[b.key] > 0 ? 'text-slate-800' : 'text-slate-300'
+                        }`}
+                      >
+                        {r.byBrand[b.key] > 0 ? r.byBrand[b.key].toLocaleString() : '—'}
+                      </td>
+                    ))}
+                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
+                      {r.total.toLocaleString()}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
+                      {r.monthlyTargetBags > 0 ? r.monthlyTargetBags.toLocaleString() : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.monthlyTargetBags > 0 ? (
+                        <MonthlyTargetProgressBar
+                          sold={r.total}
+                          target={r.monthlyTargetBags}
+                          progressPct={r.progressPct}
+                          compact
+                        />
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {!loading && shopTargetsReport.rows.length > 0 ? (
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-slate-900">
+                  <td className={`px-4 py-3 ${stickyFirstTd}`}>
+                    Total ({shopTargetsReport.rows.length} shop
+                    {shopTargetsReport.rows.length === 1 ? '' : 's'})
+                  </td>
+                  {BRANDS.map((b) => (
+                    <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      {(shopTargetsReport.totals.byBrand[b.key] || 0).toLocaleString()}
+                    </td>
+                  ))}
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {shopTargetsReport.totals.total.toLocaleString()}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {shopTargetsReport.totals.monthlyTargetBags > 0
+                      ? shopTargetsReport.totals.monthlyTargetBags.toLocaleString()
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    {shopTargetsReport.overallProgressPct != null ? (
+                      <span className="text-xs font-semibold tabular-nums text-indigo-800">
+                        {shopTargetsReport.overallProgressPct}%
+                      </span>
+                    ) : (
+                      '—'
+                    )}
                   </td>
                 </tr>
               </tfoot>

@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
+import { hasDashboardAccess } from '../auth';
 import { BRANDS } from './brandTheme';
 import {
   LoadingSpinner,
@@ -122,8 +124,18 @@ export default function StockPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-slate-500">Live bag counts by brand, updated from loads, bills, and promotions.</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <p className="text-sm text-slate-500">
+          Live bag counts by brand, updated from loads, bills, and promotions.
+        </p>
+        {hasDashboardAccess('shop') ? (
+          <Link
+            to="/dashboard/shop"
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 transition hover:bg-indigo-100 sm:w-auto"
+          >
+            Shop →
+          </Link>
+        ) : null}
       </div>
 
       {error ? (

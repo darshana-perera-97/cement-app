@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { getUsername } from '../auth';
+import { getUsername, authFetch, isCollector, isManagerOrAdmin } from '../auth';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -20,16 +20,70 @@ import {
   modalPanelClass,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
+import { CollectorSelectField, useCollectors } from './useCollectors';
 
 const apiBase = getApiBase();
 
 const emptyForm = () => ({
+  id: '',
   name: '',
   location: '',
   contactNumber: '',
   email: '',
   pastBill: '',
+  collectorUserId: '',
 });
+
+/** Increment trailing digits in an ID (e.g. `42` → `43`, `C001` → `C002`). */
+function incrementCustomerId(id) {
+  const raw = String(id ?? '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    return String(parseInt(raw, 10) + 1);
+  }
+  const m = raw.match(/^(.+?)(\d+)$/);
+  if (!m) return null;
+  const prefix = m[1];
+  const numStr = m[2];
+  const next = parseInt(numStr, 10) + 1;
+  return prefix + String(next).padStart(numStr.length, '0');
+}
+
+function maxNumericSuffixFromIds(customers) {
+  let max = 0;
+  for (const c of customers) {
+    const raw = String(c?.id ?? '').trim();
+    if (!raw) continue;
+    if (/^\d+$/.test(raw)) {
+      max = Math.max(max, parseInt(raw, 10));
+      continue;
+    }
+    const m = raw.match(/(\d+)$/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return max;
+}
+
+/** Suggest next ID from the most recently created customer, with fallbacks. */
+function suggestNextCustomerId(customers) {
+  const list = Array.isArray(customers) ? customers : [];
+  if (list.length === 0) return '1';
+
+  const sorted = [...list].sort((a, b) => {
+    const ta = Date.parse(a?.createdAt || '') || 0;
+    const tb = Date.parse(b?.createdAt || '') || 0;
+    if (tb !== ta) return tb - ta;
+    return String(b?.id ?? '').localeCompare(String(a?.id ?? ''));
+  });
+
+  for (const c of sorted) {
+    const next = incrementCustomerId(c?.id);
+    if (next) return next;
+  }
+
+  return String(maxNumericSuffixFromIds(list) + 1);
+}
 
 function money(n) {
   return new Intl.NumberFormat(undefined, {
@@ -59,12 +113,13 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [dueFilter, setDueFilter] = useState('all');
   const [detailCustomer, setDetailCustomer] = useState(null);
+  const { collectors, loading: collectorsLoading } = useCollectors();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/api/customers`);
+      const res = await authFetch(`${apiBase}/api/customers`);
       if (!res.ok) throw new Error('Failed to load customers');
       const data = await res.json();
       setRows(Array.isArray(data) ? data : []);
@@ -88,10 +143,12 @@ export default function CustomersPage() {
       if (dueFilter === 'overdue' && !overdue) return false;
       if (dueFilter === 'current' && overdue) return false;
       return rowMatchesQuery(search, [
+        r.id,
         r.name,
         r.location,
         r.contactNumber,
         r.email,
+        r.collectorName,
         r.dueDate,
         String(r.remainingAmount ?? ''),
       ]);
@@ -105,7 +162,7 @@ export default function CustomersPage() {
   );
 
   const openModal = () => {
-    setForm(emptyForm());
+    setForm({ ...emptyForm(), id: suggestNextCustomerId(rows) });
     setSaveError(null);
     setModalOpen(true);
   };
@@ -129,17 +186,27 @@ export default function CustomersPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch(`${apiBase}/api/customers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      if (isManagerOrAdmin() && !form.collectorUserId.trim()) {
+        setSaveError('Select an assigned collector.');
+        setSaving(false);
+        return;
+      }
+      const payload = {
           addedBy: username,
+          id: form.id.trim(),
           name: form.name.trim(),
           location: form.location.trim(),
           contactNumber: form.contactNumber.trim(),
           email: form.email.trim(),
           pastBill: form.pastBill,
-        }),
+        };
+      if (isManagerOrAdmin()) {
+        payload.collectorUserId = form.collectorUserId.trim();
+      }
+      const res = await authFetch(`${apiBase}/api/customers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -158,7 +225,12 @@ export default function CustomersPage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-slate-500">Manage customers, opening balances, and amounts owed.</p>
+        <p className="text-sm text-slate-500">
+          {isCollector()
+            ? 'View customer profiles and account balances assigned to you.'
+            : 'Manage customers, opening balances, and amounts owed.'}
+        </p>
+        {isManagerOrAdmin() ? (
         <div className="flex shrink-0 flex-wrap gap-2">
           <button
             type="button"
@@ -168,6 +240,7 @@ export default function CustomersPage() {
             Add customer
           </button>
         </div>
+        ) : null}
       </div>
 
       {error ? (
@@ -189,7 +262,7 @@ export default function CustomersPage() {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Name, location, phone, email, due date…"
+            placeholder="Name, ID, location, phone, email, due date…"
             className={filterControl}
           />
         </label>
@@ -215,7 +288,7 @@ export default function CustomersPage() {
           </p>
         ) : rows.length === 0 ? (
           <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
-            No customers yet. Use &quot;Add customer&quot; to create a record.
+            No customers yet.{isManagerOrAdmin() ? ' Use "Add customer" to create a record.' : ' None assigned to you yet.'}
           </p>
         ) : filteredRows.length === 0 ? (
           <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
@@ -238,7 +311,21 @@ export default function CustomersPage() {
                 }
                 fields={[
                   { label: 'Remaining', value: money(r.remainingAmount) },
-                  { label: 'Due date', value: r.dueDate || '—' },
+                  ...(Number(r.monthlyTargetBags) > 0
+                    ? [
+                        {
+                          label: 'Monthly target',
+                          value: (
+                            <MonthlyTargetProgressBar
+                              compact
+                              sold={r.monthlyBagsSold}
+                              target={r.monthlyTargetBags}
+                              progressPct={r.monthlyTargetProgressPct}
+                            />
+                          ),
+                        },
+                      ]
+                    : []),
                 ]}
                 actions={
                   <>
@@ -264,12 +351,12 @@ export default function CustomersPage() {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`px-4 py-3 ${stickyFirstTh}`}>Customer name</th>
+              <th className="min-w-[10rem] px-4 py-3">Monthly target</th>
               <th className="px-4 py-3 text-right">Remaining amount</th>
-              <th className="whitespace-nowrap px-4 py-3">Due date</th>
               <th className="whitespace-nowrap px-4 py-3 text-center"> </th>
             </tr>
           </thead>
@@ -283,7 +370,7 @@ export default function CustomersPage() {
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-4 py-10 text-center text-slate-500">
-                  No customers yet. Use &quot;Add customer&quot; to create a record.
+                  No customers yet.{isManagerOrAdmin() ? ' Use "Add customer" to create a record.' : ' None assigned to you yet.'}
                 </td>
               </tr>
             ) : filteredRows.length === 0 ? (
@@ -312,22 +399,20 @@ export default function CustomersPage() {
                         {r.email ? ` · ${r.email}` : ''}
                       </p>
                     </td>
+                    <td className="px-4 py-3 align-top">
+                      <MonthlyTargetProgressBar
+                        compact
+                        sold={r.monthlyBagsSold}
+                        target={r.monthlyTargetBags}
+                        progressPct={r.monthlyTargetProgressPct}
+                      />
+                    </td>
                     <td
                       className={`px-4 py-3 text-right font-semibold tabular-nums ${
                         overdue ? 'text-rose-800' : 'text-slate-900'
                       }`}
                     >
                       {money(r.remainingAmount)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                      <span className={overdue ? 'font-semibold text-rose-800' : 'text-slate-800'}>
-                        {r.dueDate || '—'}
-                      </span>
-                      {overdue ? (
-                        <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
-                          Overdue
-                        </span>
-                      ) : null}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-center">
                       <button
@@ -388,6 +473,21 @@ export default function CustomersPage() {
               ) : null}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+                Customer ID
+                <input
+                  type="text"
+                  required
+                  value={form.id}
+                  onChange={(e) => handleFormChange('id', e.target.value)}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  placeholder="e.g. 1"
+                  autoComplete="off"
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  Pre-filled from the last added customer; you can change it. Must be unique.
+                </span>
+              </label>
+              <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                 Customer name
                 <input
                   type="text"
@@ -434,6 +534,18 @@ export default function CustomersPage() {
                   autoComplete="email"
                 />
               </label>
+              {isManagerOrAdmin() ? (
+                <CollectorSelectField
+                  id="new-customer-collector"
+                  value={form.collectorUserId}
+                  onChange={(v) => handleFormChange('collectorUserId', v)}
+                  disabled={saving}
+                  collectors={collectors}
+                  loading={collectorsLoading}
+                  allowEmpty={false}
+                  required
+                />
+              ) : null}
               <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                 Past bill (amount to be paid)
                 <input

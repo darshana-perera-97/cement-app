@@ -1,8 +1,9 @@
 const nodemailer = require('nodemailer');
 const { readEmailConfig } = require('./emailConfigsStore');
+const { readNotificationSettings, isNotificationTypeEnabled } = require('./notificationSettingsStore');
 const { readCompanyData } = require('./companyDataStore');
 const { appendSentEmail } = require('./sentEmailsStore');
-const { buildBillEmail, buildPaymentEmail, buildPromotionEmail } = require('./emailTemplates');
+const { buildBillEmail, buildPaymentEmail, buildPromotionEmail, buildOverdueBalanceEmail } = require('./emailTemplates');
 
 async function createTransporter(config) {
   if (!config.host || !config.user || !config.pass) return null;
@@ -17,12 +18,19 @@ async function createTransporter(config) {
   });
 }
 
-async function sendCustomerEmail({ type, customer, record, remainingAmount }) {
+async function sendCustomerEmail({ type, customer, record, remainingAmount, referenceId }) {
   const email = String(customer?.email ?? '').trim();
   if (!email) return null;
 
-  const [config, company] = await Promise.all([readEmailConfig(), readCompanyData()]);
+  const [config, company, notificationSettings] = await Promise.all([
+    readEmailConfig(),
+    readCompanyData(),
+    readNotificationSettings(),
+  ]);
   if (!config.enabled) return null;
+  if (!isNotificationTypeEnabled(notificationSettings, type)) return null;
+
+  const hideFinancialDetails = Boolean(notificationSettings.hideFinancialDetails);
 
   const transporter = await createTransporter(config);
   if (!transporter) {
@@ -33,7 +41,7 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount }) {
       subject: `${type} notification`,
       status: 'failed',
       error: 'SMTP is not fully configured',
-      referenceId: record.id,
+      referenceId: referenceId || record?.id,
     });
     return null;
   }
@@ -41,14 +49,27 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount }) {
   let built;
   switch (type) {
     case 'bill':
-      built = buildBillEmail({ customer, bill: record, remainingAmount, company });
+      built = buildBillEmail({ customer, bill: record, remainingAmount, company, hideFinancialDetails });
       break;
     case 'payment':
-      built = buildPaymentEmail({ customer, payment: record, remainingAmount, company });
+      built = buildPaymentEmail({ customer, payment: record, remainingAmount, company, hideFinancialDetails });
       break;
     case 'promotion':
       built = buildPromotionEmail({ customer, promotion: record, company });
       break;
+    case 'overdue_balance': {
+      const payload = record && typeof record === 'object' ? record : {};
+      built = buildOverdueBalanceEmail({
+        customer,
+        overdueBills: payload.overdueBills,
+        totalOverdueAmount: payload.totalOverdueAmount,
+        totalPendingAmount: payload.totalPendingAmount,
+        shareMode: payload.shareMode,
+        company,
+        hideFinancialDetails,
+      });
+      break;
+    }
     default:
       return null;
   }
@@ -70,7 +91,7 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount }) {
       subject: built.subject,
       status: 'sent',
       error: null,
-      referenceId: record.id,
+      referenceId: referenceId || record?.id,
     });
     return { ok: true };
   } catch (err) {
@@ -82,7 +103,7 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount }) {
       subject: built.subject,
       status: 'failed',
       error: err.message || 'Send failed',
-      referenceId: record.id,
+      referenceId: referenceId || record?.id,
     });
     return { ok: false, error: err.message };
   }
@@ -100,9 +121,14 @@ function notifyPromotionEmail(customer, promotion) {
   return sendCustomerEmail({ type: 'promotion', customer, record: promotion });
 }
 
+function notifyOverdueBalanceEmail(customer, payload, referenceId) {
+  return sendCustomerEmail({ type: 'overdue_balance', customer, record: payload, referenceId });
+}
+
 module.exports = {
   notifyBillEmail,
   notifyPaymentEmail,
   notifyPromotionEmail,
+  notifyOverdueBalanceEmail,
   sendCustomerEmail,
 };

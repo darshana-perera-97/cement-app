@@ -22,6 +22,9 @@ const TYPE_META = {
   bill: { label: 'Bill', badge: 'bg-indigo-50 text-indigo-800 ring-indigo-100' },
   payment: { label: 'Payment', badge: 'bg-emerald-50 text-emerald-800 ring-emerald-100' },
   promotion: { label: 'Free bags', badge: 'bg-violet-50 text-violet-800 ring-violet-100' },
+  unload: { label: 'Unload', badge: 'bg-sky-50 text-sky-800 ring-sky-100' },
+  cheque_return: { label: 'Cheque returned', badge: 'bg-rose-50 text-rose-800 ring-rose-100' },
+  overdue_balance: { label: 'Balance reminder', badge: 'bg-orange-50 text-orange-800 ring-orange-100' },
 };
 
 const emptyCompanyForm = () => ({
@@ -45,6 +48,75 @@ const emptyWhatsAppForm = () => ({
   enabled: false,
 });
 
+const emptyNotificationForm = () => ({
+  notifyBill: true,
+  notifyPayment: true,
+  notifyPromotion: true,
+  notifyUnload: true,
+  notifyChequeReturn: true,
+  hideFinancialDetails: false,
+  notifyOverdueBalance: false,
+  overdueBalanceShareMode: 'both',
+  overdueReminderWeekday: '1',
+  overdueReminderTime: '09:00',
+});
+
+const WEEKDAY_OPTIONS = [
+  { value: '0', label: 'Sunday' },
+  { value: '1', label: 'Monday' },
+  { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' },
+  { value: '4', label: 'Thursday' },
+  { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+];
+
+const OVERDUE_SHARE_MODE_OPTIONS = [
+  {
+    value: 'overdue_only',
+    label: 'Overdue bills only',
+    description: 'List bills past their settlement window. Skips customers with no overdue bills.',
+  },
+  {
+    value: 'pending_only',
+    label: 'Pending balance only',
+    description: 'Send the total amount still owed, without listing individual bills.',
+  },
+  {
+    value: 'both',
+    label: 'Both',
+    description: 'List overdue bills and include the total pending balance.',
+  },
+];
+
+const NOTIFICATION_STAGE_OPTIONS = [
+  {
+    key: 'notifyBill',
+    label: 'Credit sale (bill)',
+    description: 'When a credit bill is recorded or an unload request is approved.',
+  },
+  {
+    key: 'notifyPayment',
+    label: 'Payment received',
+    description: 'When a customer payment is saved.',
+  },
+  {
+    key: 'notifyPromotion',
+    label: 'Free bags',
+    description: 'When free bags are recorded on a promotion.',
+  },
+  {
+    key: 'notifyUnload',
+    label: 'Delivery unloaded',
+    description: 'When a driver unload is approved at the shop.',
+  },
+  {
+    key: 'notifyChequeReturn',
+    label: 'Cheque returned',
+    description: 'When a customer cheque is marked as returned.',
+  },
+];
+
 const WHATSAPP_STATE_LABELS = {
   idle: 'Not started',
   initializing: 'Starting…',
@@ -54,6 +126,196 @@ const WHATSAPP_STATE_LABELS = {
   disconnected: 'Disconnected',
   auth_failure: 'Authentication failed',
 };
+
+const WHATSAPP_STATE_TONE = {
+  idle: 'bg-slate-100 text-slate-700 ring-slate-200',
+  initializing: 'bg-amber-50 text-amber-800 ring-amber-200',
+  qr: 'bg-amber-50 text-amber-800 ring-amber-200',
+  authenticated: 'bg-sky-50 text-sky-800 ring-sky-200',
+  ready: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  disconnected: 'bg-rose-50 text-rose-800 ring-rose-200',
+  auth_failure: 'bg-rose-50 text-rose-800 ring-rose-200',
+};
+
+function formatConnectionTime(iso) {
+  if (!iso) return '—';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return '—';
+  return dt.toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function WhatsAppConnectionSection({
+  enabled,
+  onEnabledChange,
+  status,
+  loading,
+  saving,
+  saveError,
+  reconnecting,
+  onSave,
+  onReconnect,
+}) {
+  const state = status.state || 'idle';
+  const stateLabel = WHATSAPP_STATE_LABELS[state] || state || 'Unknown';
+  const stateTone = WHATSAPP_STATE_TONE[state] || WHATSAPP_STATE_TONE.idle;
+  const activeConnection = status.connected ? status.connection : null;
+  const rememberedConnection = status.lastConnection || null;
+  const displayConnection = activeConnection || rememberedConnection;
+
+  return (
+    <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+      <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">WhatsApp connection</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Link a WhatsApp account on the server to send bill, payment, promotion, and unload notifications to customers.
+            </p>
+          </div>
+          <span className={`inline-flex shrink-0 items-center gap-2 self-start rounded-full px-3 py-1 text-xs font-semibold ring-1 ${stateTone}`}>
+            <span
+              className={`h-2 w-2 rounded-full ${
+                status.connected ? 'bg-emerald-500' : state === 'qr' || state === 'initializing' || state === 'authenticated' ? 'bg-amber-500' : 'bg-slate-400'
+              }`}
+              aria-hidden
+            />
+            {stateLabel}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-6 px-5 py-5 lg:grid-cols-2 lg:px-6">
+        <div className="space-y-4">
+          <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => onEnabledChange(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              disabled={loading || saving}
+            />
+            <span className="text-sm font-medium text-slate-700">Enable WhatsApp notifications</span>
+          </label>
+
+          <p className="text-sm text-slate-500">
+            When enabled, the server keeps this account linked and reconnects automatically after a restart or brief
+            disconnect using the saved session.
+          </p>
+
+          {saveError ? (
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={loading || saving}
+              className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md disabled:opacity-60"
+            >
+              {saving ? 'Saving…' : enabled ? 'Save & connect' : 'Save'}
+            </button>
+            {enabled ? (
+              <button
+                type="button"
+                onClick={onReconnect}
+                disabled={loading || saving || reconnecting}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {reconnecting ? 'Reconnecting…' : 'Reconnect now'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
+          {!enabled ? (
+            <p className="text-sm text-slate-500">Enable WhatsApp notifications, then save to show a QR code or restore the last linked account.</p>
+          ) : status.connected && activeConnection ? (
+            <div className="space-y-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Connected account</p>
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Phone</dt>
+                  <dd className="mt-0.5 font-semibold text-slate-900">{activeConnection.phone || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Display name</dt>
+                  <dd className="mt-0.5 font-semibold text-slate-900">{activeConnection.pushname || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Device</dt>
+                  <dd className="mt-0.5 text-slate-800">{activeConnection.platform || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Connected since</dt>
+                  <dd className="mt-0.5 tabular-nums text-slate-800">{formatConnectionTime(activeConnection.connectedAt)}</dd>
+                </div>
+              </dl>
+              <p className="text-sm text-emerald-700">Ready to send messages to customers with contact numbers.</p>
+            </div>
+          ) : state === 'qr' && status.qrDataUrl ? (
+            <div className="flex flex-col items-center gap-3">
+              <p className="self-stretch text-sm font-medium text-slate-800">Scan to link this server</p>
+              <img
+                src={status.qrDataUrl}
+                alt="WhatsApp QR code"
+                className="h-52 w-52 rounded-xl bg-white p-3 ring-1 ring-slate-200"
+              />
+              <p className="text-center text-xs text-slate-500">
+                On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                {state === 'initializing' || state === 'authenticated'
+                  ? 'Restoring the saved WhatsApp session…'
+                  : state === 'disconnected' || state === 'auth_failure'
+                    ? 'Connection lost. The server will retry automatically, or use Reconnect now.'
+                    : 'Waiting for the WhatsApp client to start…'}
+              </p>
+              {displayConnection ? (
+                <div className="rounded-lg bg-white px-3 py-3 ring-1 ring-slate-200">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {activeConnection ? 'Connected account' : 'Last linked account'}
+                  </p>
+                  <dl className="mt-2 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs text-slate-500">Phone</dt>
+                      <dd className="font-medium text-slate-900">{displayConnection.phone || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Display name</dt>
+                      <dd className="font-medium text-slate-900">{displayConnection.pushname || '—'}</dd>
+                    </div>
+                    {!activeConnection && displayConnection.connectedAt ? (
+                      <div className="sm:col-span-2">
+                        <dt className="text-xs text-slate-500">Last connected</dt>
+                        <dd className="tabular-nums text-slate-700">{formatConnectionTime(displayConnection.connectedAt)}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                </div>
+              ) : null}
+              {(state === 'initializing' || state === 'authenticated' || state === 'disconnected') && (
+                <div className="flex justify-center py-4">
+                  <LoadingSpinner />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function formatSentAt(iso) {
   if (!iso) return '—';
@@ -116,7 +378,15 @@ export default function MessagesPage() {
   const [companyForm, setCompanyForm] = useState(emptyCompanyForm);
   const [emailForm, setEmailForm] = useState(emptyEmailForm);
   const [whatsappForm, setWhatsappForm] = useState(emptyWhatsAppForm);
-  const [whatsappStatus, setWhatsappStatus] = useState({ state: 'idle', connected: false, qrDataUrl: null });
+  const [notificationForm, setNotificationForm] = useState(emptyNotificationForm);
+  const [whatsappStatus, setWhatsappStatus] = useState({
+    state: 'idle',
+    connected: false,
+    qrDataUrl: null,
+    connection: null,
+    lastConnection: null,
+  });
+  const [whatsappReconnecting, setWhatsappReconnecting] = useState(false);
   const [sentEmails, setSentEmails] = useState([]);
   const [sentWhatsapp, setSentWhatsapp] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -127,6 +397,8 @@ export default function MessagesPage() {
   const [emailSaveError, setEmailSaveError] = useState(null);
   const [whatsappSaving, setWhatsappSaving] = useState(false);
   const [whatsappSaveError, setWhatsappSaveError] = useState(null);
+  const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationSaveError, setNotificationSaveError] = useState(null);
   const [search, setSearch] = useState('');
   const [whatsappSearch, setWhatsappSearch] = useState('');
 
@@ -163,7 +435,27 @@ export default function MessagesPage() {
       setWhatsappForm({
         enabled: Boolean(settings.whatsappConfig?.enabled),
       });
-      setWhatsappStatus(settings.whatsappStatus ?? { state: 'idle', connected: false, qrDataUrl: null });
+      setNotificationForm({
+        notifyBill: settings.notificationSettings?.notifyBill !== false,
+        notifyPayment: settings.notificationSettings?.notifyPayment !== false,
+        notifyPromotion: settings.notificationSettings?.notifyPromotion !== false,
+        notifyUnload: settings.notificationSettings?.notifyUnload !== false,
+        notifyChequeReturn: settings.notificationSettings?.notifyChequeReturn !== false,
+        hideFinancialDetails: Boolean(settings.notificationSettings?.hideFinancialDetails),
+        notifyOverdueBalance: Boolean(settings.notificationSettings?.notifyOverdueBalance),
+        overdueBalanceShareMode: settings.notificationSettings?.overdueBalanceShareMode ?? 'both',
+        overdueReminderWeekday: String(settings.notificationSettings?.overdueReminderWeekday ?? 1),
+        overdueReminderTime: settings.notificationSettings?.overdueReminderTime ?? '09:00',
+      });
+      setWhatsappStatus(
+        settings.whatsappStatus ?? {
+          state: 'idle',
+          connected: false,
+          qrDataUrl: null,
+          connection: null,
+          lastConnection: settings.whatsappConfig?.lastConnection ?? null,
+        },
+      );
       setSentEmails(Array.isArray(history) ? history : []);
       setSentWhatsapp(Array.isArray(whatsappHistory) ? whatsappHistory : []);
     } catch (e) {
@@ -192,6 +484,8 @@ export default function MessagesPage() {
             state: data.state ?? 'idle',
             connected: Boolean(data.connected),
             qrDataUrl: data.qrDataUrl ?? null,
+            connection: data.connection ?? null,
+            lastConnection: data.lastConnection ?? null,
           });
         }
       } catch {
@@ -280,6 +574,40 @@ export default function MessagesPage() {
     }
   };
 
+  const saveNotificationSettings = async () => {
+    setNotificationSaving(true);
+    setNotificationSaveError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/messages/notification-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(notificationForm),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setNotificationSaveError(data.error || 'Save failed');
+        return;
+      }
+      const ns = data.notificationSettings ?? {};
+      setNotificationForm({
+        notifyBill: ns.notifyBill !== false,
+        notifyPayment: ns.notifyPayment !== false,
+        notifyPromotion: ns.notifyPromotion !== false,
+        notifyUnload: ns.notifyUnload !== false,
+        notifyChequeReturn: ns.notifyChequeReturn !== false,
+        hideFinancialDetails: Boolean(ns.hideFinancialDetails),
+        notifyOverdueBalance: Boolean(ns.notifyOverdueBalance),
+        overdueBalanceShareMode: ns.overdueBalanceShareMode ?? 'both',
+        overdueReminderWeekday: String(ns.overdueReminderWeekday ?? 1),
+        overdueReminderTime: ns.overdueReminderTime ?? '09:00',
+      });
+    } catch {
+      setNotificationSaveError('Could not reach the server.');
+    } finally {
+      setNotificationSaving(false);
+    }
+  };
+
   const saveWhatsAppConfig = async () => {
     setWhatsappSaving(true);
     setWhatsappSaveError(null);
@@ -299,11 +627,45 @@ export default function MessagesPage() {
       setWhatsappForm({
         enabled: Boolean(data.whatsappConfig?.enabled),
       });
-      setWhatsappStatus(data.whatsappStatus ?? { state: 'idle', connected: false, qrDataUrl: null });
+      setWhatsappStatus(
+        data.whatsappStatus ?? {
+          state: 'idle',
+          connected: false,
+          qrDataUrl: null,
+          connection: null,
+          lastConnection: data.whatsappConfig?.lastConnection ?? null,
+        },
+      );
     } catch {
       setWhatsappSaveError('Could not reach the server.');
     } finally {
       setWhatsappSaving(false);
+    }
+  };
+
+  const reconnectWhatsApp = async () => {
+    setWhatsappReconnecting(true);
+    setWhatsappSaveError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/messages/whatsapp/reconnect`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setWhatsappSaveError(data.error || 'Reconnect failed');
+        return;
+      }
+      setWhatsappStatus(
+        data.whatsappStatus ?? {
+          state: 'initializing',
+          connected: false,
+          qrDataUrl: null,
+          connection: null,
+          lastConnection: whatsappStatus.lastConnection,
+        },
+      );
+    } catch {
+      setWhatsappSaveError('Could not reach the server.');
+    } finally {
+      setWhatsappReconnecting(false);
     }
   };
 
@@ -358,6 +720,154 @@ export default function MessagesPage() {
           {error}
         </p>
       ) : null}
+
+      <WhatsAppConnectionSection
+        enabled={whatsappForm.enabled}
+        onEnabledChange={(checked) => setWhatsappForm({ enabled: checked })}
+        status={whatsappStatus}
+        loading={loading}
+        saving={whatsappSaving}
+        saveError={whatsappSaveError}
+        reconnecting={whatsappReconnecting}
+        onSave={saveWhatsAppConfig}
+        onReconnect={reconnectWhatsApp}
+      />
+
+      <SettingsCard
+        title="Customer notifications"
+        description="Choose which messages are sent by email and WhatsApp. Unchecked stages are skipped even when a customer has contact details."
+        onSave={saveNotificationSettings}
+        saving={notificationSaving}
+        saveError={notificationSaveError}
+      >
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Send when</p>
+          {NOTIFICATION_STAGE_OPTIONS.map((opt) => (
+            <label
+              key={opt.key}
+              className="flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200/80"
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(notificationForm[opt.key])}
+                onChange={(e) =>
+                  setNotificationForm((f) => ({ ...f, [opt.key]: e.target.checked }))
+                }
+                disabled={loading}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-slate-800">{opt.label}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">{opt.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="border-t border-slate-100 pt-4">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200/80">
+            <input
+              type="checkbox"
+              checked={Boolean(notificationForm.hideFinancialDetails)}
+              onChange={(e) =>
+                setNotificationForm((f) => ({ ...f, hideFinancialDetails: e.target.checked }))
+              }
+              disabled={loading}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-slate-800">
+                Hide prices and balances from customers
+              </span>
+              <span className="mt-0.5 block text-xs text-slate-600">
+                When ticked, messages hide bill totals, cheque amounts, and balance to pay. Cash
+                received on payments is still included so customers get a receipt for money they
+                handed over. This controls what you share with customers; it does not change how
+                prices are calculated in the app.
+              </span>
+            </span>
+          </label>
+        </div>
+        <div className="border-t border-slate-100 pt-4 space-y-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scheduled balance reminders</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Send weekly reminders to each customer on their chosen day and time (server local time).
+              Per-customer schedule can be set when editing a customer.
+            </p>
+          </div>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-orange-50/60 px-3 py-3 ring-1 ring-orange-100">
+            <input
+              type="checkbox"
+              checked={Boolean(notificationForm.notifyOverdueBalance)}
+              onChange={(e) =>
+                setNotificationForm((f) => ({ ...f, notifyOverdueBalance: e.target.checked }))
+              }
+              disabled={loading}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500/35"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-slate-800">Enable weekly balance reminders</span>
+              <span className="mt-0.5 block text-xs text-slate-600">
+                Customers with a contact number or email receive a reminder when they have amounts to collect.
+              </span>
+            </span>
+          </label>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Default weekday">
+              <select
+                value={notificationForm.overdueReminderWeekday}
+                onChange={(e) =>
+                  setNotificationForm((f) => ({ ...f, overdueReminderWeekday: e.target.value }))
+                }
+                disabled={loading}
+                className={inputClass}
+              >
+                {WEEKDAY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Default time">
+              <input
+                type="time"
+                value={notificationForm.overdueReminderTime}
+                onChange={(e) =>
+                  setNotificationForm((f) => ({ ...f, overdueReminderTime: e.target.value }))
+                }
+                disabled={loading}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Share with customer</p>
+            {OVERDUE_SHARE_MODE_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200/80"
+              >
+                <input
+                  type="radio"
+                  name="overdueBalanceShareMode"
+                  value={opt.value}
+                  checked={notificationForm.overdueBalanceShareMode === opt.value}
+                  onChange={(e) =>
+                    setNotificationForm((f) => ({ ...f, overdueBalanceShareMode: e.target.value }))
+                  }
+                  disabled={loading}
+                  className="mt-0.5 h-4 w-4 border-slate-300 text-orange-600 focus:ring-orange-500/35"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-800">{opt.label}</span>
+                  <span className="mt-0.5 block text-xs text-slate-500">{opt.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </SettingsCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
         <SettingsCard
@@ -480,46 +990,6 @@ export default function MessagesPage() {
                 disabled={loading}
               />
             </Field>
-          </div>
-        </SettingsCard>
-
-        <SettingsCard
-          title="WhatsApp notifications"
-          description="Uses whatsapp-web.js on the server. Scan the QR code with WhatsApp on your phone to connect."
-          onSave={saveWhatsAppConfig}
-          saving={whatsappSaving}
-          saveError={whatsappSaveError}
-        >
-          <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
-            <input
-              type="checkbox"
-              checked={whatsappForm.enabled}
-              onChange={(e) => setWhatsappForm((f) => ({ ...f, enabled: e.target.checked }))}
-              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-              disabled={loading}
-            />
-            <span className="text-sm font-medium text-slate-700">Enable customer WhatsApp notifications</span>
-          </label>
-          <div className="rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Connection status</p>
-            <p className="mt-1 text-sm font-medium text-slate-800">
-              {WHATSAPP_STATE_LABELS[whatsappStatus.state] || whatsappStatus.state || 'Unknown'}
-            </p>
-            {whatsappForm.enabled && whatsappStatus.state === 'qr' && whatsappStatus.qrDataUrl ? (
-              <div className="mt-4 flex flex-col items-center gap-2">
-                <img
-                  src={whatsappStatus.qrDataUrl}
-                  alt="WhatsApp QR code"
-                  className="h-48 w-48 rounded-lg bg-white p-2 ring-1 ring-slate-200"
-                />
-                <p className="text-center text-xs text-slate-500">
-                  Open WhatsApp → Linked devices → Link a device, then scan this code.
-                </p>
-              </div>
-            ) : null}
-            {whatsappForm.enabled && whatsappStatus.connected ? (
-              <p className="mt-2 text-sm text-emerald-700">Ready to send messages to customers with contact numbers.</p>
-            ) : null}
           </div>
         </SettingsCard>
       </div>
@@ -719,8 +1189,8 @@ export default function MessagesPage() {
             </p>
           ) : sentWhatsapp.length === 0 ? (
             <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
-              No WhatsApp messages sent yet. Enable WhatsApp, scan the QR code, and record a bill, payment, or
-              promotion for a customer with a contact number.
+              No WhatsApp messages sent yet. Enable WhatsApp, scan the QR code, and record a bill, payment,
+              promotion, or approve an unload for a customer with a contact number.
             </p>
           ) : filteredWhatsapp.length === 0 ? (
             <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
@@ -786,8 +1256,8 @@ export default function MessagesPage() {
               ) : sentWhatsapp.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
-                    No WhatsApp messages sent yet. Enable WhatsApp, scan the QR code, and record a bill, payment, or
-                    promotion for a customer with a contact number.
+                    No WhatsApp messages sent yet. Enable WhatsApp, scan the QR code, and record a bill, payment,
+                    promotion, or approve an unload for a customer with a contact number.
                   </td>
                 </tr>
               ) : filteredWhatsapp.length === 0 ? (

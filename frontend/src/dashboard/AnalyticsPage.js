@@ -138,7 +138,7 @@ function Card({ title, subtitle, children, className = '', headerExtra = null })
   );
 }
 
-function OverdueBillsTable({ rows, totalLoadedCount, defaultPageSize = 10, resetKey = '' }) {
+export function OverdueBillsTable({ rows, totalLoadedCount, defaultPageSize = 10, resetKey = '' }) {
   const [detailRow, setDetailRow] = useState(null);
   const pagination = useTablePagination(rows.length, [resetKey, rows.length], defaultPageSize);
   const pagedRows = useMemo(
