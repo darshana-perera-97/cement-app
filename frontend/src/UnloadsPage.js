@@ -355,7 +355,7 @@ function UnloadsWorkspace() {
         return;
       }
       setSaveSuccess(
-        `Request submitted (${totalBags(data).toLocaleString()} bag${totalBags(data) === 1 ? '' : 's'} for ${data.customerName || 'shop'}). Waiting for manager approval — stock updates when approved.`,
+        `Request submitted (${totalBags(data).toLocaleString()} bag${totalBags(data) === 1 ? '' : 's'} for ${data.customerName || 'shop'}). The shop is notified if delivery messages are enabled. Waiting for manager approval — stock updates when approved.`,
       );
       setForm(emptyUnloadForm());
       await Promise.all([loadStock(), loadRecent()]);

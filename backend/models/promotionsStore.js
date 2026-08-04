@@ -2,7 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { toNonNegNumber } = require('./stocksStore');
 
-const PROMOTIONS_FILE = path.join(__dirname, 'data', 'promotions.json');
+const PROMOTIONS_FILE = path.join(__dirname, '..', 'data', 'promotions.json');
 
 const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
 const BAG_FIELDS = {

@@ -649,7 +649,8 @@ export default function ShopPage() {
             <span className="block text-sm font-semibold text-slate-900">Separate bill settlement</span>
             <span className="mt-1 block text-sm leading-relaxed text-slate-600">
               When enabled, collectors record cash or cheque payments in two steps: payment details first,
-            then allocate the total across pending invoices (partial amounts allowed).
+              then allocate the total across pending invoices (partial amounts allowed). Collectors may settle
+              any selected invoices — oldest bills do not need to be paid first.
             </span>
           </span>
         </label>

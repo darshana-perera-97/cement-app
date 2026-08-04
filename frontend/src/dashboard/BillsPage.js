@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { getUsername } from '../auth';
+import { authFetch, getUsername } from '../auth';
+import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import { BRANDS } from './brandTheme';
+import { downloadBillsInvoicesPdf } from './billsInvoicesPdf';
+import {
+  BILL_INVOICE_NUMBER_PATTERN,
+  isBillInvoiceNumberTaken,
+  normalizeBillInvoiceNumber,
+  suggestNextBillInvoiceNumber,
+} from './billInvoiceNumber';
 import {
   LoadingSpinner,
   MobileRowCard,
@@ -36,6 +44,7 @@ function emptyForm() {
   const f = {
     date: new Date().toISOString().slice(0, 10),
     customerId: '',
+    invoiceNumber: '',
   };
   for (const b of BRANDS) {
     f[`${b.key}Bags`] = '';
@@ -50,6 +59,7 @@ function formFromBill(bill, customers) {
   const f = {
     date: String(bill.date ?? '').trim() || new Date().toISOString().slice(0, 10),
     customerId: match?.id ?? '',
+    invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
   };
   for (const b of BRANDS) {
     const bags = bill[`${b.key}Bags`];
@@ -60,11 +70,24 @@ function formFromBill(bill, customers) {
   return f;
 }
 
-function BillSaleFormFields({ form, customers, onChange }) {
+function BillSaleFormFields({ form, customers, onChange, isEdit = false }) {
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+        <label className="block text-sm font-medium text-slate-600">
+          Invoice #
+          <input
+            type="text"
+            autoComplete="off"
+            required
+            maxLength={40}
+            value={form.invoiceNumber}
+            onChange={(e) => onChange('invoiceNumber', e.target.value)}
+            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+            placeholder="e.g. INV-012 or CS100"
+          />
+        </label>
+        <label className="block text-sm font-medium text-slate-600">
           Date
           <input
             type="date"
@@ -74,6 +97,11 @@ function BillSaleFormFields({ form, customers, onChange }) {
             className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
           />
         </label>
+        <p className="text-xs font-normal text-slate-500 sm:col-span-2">
+          {isEdit
+            ? 'Invoice # must be unique across all credit bills.'
+            : 'Filled from the last saved invoice (+1). You can change it before saving.'}
+        </p>
         <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
           Customer
           <select
@@ -145,6 +173,10 @@ export default function BillsPage() {
   const [stockFilter, setStockFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [shopDetails, setShopDetails] = useState({ shopName: DEFAULT_SHOP_NAME });
+  const [loads, setLoads] = useState([]);
+  const [unloads, setUnloads] = useState([]);
+  const invoiceNumberTouched = useRef(false);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -181,6 +213,43 @@ export default function BillsPage() {
     loadCustomers();
   }, [loadCustomers]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const [shopRes, loadsRes, unloadsRes] = await Promise.all([
+          fetch(`${apiBase}/api/shop`),
+          fetch(`${apiBase}/api/stocks`),
+          authFetch(`${apiBase}/api/unload-requests?status=all`),
+        ]);
+        if (shopRes.ok) {
+          const data = await shopRes.json();
+          setShopDetails({
+            shopName: String(data?.shopName ?? '').trim() || DEFAULT_SHOP_NAME,
+            registrationNo: data?.registrationNo ?? '',
+            addressLine1: data?.addressLine1 ?? '',
+            addressLine2: data?.addressLine2 ?? '',
+            email: data?.email ?? '',
+            contactNumber: data?.contactNumber ?? '',
+            dealerTagline: data?.dealerTagline ?? '',
+            deliveryNote: data?.deliveryNote ?? '',
+          });
+        }
+        if (loadsRes.ok) {
+          const data = await loadsRes.json();
+          setLoads(Array.isArray(data) ? data : []);
+        }
+        if (unloadsRes.ok) {
+          const data = await unloadsRes.json();
+          setUnloads(Array.isArray(data) ? data : []);
+        }
+      } catch {
+        setShopDetails({ shopName: DEFAULT_SHOP_NAME });
+        setLoads([]);
+        setUnloads([]);
+      }
+    })();
+  }, []);
+
   const stockOptions = useMemo(() => {
     const u = new Set();
     for (const r of rows) {
@@ -190,21 +259,26 @@ export default function BillsPage() {
     return [...u].sort();
   }, [rows]);
 
-  const filteredRows = useMemo(() => {
-    return rows.filter((r) => {
-      if (stockFilter && String(r.stockId ?? '').trim() !== stockFilter) return false;
-      if (!inDateRange(r.date, dateFrom, dateTo)) return false;
-      const bagParts = BRANDS.map((b) => String(r[`${b.key}Bags`] ?? ''));
-      return rowMatchesQuery(search, [
-        r.date,
-        r.stockId,
-        r.customerName,
-        r.enteredBy,
-        String(r.totalAmount ?? ''),
-        ...bagParts,
-      ]);
-    });
-  }, [rows, search, stockFilter, dateFrom, dateTo]);
+  const filterBillRows = useCallback(
+    (list) =>
+      list.filter((r) => {
+        if (stockFilter && String(r.stockId ?? '').trim() !== stockFilter) return false;
+        if (!inDateRange(r.date, dateFrom, dateTo)) return false;
+        const bagParts = BRANDS.map((b) => String(r[`${b.key}Bags`] ?? ''));
+        return rowMatchesQuery(search, [
+          r.date,
+          r.stockId,
+          r.customerName,
+          r.invoiceNumber,
+          r.enteredBy,
+          String(r.totalAmount ?? ''),
+          ...bagParts,
+        ]);
+      }),
+    [search, stockFilter, dateFrom, dateTo],
+  );
+
+  const filteredRows = useMemo(() => filterBillRows(rows), [rows, filterBillRows]);
 
   const pagination = useTablePagination(filteredRows.length, [search, stockFilter, dateFrom, dateTo]);
   const pagedRows = useMemo(
@@ -212,28 +286,86 @@ export default function BillsPage() {
     [filteredRows, pagination.offset, pagination.pageSize]
   );
 
+  const handleDownloadInvoices = useCallback(async () => {
+    let billsForPdf = filteredRows;
+    try {
+      const res = await fetch(`${apiBase}/api/bills`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          billsForPdf = filterBillRows(data);
+          setRows(data);
+        }
+      }
+    } catch {
+      /* use filteredRows already in state */
+    }
+    downloadBillsInvoicesPdf(billsForPdf, {
+      ...shopDetails,
+      shopName: shopDetails.shopName || DEFAULT_SHOP_NAME,
+      loads,
+      unloads,
+      customers,
+      dateFrom,
+      dateTo,
+    });
+  }, [filteredRows, filterBillRows, shopDetails, loads, unloads, customers, dateFrom, dateTo]);
+
   const openAdd = () => {
     setSaveError(null);
+    invoiceNumberTouched.current = false;
     loadCustomers();
-    setForm(emptyForm());
+    setForm({
+      ...emptyForm(),
+      invoiceNumber: suggestNextBillInvoiceNumber(rows),
+    });
     setAddOpen(true);
   };
+
+  useEffect(() => {
+    if (!addOpen || invoiceNumberTouched.current) return;
+    const next = suggestNextBillInvoiceNumber(rows);
+    setForm((f) => (f.invoiceNumber === next ? f : { ...f, invoiceNumber: next }));
+  }, [addOpen, rows]);
 
   const closeAdd = () => {
     setAddOpen(false);
     setSaveError(null);
+    invoiceNumberTouched.current = false;
   };
 
   const handleFormChange = (field, value) => {
+    if (field === 'invoiceNumber') {
+      invoiceNumberTouched.current = true;
+      setForm((f) => ({ ...f, invoiceNumber: String(value).slice(0, 40) }));
+      return;
+    }
     setForm((f) => ({ ...f, [field]: value }));
+  };
+
+  const validateInvoiceNumber = (excludeBillId = null) => {
+    const invoiceNumber = normalizeBillInvoiceNumber(form.invoiceNumber);
+    if (!invoiceNumber) {
+      return 'Enter an invoice # (letters and/or numbers).';
+    }
+    if (!BILL_INVOICE_NUMBER_PATTERN.test(invoiceNumber)) {
+      return 'Invoice # can use letters, numbers, spaces, and . _ - /';
+    }
+    if (isBillInvoiceNumberTaken(rows, invoiceNumber, excludeBillId)) {
+      return 'This invoice # is already used on another bill.';
+    }
+    return null;
   };
 
   const buildBillBody = () => {
     const selected = customers.find((c) => c.id === form.customerId);
     if (!selected) return { error: 'Please select a customer from the list.' };
+    const invoiceError = validateInvoiceNumber(editBill?.id || null);
+    if (invoiceError) return { error: invoiceError };
     const body = {
       date: form.date,
       customerName: String(selected.name || '').trim(),
+      invoiceNumber: normalizeBillInvoiceNumber(form.invoiceNumber),
     };
     for (const b of BRANDS) {
       body[`${b.key}Bags`] = form[`${b.key}Bags`];
@@ -292,8 +424,13 @@ export default function BillsPage() {
 
   useEffect(() => {
     if (!editBill) return;
-    setForm(formFromBill(editBill, customers));
-  }, [editBill, customers]);
+    invoiceNumberTouched.current = true;
+    const next = formFromBill(editBill, customers);
+    if (!next.invoiceNumber) {
+      next.invoiceNumber = suggestNextBillInvoiceNumber(rows);
+    }
+    setForm(next);
+  }, [editBill, customers, rows]);
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();
@@ -400,6 +537,14 @@ export default function BillsPage() {
             className={filterControl}
           />
         </label>
+        <button
+          type="button"
+          onClick={handleDownloadInvoices}
+          disabled={loading || filteredRows.length === 0}
+          className="inline-flex shrink-0 items-center justify-center self-end rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 shadow-sm ring-1 ring-indigo-100 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Download invoices (PDF)
+        </button>
       </TableFiltersBar>
 
       <div className="space-y-3">
@@ -430,6 +575,7 @@ export default function BillsPage() {
                 ) : null
               }
               fields={[
+                { label: 'Invoice #', value: r.invoiceNumber || '—' },
                 ...BRANDS.slice(0, 4).map((b) => ({
                   label: b.label,
                   value: String(r[`${b.key}Bags`] ?? 0),
@@ -448,6 +594,7 @@ export default function BillsPage() {
               <th className={`whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom ${stickyFirstThTransparent}`}>
                 Date
               </th>
+              <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Invoice #</th>
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Stock</th>
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Customer</th>
               {BRANDS.map((b) => (
@@ -464,19 +611,19 @@ export default function BillsPage() {
           <tbody className="text-slate-800">
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   <LoadingSpinner />
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   No credit bills yet. Use &quot;Record credit sale&quot; to add one.
                 </td>
               </tr>
             ) : filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   No bills match your search or filters.
                 </td>
               </tr>
@@ -493,6 +640,11 @@ export default function BillsPage() {
                       className={`whitespace-nowrap px-3 py-3 font-medium ${rowLine} bg-slate-50/70 tabular-nums ${stickyFirstTd}`}
                     >
                       {r.date}
+                    </td>
+                    <td
+                      className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-slate-50/70`}
+                    >
+                      {r.invoiceNumber || '—'}
                     </td>
                     <td
                       className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-slate-50/70`}
@@ -590,7 +742,7 @@ export default function BillsPage() {
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <BillSaleFormFields form={form} customers={customers} onChange={handleFormChange} />
+              <BillSaleFormFields form={form} customers={customers} onChange={handleFormChange} isEdit />
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"

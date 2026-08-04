@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const SENT_WHATSAPP_FILE = path.join(__dirname, 'data', 'sentWhatsapp.json');
+const SENT_WHATSAPP_FILE = path.join(__dirname, '..', 'data', 'sentWhatsapp.json');
 const MAX_SENT_WHATSAPP = 40;
 
 async function readSentWhatsapp() {

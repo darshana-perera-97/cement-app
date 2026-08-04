@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const DISTRIBUTORS_FILE = path.join(__dirname, 'data', 'distributors.json');
+const DISTRIBUTORS_FILE = path.join(__dirname, '..', 'data', 'distributors.json');
 
 async function readDistributors() {
   try {

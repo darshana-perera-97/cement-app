@@ -93,17 +93,20 @@ function normalizeCustomerName(s) {
 
 /**
  * Map bill id → settled date (YYYY-MM-DD) when fully paid.
- * Same FIFO rules as pending/overdue: payments clear pastBill first, then oldest bills.
+ * Explicit per-bill allocations are honored; other payments use FIFO.
  */
 function buildBillSettledDateLookup(customers, bills, payments) {
   const settledByBillId = new Map();
 
   const applyPayments = (custBills, custPayments, pastBillAmount) => {
-    const slots = [...custBills].sort(compareByDateThenCreated).map((b) => ({
-      id: b.id,
-      remaining: round2(b.totalAmount),
-    }));
-    let pastRemaining = round2(pastBillAmount);
+    const sortedBills = [...custBills].sort(compareByDateThenCreated);
+    const runningPaid = new Map();
+    for (const b of sortedBills) {
+      const id = String(b.id ?? '').trim();
+      if (id) runningPaid.set(id, 0);
+    }
+    const pastOwed = round2(pastBillAmount);
+    let pastPaid = 0;
 
     for (const p of [...custPayments].sort(compareByDateThenCreated)) {
       let credit = round2(paymentTotal(p));
@@ -111,21 +114,48 @@ function buildBillSettledDateLookup(customers, bills, payments) {
       const payDate = String(p.date ?? '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) continue;
 
-      if (pastRemaining > 0) {
-        const toward = Math.min(pastRemaining, credit);
-        pastRemaining = round2(pastRemaining - toward);
+      const explicit = Array.isArray(p.billCashAllocations)
+        ? p.billCashAllocations
+            .map((a) => ({
+              billId: String(a?.billId ?? '').trim(),
+              cashAmount: round2(a?.cashAmount ?? a?.amount ?? 0),
+            }))
+            .filter((a) => a.billId && a.cashAmount > 0)
+        : [];
+
+      if (explicit.length > 0) {
+        for (const { billId, cashAmount } of explicit) {
+          if (!runningPaid.has(billId)) continue;
+          const bill = sortedBills.find((b) => String(b.id ?? '').trim() === billId);
+          const total = round2(bill?.totalAmount);
+          const current = runningPaid.get(billId) || 0;
+          const room = Math.max(0, round2(total - current));
+          const toward = Math.min(room, cashAmount);
+          const next = round2(current + toward);
+          runningPaid.set(billId, next);
+          if (next >= total - 0.009 && billId) settledByBillId.set(billId, payDate);
+        }
+        continue;
+      }
+
+      if (pastOwed > pastPaid) {
+        const toward = Math.min(pastOwed - pastPaid, credit);
+        pastPaid = round2(pastPaid + toward);
         credit = round2(credit - toward);
       }
 
-      for (const slot of slots) {
+      for (const bill of sortedBills) {
         if (credit <= 0) break;
-        if (slot.remaining <= 0) continue;
-        const toward = Math.min(slot.remaining, credit);
-        slot.remaining = round2(slot.remaining - toward);
+        const id = String(bill.id ?? '').trim();
+        if (!id) continue;
+        const total = round2(bill.totalAmount);
+        const current = runningPaid.get(id) || 0;
+        const room = Math.max(0, round2(total - current));
+        const toward = Math.min(room, credit);
+        const next = round2(current + toward);
+        runningPaid.set(id, next);
         credit = round2(credit - toward);
-        if (slot.remaining <= 0 && slot.id) {
-          settledByBillId.set(slot.id, payDate);
-        }
+        if (next >= total - 0.009) settledByBillId.set(id, payDate);
       }
     }
   };

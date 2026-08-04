@@ -11,12 +11,12 @@ const {
   sumLoadBagsByBrand,
   lastCutOffPricesByBrand,
   normalizePurchaseOrderIds,
-} = require('./stocksStore');
+} = require('./models/stocksStore');
 const {
   refreshLiveStockFromSources,
   getLiveStockSummary,
   getLiveDailyLedgerPayload,
-} = require('./liveStockStore');
+} = require('./models/liveStockStore');
 const {
   readCustomers,
   writeCustomers,
@@ -24,49 +24,50 @@ const {
   defaultDueDateYmd,
   normalizeCustomerRecordId,
   customerRecordIdKey,
-} = require('./customersStore');
+} = require('./models/customersStore');
 const {
   normalizeCustomerName,
   computeCustomerBalance,
   computeRemainingAmount,
   paymentCreditToCustomer,
   paymentGrossCredit,
-} = require('./customerBalance');
+  computeBillPaymentAllocation,
+} = require('./models/customerBalance');
 const {
   readOverdueDates,
   setCustomerOverdueDays,
   getOverdueDaysForCustomer,
   normalizeOverdueDays,
   DEFAULT_OVERDUE_DAYS,
-} = require('./overdueDatesStore');
-const { readEmailConfig, writeEmailConfig, maskEmailConfig } = require('./emailConfigsStore');
-const { readWhatsAppConfig, writeWhatsAppConfig } = require('./whatsappConfigsStore');
+} = require('./models/overdueDatesStore');
+const { readEmailConfig, writeEmailConfig, maskEmailConfig } = require('./models/emailConfigsStore');
+const { readWhatsAppConfig, writeWhatsAppConfig } = require('./models/whatsappConfigsStore');
 const {
   readNotificationSettings,
   writeNotificationSettings,
   normalizeNotificationSettings,
   normalizeTimeHHMM,
-} = require('./notificationSettingsStore');
-const { startOverdueReminderScheduler } = require('./overdueReminderService');
-const { readCompanyData, writeCompanyData } = require('./companyDataStore');
-const { readShopData, writeShopData, addBankAccount, updateBankAccount, deleteBankAccount } = require('./shopDataStore');
+} = require('./models/notificationSettingsStore');
+const { startOverdueReminderScheduler } = require('./models/overdueReminderService');
+const { readCompanyData, writeCompanyData } = require('./models/companyDataStore');
+const { readShopData, writeShopData, addBankAccount, updateBankAccount, deleteBankAccount } = require('./models/shopDataStore');
 const {
   readDistributors,
   writeDistributors,
   normalizeProducts,
   normalizeLocations,
   withNormalizedLists,
-} = require('./distributorsStore');
+} = require('./models/distributorsStore');
 const {
   readLorries,
   writeLorries,
   normalizeNumber: normalizeLorryNumber,
   normalizeLorry,
   findDuplicate: findDuplicateLorry,
-} = require('./lorriesStore');
-const { readSentEmails } = require('./sentEmailsStore');
-const { readSentWhatsapp } = require('./sentWhatsappStore');
-const { notifyBillEmail, notifyPaymentEmail, notifyPromotionEmail } = require('./emailService');
+} = require('./models/lorriesStore');
+const { readSentEmails } = require('./models/sentEmailsStore');
+const { readSentWhatsapp } = require('./models/sentWhatsappStore');
+const { notifyBillEmail, notifyPaymentEmail, notifyPromotionEmail, notifyUnloadEmail } = require('./models/emailService');
 const {
   getWhatsAppStatus,
   startWhatsAppClient,
@@ -78,7 +79,7 @@ const {
   notifyPromotionWhatsApp,
   notifyUnloadWhatsApp,
   notifyChequeReturnWhatsApp,
-} = require('./whatsappService');
+} = require('./models/whatsappService');
 
 function enrichCustomerBalance(customer, bills, payments, overdueDates = {}) {
   const { amountToPay, overpaymentAmount } = computeCustomerBalance(customer, bills, payments);
@@ -128,7 +129,7 @@ async function validateCollectorUserId(collectorUserId) {
   }
   return { ok: true, collectorUserId: id };
 }
-const { readBills, writeBills, lineTotal, sumAllBillBagsByBrand } = require('./billsStore');
+const { readBills, writeBills, lineTotal, sumAllBillBagsByBrand } = require('./models/billsStore');
 const {
   getPaymentCheques,
   sumChequeAmounts,
@@ -140,7 +141,7 @@ const {
   bankAccountSnapshot,
   markChequeDepositedOnPayment,
   markChequeReturnedOnPayment,
-} = require('./paymentCheques');
+} = require('./models/paymentCheques');
 const {
   readPayments,
   writePayments,
@@ -148,15 +149,15 @@ const {
   normalizePaymentBillNumber,
   isPaymentBillNumberTaken,
   allocatePaymentReceiptNumber,
-} = require('./paymentsStore');
-const { inferStockIdForBillBags } = require('./billStockId');
+} = require('./models/paymentsStore');
+const { inferStockIdForBillBags } = require('./models/billStockId');
 const {
   normalizeMonthlyTargetBags,
   monthlyTargetFieldsForCustomer,
-} = require('./customerMonthlyTarget');
-const { signToken, requireAdmin, getAuthFromRequest } = require('./authToken');
-const { getEffectiveManagerAccess } = require('./managerAccess');
-const { getEffectiveCollectorAccess } = require('./collectorAccess');
+} = require('./models/customerMonthlyTarget');
+const { signToken, requireAdmin, getAuthFromRequest } = require('./models/authToken');
+const { getEffectiveManagerAccess } = require('./models/managerAccess');
+const { getEffectiveCollectorAccess } = require('./models/collectorAccess');
 const {
   readUsers,
   verifyStoredUser,
@@ -165,7 +166,7 @@ const {
   updateUser,
   deleteUserById,
   toPublicUser,
-} = require('./usersStore');
+} = require('./models/usersStore');
 
 async function resolveStaffUser(auth) {
   if (!auth || auth.role === 'admin') return null;
@@ -201,8 +202,8 @@ function customerAssignedToCollector(customer, collectorUserId) {
   return String(customer.collectorUserId ?? '').trim() === String(collectorUserId ?? '').trim();
 }
 
-const { readPromotions, writePromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
-const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./unloadsStore');
+const { readPromotions, writePromotions, sumAllPromotionBagsByBrand } = require('./models/promotionsStore');
+const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./models/unloadsStore');
 const {
   readPurchaseOrders,
   writePurchaseOrders,
@@ -214,15 +215,22 @@ const {
   lastPricesByProduct,
   cancelIssuedCheque,
   isPoCashPayment,
-} = require('./purchaseOrdersStore');
-const { computeBankAccountBalances } = require('./bankAccountBalance');
+} = require('./models/purchaseOrdersStore');
+const { computeBankAccountBalances } = require('./models/bankAccountBalance');
 const {
   readCashBookEntries,
   writeCashBookEntries,
   normalizeEntry,
   validateCreateBody,
+  markCompanyChequeDeposited,
   CATEGORIES: CASH_BOOK_CATEGORIES,
-} = require('./cashBookStore');
+} = require('./models/cashBookStore');
+const {
+  readBankGuarantees,
+  writeBankGuarantees,
+  normalizeEntry: normalizeBankGuarantee,
+  validateCreateBody: validateBankGuaranteeCreateBody,
+} = require('./models/bankGuaranteesStore');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 1249;
@@ -810,6 +818,80 @@ function parseBillBagFields(body) {
   };
 }
 
+function normalizeBillInvoiceNumber(value) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ');
+}
+
+function incrementBillInvoiceNumber(last) {
+  const s = String(last ?? '').trim();
+  if (!s) return '001';
+  const match = s.match(/^(.*?)(\d+)$/);
+  if (!match) return `${s}1`;
+  const prefix = match[1];
+  const numStr = match[2];
+  const next = String(parseInt(numStr, 10) + 1);
+  return `${prefix}${next.padStart(numStr.length, '0')}`;
+}
+
+function latestBillInvoiceNumber(bills) {
+  const list = Array.isArray(bills) ? bills : [];
+  if (list.length === 0) return '';
+  const sorted = [...list].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+  );
+  for (const bill of sorted) {
+    const n = normalizeBillInvoiceNumber(bill.invoiceNumber);
+    if (n) return n;
+  }
+  return '';
+}
+
+function suggestNextBillInvoiceNumber(bills) {
+  return incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+}
+
+function parseBillInvoiceNumber(body) {
+  const invoiceNumber = normalizeBillInvoiceNumber(body.invoiceNumber);
+  if (!invoiceNumber) {
+    return { error: 'invoiceNumber is required' };
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9 \-._/]*$/.test(invoiceNumber)) {
+    return { error: 'Invoice # can use letters, numbers, spaces, and . _ - /' };
+  }
+  return { invoiceNumber };
+}
+
+function billInvoiceNumberTaken(bills, invoiceNumber, excludeId = null) {
+  const norm = normalizeBillInvoiceNumber(invoiceNumber).toLowerCase();
+  if (!norm) return false;
+  const exclude = String(excludeId ?? '').trim();
+  for (const bill of bills) {
+    if (exclude && bill.id === exclude) continue;
+    if (normalizeBillInvoiceNumber(bill.invoiceNumber).toLowerCase() === norm) return true;
+  }
+  return false;
+}
+
+/** Assign unique invoice numbers to legacy bills that never had one saved. */
+function ensureBillInvoiceNumbers(bills) {
+  const list = Array.isArray(bills) ? bills : [];
+  let changed = false;
+  let last = latestBillInvoiceNumber(list);
+  const missing = list
+    .filter((bill) => !normalizeBillInvoiceNumber(bill.invoiceNumber))
+    .sort(
+      (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime(),
+    );
+  for (const bill of missing) {
+    do {
+      last = incrementBillInvoiceNumber(last);
+    } while (billInvoiceNumberTaken(list, last));
+    bill.invoiceNumber = last;
+    changed = true;
+  }
+  return changed;
+}
+
 async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameKeys) {
   const keys = new Set(nameKeys.map((n) => normalizeCustomerName(n)).filter(Boolean));
   if (keys.size === 0) return;
@@ -855,6 +937,8 @@ function daysFromDueToToday(dueYmd, todayYmd) {
 
 function billDetailsLine(bill) {
   const parts = [];
+  const invoiceNumber = String(bill.invoiceNumber ?? '').trim();
+  if (invoiceNumber) parts.push(`Inv ${invoiceNumber}`);
   const stockId = String(bill.stockId ?? '').trim();
   if (stockId) parts.push(`Stock ${stockId}`);
   const bagParts = [];
@@ -896,26 +980,12 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 
   for (const cust of customers) {
     const settlementDays = getOverdueDaysForCustomer(overdueDates, cust.id);
-    const nk = normalizeCustomerName(cust.name);
-    const custBills = bills.filter((b) => normalizeCustomerName(b.customerName) === nk);
-    let paySum = 0;
-    for (const p of payments) {
-      if (p.customerId === cust.id) paySum += paymentCreditToCustomer(p);
-    }
-    const sortedBills = [...custBills].sort((a, b) => {
-      const cmp = String(a.date).localeCompare(String(b.date));
-      if (cmp !== 0) return cmp;
-      return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
-    });
-    let remainingCredit = paySum;
-    const pastOwed = toNonNegMoney(cust.pastBill);
-    const towardPast = Math.min(pastOwed, remainingCredit);
-    remainingCredit -= towardPast;
+    const { paidByBillId, custBills } = computeBillPaymentAllocation(cust, bills, payments);
 
-    for (const bill of sortedBills) {
+    for (const bill of custBills) {
       const total = toNonNegMoney(bill.totalAmount);
-      const paidTowardBill = Math.min(total, remainingCredit);
-      remainingCredit -= paidTowardBill;
+      const id = String(bill.id ?? '').trim();
+      const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
       const remaining = Math.round((total - paidTowardBill) * 100) / 100;
       const due = addDaysToYmd(bill.date, settlementDays);
       if (remaining > 0) {
@@ -1127,6 +1197,81 @@ app.post('/api/cash-book-entries', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save cash book entry' });
+  }
+});
+
+app.get('/api/bank-guarantees', async (req, res) => {
+  try {
+    const from = String(req.query.from ?? '').trim().slice(0, 10);
+    const to = String(req.query.to ?? '').trim().slice(0, 10);
+    const guaranteeType = String(req.query.guaranteeType ?? '').trim();
+
+    let rows = await readBankGuarantees();
+    if (guaranteeType) {
+      rows = rows.filter((r) => r.guaranteeType === guaranteeType);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      rows = rows.filter((r) => r.date >= from);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      rows = rows.filter((r) => r.date <= to);
+    }
+
+    rows.sort((a, b) => {
+      const d = b.date.localeCompare(a.date);
+      if (d !== 0) return d;
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read bank guarantees' });
+  }
+});
+
+app.post('/api/bank-guarantees', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const shop = await readShopData();
+    const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+
+    const validated = validateBankGuaranteeCreateBody(body, { bankAccountById });
+    if (validated.error) {
+      return res.status(400).json({ error: validated.error });
+    }
+
+    const entries = await readBankGuarantees();
+    const row = normalizeBankGuarantee({
+      id: `bg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...validated.payload,
+      createdAt: new Date().toISOString(),
+    });
+    entries.push(row);
+    await writeBankGuarantees(entries);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save bank guarantee' });
+  }
+});
+
+app.delete('/api/bank-guarantees/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Bank guarantee id is required' });
+    }
+    const entries = await readBankGuarantees();
+    const idx = entries.findIndex((e) => e.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Bank guarantee not found' });
+    }
+    entries.splice(idx, 1);
+    await writeBankGuarantees(entries);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to remove bank guarantee' });
   }
 });
 
@@ -1442,6 +1587,21 @@ app.get('/api/unload-requests', async (req, res) => {
   }
 });
 
+async function sendUnloadCustomerNotifications(customer, unloadRecord) {
+  const notificationSettings = await readNotificationSettings();
+  if (notificationSettings.notifyUnload === false) return;
+  if (customer?.email) {
+    notifyUnloadEmail(customer, unloadRecord).catch((err) =>
+      console.error('unload email notification', err),
+    );
+  }
+  if (customer?.contactNumber) {
+    notifyUnloadWhatsApp(customer, unloadRecord).catch((err) =>
+      console.error('unload whatsapp notification', err),
+    );
+  }
+}
+
 function lastBillUnitPricesForCustomer(bills, customerName) {
   const nk = normalizeCustomerName(customerName);
   if (!nk) return null;
@@ -1562,6 +1722,7 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
       date: String(requestRow.date ?? '').trim(),
       customerName,
       stockId,
+      invoiceNumber: suggestNextBillInvoiceNumber(bills),
       ...fields,
       enteredBy,
       unloadRequestId: requestRow.id,
@@ -1589,27 +1750,27 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
       console.error('liveStock refresh after request approve', err);
     }
 
-    const customersForNotify = await readCustomers();
-    const custForNotify = customersForNotify.find(
-      (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
-    );
-    if (custForNotify?.email) {
-      notifyBillEmail(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
-        console.error('bill email notification', err),
+    const notificationSettings = await readNotificationSettings();
+    const hideFinancialDetails = Boolean(notificationSettings.hideFinancialDetails);
+    const sendBill = notificationSettings.notifyBill !== false;
+    const skipBillBecauseUnload =
+      hideFinancialDetails && notificationSettings.notifyUnload !== false;
+
+    if (sendBill && !skipBillBecauseUnload) {
+      const customersForNotify = await readCustomers();
+      const custForNotify = customersForNotify.find(
+        (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
       );
-    }
-    if (custForNotify?.contactNumber) {
-      notifyBillWhatsApp(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
-        console.error('bill whatsapp notification', err),
-      );
-      notifyUnloadWhatsApp(custForNotify, {
-        ...requestRow,
-        date: billRow.date,
-        tokyoBags: fields.tokyoBags,
-        samudraBags: fields.samudraBags,
-        atlasBags: fields.atlasBags,
-        nipponBags: fields.nipponBags,
-      }).catch((err) => console.error('unload whatsapp notification', err));
+      if (custForNotify?.email) {
+        notifyBillEmail(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+          console.error('bill email notification', err),
+        );
+      }
+      if (custForNotify?.contactNumber) {
+        notifyBillWhatsApp(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+          console.error('bill whatsapp notification', err),
+        );
+      }
     }
 
     res.status(201).json({ request: unloads[idx], bill: billRow });
@@ -1728,6 +1889,9 @@ app.post('/api/unloads', async (req, res) => {
     const unloads = await readUnloads();
     unloads.push(row);
     await writeUnloads(unloads);
+
+    await sendUnloadCustomerNotifications(cust, row);
+
     res.status(201).json(row);
   } catch (e) {
     console.error(e);
@@ -2728,38 +2892,58 @@ app.post('/api/cheque-deposits', async (req, res) => {
     const targets = [];
     for (let i = 0; i < rawList.length; i++) {
       const item = rawList[i] || {};
+      const cashBookEntryId = String(item.cashBookEntryId ?? '').trim();
       const paymentId = String(item.paymentId ?? item.id ?? '').trim();
+      if (cashBookEntryId) {
+        targets.push({ type: 'company', cashBookEntryId });
+        continue;
+      }
       if (!paymentId) {
-        return res.status(400).json({ error: `Cheque ${i + 1}: payment id is required` });
+        return res.status(400).json({ error: `Cheque ${i + 1}: payment or cash book entry id is required` });
       }
       targets.push({
+        type: 'customer',
         paymentId,
         chequeId: String(item.chequeId ?? '').trim(),
       });
     }
 
     const payments = await readPayments();
-    const byId = new Map(payments.map((p, i) => [p.id, i]));
-    const updatedIds = new Set();
+    const cashBookEntries = await readCashBookEntries();
+    const paymentById = new Map(payments.map((p, i) => [p.id, i]));
+    const cashBookById = new Map(cashBookEntries.map((e, i) => [e.id, i]));
+    const updatedPaymentIds = new Set();
+    const updatedCashBookIds = new Set();
 
     for (let i = 0; i < targets.length; i++) {
-      const { paymentId, chequeId } = targets[i];
-      const idx = byId.get(paymentId);
+      const target = targets[i];
+      if (target.type === 'company') {
+        const idx = cashBookById.get(target.cashBookEntryId);
+        if (idx === undefined) {
+          return res.status(404).json({ error: `Incoming cheque not found (${i + 1})` });
+        }
+        const current = cashBookEntries[idx];
+        const result = markCompanyChequeDeposited(current, {
+          recordedBy,
+          depositedAt,
+          bankAccountId,
+          bankAccount,
+          note: note || undefined,
+        });
+        if (result.error) {
+          return res.status(400).json({ error: `${result.error} (cheque ${i + 1})` });
+        }
+        cashBookEntries[idx] = result.entry;
+        updatedCashBookIds.add(target.cashBookEntryId);
+        continue;
+      }
+
+      const { paymentId, chequeId } = target;
+      const idx = paymentById.get(paymentId);
       if (idx === undefined) {
         return res.status(404).json({ error: `Payment not found for cheque ${i + 1}` });
       }
       const current = payments[idx];
-      const lines = getPaymentCheques(current);
-      const targetId = chequeId || (lines.length === 1 ? String(lines[0].id || '') : '');
-      const targetLine = lines.find((c) => String(c.id) === targetId);
-      if (targetLine) {
-        const converting = String(targetLine.chequeDate ?? '').trim().slice(0, 10);
-        if (/^\d{4}-\d{2}-\d{2}$/.test(converting) && converting > date) {
-          return res.status(400).json({
-            error: `Cheque ${i + 1}: converting date (${converting}) has not arrived yet`,
-          });
-        }
-      }
       const result = markChequeDepositedOnPayment(current, {
         chequeId,
         recordedBy,
@@ -2772,16 +2956,22 @@ app.post('/api/cheque-deposits', async (req, res) => {
         return res.status(400).json({ error: `${result.error} (cheque ${i + 1})` });
       }
       payments[idx] = result.payment;
-      updatedIds.add(paymentId);
+      updatedPaymentIds.add(paymentId);
     }
 
-    await writePayments(payments);
+    if (updatedPaymentIds.size > 0) {
+      await writePayments(payments);
+    }
+    if (updatedCashBookIds.size > 0) {
+      await writeCashBookEntries(cashBookEntries);
+    }
     res.status(201).json({
       date,
       bankAccountId,
       bankAccount,
       count: targets.length,
-      paymentIds: [...updatedIds],
+      paymentIds: [...updatedPaymentIds],
+      cashBookEntryIds: [...updatedCashBookIds],
     });
   } catch (e) {
     console.error(e);
@@ -3069,6 +3259,9 @@ app.get('/api/activity', async (req, res) => {
 app.get('/api/bills', async (req, res) => {
   try {
     const bills = await readBills();
+    if (ensureBillInvoiceNumbers(bills)) {
+      await writeBills(bills);
+    }
     const sorted = [...bills].sort((a, b) => {
       const da = String(a.date || '');
       const db = String(b.date || '');
@@ -3100,9 +3293,16 @@ app.post('/api/bills', async (req, res) => {
     }
 
     const fields = parseBillBagFields(body);
+    const parsedInvoice = parseBillInvoiceNumber(body);
+    if (parsedInvoice.error) {
+      return res.status(400).json({ error: parsedInvoice.error });
+    }
     const stockIdFromBody = String(body.stockId ?? '').trim();
     const stocks = await readStocks();
     const bills = await readBills();
+    if (billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber)) {
+      return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
+    }
     const stockId =
       stockIdFromBody ||
       inferStockIdForBillBags(stocks, bills, {
@@ -3117,6 +3317,7 @@ app.post('/api/bills', async (req, res) => {
       date,
       customerName,
       stockId,
+      invoiceNumber: parsedInvoice.invoiceNumber,
       ...fields,
       enteredBy,
       createdAt: new Date().toISOString(),
@@ -3203,6 +3404,13 @@ app.patch('/api/bills/:id', async (req, res) => {
 
     const existing = bills[idx];
     const fields = parseBillBagFields(body);
+    const parsedInvoice = parseBillInvoiceNumber(body);
+    if (parsedInvoice.error) {
+      return res.status(400).json({ error: parsedInvoice.error });
+    }
+    if (billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber, id)) {
+      return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
+    }
     const stocks = await readStocks();
     const promotions = await readPromotions();
     const pendingUnloads = await readUnloads();
@@ -3227,6 +3435,7 @@ app.patch('/api/bills/:id', async (req, res) => {
       ...existing,
       date,
       customerName,
+      invoiceNumber: parsedInvoice.invoiceNumber,
       ...fields,
       updatedBy,
       updatedAt: new Date().toISOString(),
@@ -4187,18 +4396,14 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-(async () => {
-  try {
-    await bootstrapWhatsAppOnStartup();
-  } catch (err) {
-    console.error('whatsapp bootstrap', err);
-  }
+bootstrapWhatsAppOnStartup().catch((err) => {
+  console.error('whatsapp bootstrap', err);
+});
 
-  app.listen(PORT, () => {
-    console.log(`Server listening on http://localhost:${PORT}`);
-    if (fs.existsSync(FRONTEND_INDEX)) {
-      console.log(`Serving SPA from ${FRONTEND_BUILD}`);
-    }
-    startOverdueReminderScheduler();
-  });
-})();
+app.listen(PORT, () => {
+  console.log(`Server listening on http://localhost:${PORT}`);
+  if (fs.existsSync(FRONTEND_INDEX)) {
+    console.log(`Serving SPA from ${FRONTEND_BUILD}`);
+  }
+  startOverdueReminderScheduler();
+});

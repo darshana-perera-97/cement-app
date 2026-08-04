@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const WHATSAPP_CONFIG_FILE = path.join(__dirname, 'data', 'whatsappConfigs.json');
+const WHATSAPP_CONFIG_FILE = path.join(__dirname, '..', 'data', 'whatsappConfigs.json');
 
 const DEFAULT_WHATSAPP_CONFIG = {
   enabled: false,

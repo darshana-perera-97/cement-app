@@ -146,8 +146,14 @@ function buildBillEmail({ customer, bill, remainingAmount, company, hideFinancia
   const rows = [
     { label: 'Customer', value: customer.name },
     { label: 'Date', value: formatDate(bill.date) },
-    ...billBagLines(bill),
+    ...(hideFinancialDetails ? billBagLines(bill) : bagLines(bill)),
   ];
+  if (!hideFinancialDetails) {
+    const billTotal = Number(bill.totalAmount);
+    if (Number.isFinite(billTotal) && billTotal > 0) {
+      rows.push({ label: 'Bill total', value: formatMoney(billTotal) });
+    }
+  }
 
   return {
     subject: `Credit sale · ${customer.name}`,
@@ -229,6 +235,53 @@ function buildPaymentEmail({ customer, payment, remainingAmount, company, hideFi
   };
 }
 
+function unloadBagLines(record) {
+  const lines = [];
+  for (const key of Object.keys(BRAND_LABELS)) {
+    const bags = Number(record[`${key}Bags`]) || 0;
+    if (bags > 0) {
+      lines.push({
+        label: BRAND_LABELS[key],
+        value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
+      });
+    }
+  }
+  return lines;
+}
+
+function buildUnloadEmail({ customer, unload, company }) {
+  const rows = [
+    { label: 'Shop', value: customer.name },
+    { label: 'Date', value: formatDate(unload.date) },
+    ...unloadBagLines(unload),
+  ];
+  const totalBags = Object.keys(BRAND_LABELS).reduce(
+    (sum, key) => sum + (Number(unload[`${key}Bags`]) || 0),
+    0,
+  );
+
+  return {
+    subject: `Delivery unloaded · ${customer.name}`,
+    html: emailLayout({
+      preheader: `Cement delivery unloaded for ${customer.name}.`,
+      accent: '#0284c7',
+      accentLight: '#e0f2fe',
+      title: 'Delivery unloaded',
+      subtitle: 'Delivery confirmation',
+      rows,
+      highlight:
+        totalBags > 0
+          ? {
+              label: 'Total bags',
+              value: `${totalBags.toLocaleString()} bag${totalBags === 1 ? '' : 's'}`,
+            }
+          : null,
+      footer: 'This is an automated notification from your cement distributor account.',
+      company,
+    }),
+  };
+}
+
 function buildPromotionEmail({ customer, promotion, company }) {
   const rows = [
     { label: 'Customer', value: customer.name },
@@ -277,25 +330,22 @@ function buildOverdueBalanceEmail({
   const todayYmd = new Date().toISOString().slice(0, 10);
   rows.push({ label: 'Date', value: formatDate(todayYmd) });
 
-  if (shareMode === 'overdue_only' || shareMode === 'both') {
+  if (overdueBills.length > 0) {
     for (const bill of overdueBills) {
       const label = bill.daysOverdue > 0 ? `Overdue bill (${bill.daysOverdue}d)` : 'Overdue bill';
-      const value = hideFinancialDetails
-        ? `${formatDate(bill.billDate)} · due ${formatDate(bill.dueDate)}${bill.details ? ` · ${bill.details}` : ''}`
-        : `${formatDate(bill.billDate)} · ${formatMoney(bill.outstandingAmount)}${bill.details ? ` · ${bill.details}` : ''}`;
+      const value = `${formatDate(bill.billDate)} · ${formatMoney(bill.outstandingAmount)}${bill.details ? ` · ${bill.details}` : ''}`;
       rows.push({ label, value });
+    }
+    if (totalOverdueAmount > 0) {
+      rows.push({ label: 'Total overdue', value: formatMoney(totalOverdueAmount) });
     }
   }
 
   let highlight = null;
-  if (!hideFinancialDetails) {
-    if (shareMode === 'pending_only' && totalPendingAmount > 0) {
-      highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
-    } else if (shareMode === 'overdue_only' && totalOverdueAmount > 0) {
-      highlight = { label: 'Total overdue', value: formatMoney(totalOverdueAmount) };
-    } else if (shareMode === 'both' && totalPendingAmount > 0) {
-      highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
-    }
+  if (shareMode === 'pending_only' && totalPendingAmount > 0) {
+    highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
+  } else if (shareMode === 'both' && totalPendingAmount > 0) {
+    highlight = { label: 'Total pending balance', value: formatMoney(totalPendingAmount) };
   }
 
   return {
@@ -318,5 +368,6 @@ module.exports = {
   buildBillEmail,
   buildPaymentEmail,
   buildPromotionEmail,
+  buildUnloadEmail,
   buildOverdueBalanceEmail,
 };

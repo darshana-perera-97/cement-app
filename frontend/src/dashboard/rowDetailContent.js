@@ -117,6 +117,16 @@ export function getRowDetailMeta(variant, row) {
           .filter(Boolean)
           .join(' · ') || null,
       };
+    case 'companyCheque':
+      return {
+        title: 'Company cheque',
+        subtitle: [row.chequeDate, row.chequeNumber ? `#${row.chequeNumber}` : null].filter(Boolean).join(' · ') || null,
+      };
+    case 'ownerCheque':
+      return {
+        title: 'Owner cheque',
+        subtitle: [row.chequeDate, row.chequeNumber ? `#${row.chequeNumber}` : null].filter(Boolean).join(' · ') || null,
+      };
     case 'poCheque':
       return {
         title: 'Issued cheque',
@@ -177,6 +187,10 @@ export function RowDetailContent({ variant, row }) {
       return <BankDailyDetailContent row={row} />;
     case 'bankCheque':
       return <BankChequeDetailContent row={row} />;
+    case 'companyCheque':
+      return <CompanyChequeDetailContent row={row} />;
+    case 'ownerCheque':
+      return <OwnerChequeDetailContent row={row} />;
     case 'poCheque':
       return <PoChequeDetailContent row={row} />;
     case 'incentive':
@@ -375,6 +389,7 @@ function BillDetailContent({ row }) {
   return (
     <>
       <SummaryGrid>
+        <SummaryField label="Invoice #" value={displayText(row.invoiceNumber)} valueClassName="font-mono" />
         <SummaryField label="Date" value={displayText(row.date)} />
         <SummaryField label="Stock ID" value={displayText(row.stockId)} />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
@@ -967,6 +982,82 @@ function BankChequeDetailContent({ row }) {
           value={formatMoney(row.amount)}
           className="col-span-2 bg-violet-50 ring-violet-100"
           valueClassName="font-semibold tabular-nums text-violet-900"
+        />
+        <SummaryField
+          label="Bank deposit"
+          value={row.chequeDeposited ? 'Marked as deposited' : 'Pending'}
+          className={row.chequeDeposited ? 'bg-emerald-50 ring-emerald-100' : 'bg-amber-50 ring-amber-100'}
+          valueClassName={row.chequeDeposited ? 'font-semibold text-emerald-900' : 'font-semibold text-amber-900'}
+        />
+        {row.chequeDeposited && row.chequeDepositedBy ? (
+          <SummaryField label="Marked by" value={displayText(row.chequeDepositedBy)} />
+        ) : null}
+        {row.chequeDeposited && row.chequeDepositedAt ? (
+          <SummaryField label="Marked at" value={displayText(row.chequeDepositedAt)} />
+        ) : null}
+        {row.chequeReturned ? (
+          <SummaryField
+            label="Return status"
+            value="Marked as returned"
+            className="col-span-2 bg-rose-50 ring-rose-100"
+            valueClassName="font-semibold text-rose-900"
+          />
+        ) : null}
+        {row.chequeReturned && row.chequeReturnedBy ? (
+          <SummaryField label="Returned by" value={displayText(row.chequeReturnedBy)} />
+        ) : null}
+        {row.chequeReturned && row.chequeReturnedAt ? (
+          <SummaryField label="Returned at" value={displayText(row.chequeReturnedAt)} />
+        ) : null}
+      </SummaryGrid>
+    </>
+  );
+}
+
+function CompanyChequeDetailContent({ row }) {
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Cheque date" value={displayText(row.chequeDate)} />
+        <SummaryField label="Received date" value={displayText(row.receivedDate)} />
+        <SummaryField label="Cheque #" value={displayText(row.chequeNumber)} valueClassName="font-mono" />
+        <SummaryField label="Note" value={displayText(row.description)} className="col-span-2 sm:col-span-1" />
+        <SummaryField
+          label="Cheque amount"
+          value={formatMoney(row.amount)}
+          className="col-span-2 bg-violet-50 ring-violet-100"
+          valueClassName="font-semibold tabular-nums text-violet-900"
+        />
+        <SummaryField
+          label="Bank deposit"
+          value={row.chequeDeposited ? 'Marked as deposited' : 'Pending'}
+          className={row.chequeDeposited ? 'bg-emerald-50 ring-emerald-100' : 'bg-amber-50 ring-amber-100'}
+          valueClassName={row.chequeDeposited ? 'font-semibold text-emerald-900' : 'font-semibold text-amber-900'}
+        />
+        {row.chequeDeposited && row.chequeDepositedBy ? (
+          <SummaryField label="Marked by" value={displayText(row.chequeDepositedBy)} />
+        ) : null}
+        {row.chequeDeposited && row.chequeDepositedAt ? (
+          <SummaryField label="Marked at" value={displayText(row.chequeDepositedAt)} />
+        ) : null}
+      </SummaryGrid>
+    </>
+  );
+}
+
+function OwnerChequeDetailContent({ row }) {
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Cheque date" value={displayText(row.chequeDate)} />
+        <SummaryField label="Received date" value={displayText(row.receivedDate)} />
+        <SummaryField label="Cheque #" value={displayText(row.chequeNumber)} valueClassName="font-mono" />
+        <SummaryField label="Note" value={displayText(row.description)} className="col-span-2 sm:col-span-1" />
+        <SummaryField
+          label="Cheque amount"
+          value={formatMoney(row.amount)}
+          className="col-span-2 bg-amber-50 ring-amber-100"
+          valueClassName="font-semibold tabular-nums text-amber-900"
         />
         <SummaryField
           label="Bank deposit"

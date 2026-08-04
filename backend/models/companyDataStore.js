@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const COMPANY_DATA_FILE = path.join(__dirname, 'data', 'companyData.json');
+const COMPANY_DATA_FILE = path.join(__dirname, '..', 'data', 'companyData.json');
 
 const DEFAULT_COMPANY_DATA = {
   distributor: 'Chaminda Stores - Dummalasuriya',

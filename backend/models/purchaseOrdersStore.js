@@ -3,7 +3,7 @@ const path = require('path');
 const { toNonNegNumber } = require('./stocksStore');
 const { toNonNegMoney } = require('./customersStore');
 
-const PURCHASE_ORDERS_FILE = path.join(__dirname, 'data', 'purchaseOrders.json');
+const PURCHASE_ORDERS_FILE = path.join(__dirname, '..', 'data', 'purchaseOrders.json');
 
 async function readPurchaseOrders() {
   try {

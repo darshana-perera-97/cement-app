@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const CUSTOMERS_FILE = path.join(__dirname, 'data', 'customers.json');
+const CUSTOMERS_FILE = path.join(__dirname, '..', 'data', 'customers.json');
 
 async function readCustomers() {
   try {

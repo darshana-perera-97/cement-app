@@ -2,9 +2,9 @@ const fs = require('fs').promises;
 const path = require('path');
 
 /** Loads (dispatch records) for the Loads page and stock ledger. */
-const LOADS_FILE = path.join(__dirname, 'data', 'loads.json');
+const LOADS_FILE = path.join(__dirname, '..', 'data', 'loads.json');
 /** Earlier filename; still read once to migrate if `loads.json` is absent. */
-const LEGACY_STOCKS_FILE = path.join(__dirname, 'data', 'stocks.json');
+const LEGACY_STOCKS_FILE = path.join(__dirname, '..', 'data', 'stocks.json');
 
 async function readStocks() {
   try {

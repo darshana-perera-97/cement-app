@@ -16,9 +16,9 @@ const {
   buildUnloadWhatsApp,
 } = require('./whatsappTemplates');
 
-const SESSION_PATH = path.join(__dirname, 'data', 'wwebjs_auth');
+const SESSION_PATH = path.join(__dirname, '..', 'data', 'wwebjs_auth');
 const SESSION_DIR = path.join(SESSION_PATH, 'session');
-const WEB_CACHE_PATH = path.join(__dirname, '.wwebjs_cache');
+const WEB_CACHE_PATH = path.join(__dirname, '..', '.wwebjs_cache');
 /** Cached WA Web build used when this session was linked (see backend/.wwebjs_cache). */
 const WEB_VERSION = '2.3000.1044312693';
 const RECONNECT_DELAY_MS = 5000;
@@ -434,13 +434,9 @@ async function bootstrapWhatsAppOnStartup() {
   }
   console.log('[whatsapp] restoring connection on startup…');
   await prepareSessionForLaunch();
-  try {
-    await startWhatsAppClient();
-    const ready = await waitForClientReady();
-    console.log('[whatsapp] startup restore finished', getWhatsAppStatus().state, ready ? '(connected)' : '(not ready yet)');
-  } catch (err) {
+  startWhatsAppClient().catch((err) => {
     console.error('[whatsapp] startup restore failed', err);
-  }
+  });
 }
 
 async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, referenceId }) {
@@ -463,13 +459,18 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
 
   let built;
   const company = await readCompanyData();
-  const msgOpts = { hideFinancialDetails };
   switch (type) {
     case 'bill':
-      built = buildBillWhatsApp({ customer, bill: record, remainingAmount, company, ...msgOpts });
+      built = buildBillWhatsApp({
+        customer,
+        bill: record,
+        remainingAmount,
+        company,
+        hideFinancialDetails,
+      });
       break;
     case 'payment':
-      built = buildPaymentWhatsApp({ customer, payment: record, remainingAmount, company, ...msgOpts });
+      built = buildPaymentWhatsApp({ customer, payment: record, remainingAmount, company });
       break;
     case 'promotion':
       built = buildPromotionWhatsApp({ customer, promotion: record, company });
@@ -485,7 +486,6 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
         cheque: payload.cheque,
         remainingAmount,
         company,
-        ...msgOpts,
       });
       break;
     }
@@ -499,7 +499,6 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
         totalPendingAmount: payload.totalPendingAmount,
         shareMode: payload.shareMode,
         company,
-        ...msgOpts,
       });
       break;
     }

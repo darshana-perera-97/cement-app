@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const OVERDUE_DATES_FILE = path.join(__dirname, 'data', 'overduedates.json');
+const OVERDUE_DATES_FILE = path.join(__dirname, '..', 'data', 'overduedates.json');
 const DEFAULT_OVERDUE_DAYS = 14;
 const MIN_OVERDUE_DAYS = 1;
 const MAX_OVERDUE_DAYS = 365;

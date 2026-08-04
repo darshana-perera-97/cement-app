@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const LORRIES_FILE = path.join(__dirname, 'data', 'lorries.json');
+const LORRIES_FILE = path.join(__dirname, '..', 'data', 'lorries.json');
 
 async function readLorriesRaw() {
   try {

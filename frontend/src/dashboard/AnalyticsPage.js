@@ -15,7 +15,6 @@ import {
   YAxis,
 } from 'recharts';
 import { getApiBase } from '../apiBase';
-import { getUsername } from '../auth';
 import { depositQueueRowKey } from './paymentCheques';
 import { BRANDS } from './brandTheme';
 import {
@@ -37,6 +36,13 @@ import {
 import { downloadOverdueBillsPdf, downloadSalesPersonOverduePdf } from './overdueBillsPdf';
 import { buildPendingBillRows } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { Link } from 'react-router-dom';
+import {
+  buildCashBookSourceEntries,
+  buildCashBookLedgerRows,
+  summarizeCashBookLedger,
+} from './cashBookLedger';
+import { computeGuaranteeStatus } from './guaranteeStatus';
 
 /** Bar fills aligned with `BRANDS` — same hues as light theme, higher chroma for readability */
 const BRAND_BAR_COLORS = {
@@ -117,6 +123,17 @@ function enrichOverdueBillRow(row) {
 function overdueDaysFromBillDate(row) {
   if (row?.daysFromBillDate != null && row.daysFromBillDate !== '') return row.daysFromBillDate;
   return daysFromYmdToToday(row?.billDate);
+}
+
+function DashboardStatAmount({ value, loading, valueClassName = 'text-slate-900' }) {
+  if (loading) {
+    return <p className="mt-1 text-xl font-bold tabular-nums text-slate-400">—</p>;
+  }
+  return (
+    <p className={`mt-1 text-xl font-bold tabular-nums tracking-tight ${valueClassName}`}>
+      {formatLkrCompact(value)}
+    </p>
+  );
 }
 
 function Card({ title, subtitle, children, className = '', headerExtra = null }) {
@@ -261,73 +278,18 @@ export default function AnalyticsPage() {
     items: [],
   });
   const [chequeDepositErr, setChequeDepositErr] = useState(null);
-  const [markingChequeId, setMarkingChequeId] = useState(null);
+  const [payments, setPayments] = useState([]);
+  const [cashBookEntries, setCashBookEntries] = useState([]);
+  const [bankGuarantees, setBankGuarantees] = useState([]);
+  const [bankBalancePayload, setBankBalancePayload] = useState(null);
   const [overdueSearch, setOverdueSearch] = useState('');
   const [overdueListView, setOverdueListView] = useState('preview');
-
-  const refreshChequeDepositQueue = useCallback(async () => {
-    try {
-      const res = await fetch(`${apiRoot}/api/cheque-deposit-queue?days=3`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setChequeDepositQueue({ asOfDate: '', throughDate: '', items: [] });
-        setChequeDepositErr(data.error || 'Could not load cheques for deposit');
-        return;
-      }
-      setChequeDepositErr(null);
-      setChequeDepositQueue({
-        asOfDate: String(data.asOfDate ?? ''),
-        throughDate: String(data.throughDate ?? data.asOfDate ?? ''),
-        items: Array.isArray(data.items) ? data.items : [],
-      });
-    } catch {
-      setChequeDepositQueue({ asOfDate: '', throughDate: '', items: [] });
-      setChequeDepositErr('Could not reach server');
-    }
-  }, [apiRoot]);
-
-  const handleMarkChequeDeposited = useCallback(
-    async (row) => {
-      const username = getUsername();
-      if (!username) {
-        setChequeDepositErr('Sign in with a username to record deposits.');
-        return;
-      }
-      const rowKey = depositQueueRowKey(row);
-      setChequeDepositErr(null);
-      setMarkingChequeId(rowKey);
-      try {
-        const res = await fetch(
-          `${apiRoot}/api/payments/${encodeURIComponent(row.id)}/cheque-deposited`,
-          {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              recordedBy: username,
-              ...(row.chequeId && row.chequeId !== '_legacy' ? { chequeId: row.chequeId } : {}),
-            }),
-          },
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setChequeDepositErr(data.error || 'Update failed');
-          return;
-        }
-        await refreshChequeDepositQueue();
-      } catch {
-        setChequeDepositErr('Could not reach server');
-      } finally {
-        setMarkingChequeId(null);
-      }
-    },
-    [apiRoot, refreshChequeDepositQueue],
-  );
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes] =
+        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes] =
           await Promise.all([
             fetch(`${apiRoot}/api/cash-summary`),
             fetch(`${apiRoot}/api/cash-flow?days=7`),
@@ -338,6 +300,9 @@ export default function AnalyticsPage() {
             fetch(`${apiRoot}/api/bills`),
             fetch(`${apiRoot}/api/payments`),
             fetch(`${apiRoot}/api/cheque-deposit-queue?days=3`),
+            fetch(`${apiRoot}/api/cash-book-entries`),
+            fetch(`${apiRoot}/api/bank-guarantees`),
+            fetch(`${apiRoot}/api/bank-account-balances`),
           ]);
         if (!cancelled) {
           if (sumRes.ok) setCashSummary(await sumRes.json());
@@ -369,14 +334,33 @@ export default function AnalyticsPage() {
           // Build pending bills client-side (works without /api/pending-bills on remote).
           const customers = custRes.ok ? await custRes.json() : [];
           const bills = billsRes.ok ? await billsRes.json() : [];
-          const payments = payRes.ok ? await payRes.json() : [];
+          const paymentsData = payRes.ok ? await payRes.json() : [];
+          const paymentsList = Array.isArray(paymentsData) ? paymentsData : [];
+          setPayments(paymentsList);
           setPendingBills(
             buildPendingBillRows(
               Array.isArray(customers) ? customers : [],
               Array.isArray(bills) ? bills : [],
-              Array.isArray(payments) ? payments : [],
+              paymentsList,
             ).map(enrichOverdueBillRow),
           );
+          if (cbeRes.ok) {
+            const cbeData = await cbeRes.json();
+            setCashBookEntries(Array.isArray(cbeData) ? cbeData : []);
+          } else {
+            setCashBookEntries([]);
+          }
+          if (bgRes.ok) {
+            const bgData = await bgRes.json();
+            setBankGuarantees(Array.isArray(bgData) ? bgData : []);
+          } else {
+            setBankGuarantees([]);
+          }
+          if (balRes.ok) {
+            setBankBalancePayload(await balRes.json());
+          } else {
+            setBankBalancePayload(null);
+          }
           if (chequeRes.ok) {
             const cd = await chequeRes.json();
             setChequeDepositErr(null);
@@ -399,6 +383,10 @@ export default function AnalyticsPage() {
           setRecentTransfers([]);
           setOverdueBills([]);
           setPendingBills([]);
+          setPayments([]);
+          setCashBookEntries([]);
+          setBankGuarantees([]);
+          setBankBalancePayload(null);
           setChequeDepositQueue({ asOfDate: '', throughDate: '', items: [] });
           setChequeDepositErr('Could not load dashboard data');
         }
@@ -455,6 +443,53 @@ export default function AnalyticsPage() {
   }, [overdueBills, overdueSearch]);
 
   const showOverdueViewAll = overdueBills.length > OVERDUE_VIEW_ALL_THRESHOLD;
+
+  const cashierSummary = useMemo(() => {
+    const sourceEntries = buildCashBookSourceEntries(payments, cashBookEntries);
+    const ledgerRows = buildCashBookLedgerRows(sourceEntries);
+    return summarizeCashBookLedger(ledgerRows);
+  }, [payments, cashBookEntries]);
+
+  const bankSummary = useMemo(() => {
+    const byAccountId =
+      bankBalancePayload?.byAccountId && typeof bankBalancePayload.byAccountId === 'object'
+        ? bankBalancePayload.byAccountId
+        : {};
+    let totalBalance = 0;
+    let totalPendingOutgoing = 0;
+    for (const entry of Object.values(byAccountId)) {
+      totalBalance += Number(entry?.balance) || 0;
+      totalPendingOutgoing += Number(entry?.pendingOutgoing) || 0;
+    }
+    return { totalBalance, totalPendingOutgoing, accountCount: Object.keys(byAccountId).length };
+  }, [bankBalancePayload]);
+
+  const poPendingMetrics = useMemo(() => {
+    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
+    const outgoing = Array.isArray(bankBalancePayload?.outgoingCheques)
+      ? bankBalancePayload.outgoingCheques
+      : [];
+    let total = 0;
+    let count = 0;
+    for (const row of outgoing) {
+      const converting = String(row.chequeDate ?? '').slice(0, 10);
+      if (converting && converting <= asOf) continue;
+      const amount = Math.max(0, Number(row.amount) || 0);
+      if (amount <= 0) continue;
+      total += amount;
+      count += 1;
+    }
+    return { total, count };
+  }, [bankBalancePayload]);
+
+  const guaranteeStatus = useMemo(
+    () =>
+      computeGuaranteeStatus(bankGuarantees, payments, {
+        poPendingOutgoing: poPendingMetrics.total,
+        poPendingCount: poPendingMetrics.count,
+      }),
+    [bankGuarantees, payments, poPendingMetrics],
+  );
 
   const overdueSearchInput = (
     <label className={filterLabel}>
@@ -678,6 +713,148 @@ export default function AnalyticsPage() {
 
       <div className="grid gap-6 lg:grid-cols-5">
         <Card
+          title="Bank & cashier"
+          subtitle="Live cash on hand and bank positions — same totals as Cash Book"
+          className="lg:col-span-3"
+          headerExtra={
+            <Link
+              to="/dashboard/bank"
+              className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-indigo-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-indigo-50 sm:w-auto"
+            >
+              Open Cash Book →
+            </Link>
+          }
+        >
+          {cashDashLoading ? (
+            <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500">
+              <LoadingSpinner />
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-100">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cashier · closing balance</p>
+                <DashboardStatAmount
+                  loading={false}
+                  value={cashierSummary.closing}
+                  valueClassName="text-indigo-900"
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  Cash in {formatLkrCompact(cashierSummary.debit)} · Cash out{' '}
+                  {formatLkrCompact(cashierSummary.credit)}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-100">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cashier · net movement</p>
+                <DashboardStatAmount
+                  loading={false}
+                  value={cashierSummary.netInPeriod}
+                  valueClassName={cashierSummary.netInPeriod >= 0 ? 'text-emerald-800' : 'text-rose-800'}
+                />
+                <p className="mt-2 text-xs text-slate-500">All-time ledger through today</p>
+              </div>
+              <div className="rounded-2xl bg-sky-50/70 p-4 ring-1 ring-sky-100">
+                <p className="text-xs font-semibold uppercase tracking-wide text-sky-800/80">Bank · total balance</p>
+                <DashboardStatAmount loading={false} value={bankSummary.totalBalance} valueClassName="text-sky-900" />
+                <p className="mt-2 text-xs text-slate-600">
+                  {bankSummary.accountCount} account{bankSummary.accountCount === 1 ? '' : 's'} · deposits & deposited
+                  cheques minus cleared PO cheques
+                </p>
+              </div>
+              <div className="rounded-2xl bg-amber-50/70 p-4 ring-1 ring-amber-100">
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-900/80">
+                  Bank · pending outgoing
+                </p>
+                <DashboardStatAmount
+                  loading={false}
+                  value={bankSummary.totalPendingOutgoing}
+                  valueClassName="text-amber-900"
+                />
+                <p className="mt-2 text-xs text-slate-600">PO cheques before converting date</p>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <Card
+          title="Bank guarantee status"
+          subtitle="Incoming customer cheques not deposited plus PO purchase cheques not yet converted"
+          className="lg:col-span-2"
+        >
+          {cashDashLoading ? (
+            <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500">
+              <LoadingSpinner />
+            </div>
+          ) : !guaranteeStatus.hasGuarantee ? (
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-slate-600">
+                No bank guarantees recorded yet. Add guarantees in Cash Book to track cheque exposure against
+                collateral.
+              </p>
+              <Link
+                to="/dashboard/bank"
+                className="inline-flex items-center justify-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700"
+              >
+                Add guarantee in Cash Book
+              </Link>
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div className="rounded-xl bg-violet-50 px-3 py-2 ring-1 ring-violet-100">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700">Pending cheques</p>
+                  <p className="mt-0.5 text-sm font-bold tabular-nums text-violet-900">
+                    {formatLkrCompact(guaranteeStatus.pendingTotal)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-violet-50 px-3 py-2.5 ring-1 ring-violet-100">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-800">Pending</p>
+                  <p className="mt-0.5 text-base font-bold tabular-nums text-violet-900">
+                    {formatLkrCompact(guaranteeStatus.pendingTotal)}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-violet-700">
+                    {guaranteeStatus.pendingChequeCount} cheque
+                    {guaranteeStatus.pendingChequeCount === 1 ? '' : 's'} · incl. PO not converted
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-200">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Available</p>
+                  <p className="mt-0.5 text-base font-bold tabular-nums text-slate-900">
+                    {formatLkrCompact(guaranteeStatus.available)}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-slate-500">Headroom under guarantee</p>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-slate-500">
+                  <span>Guarantee utilization (pending)</span>
+                  <span className="tabular-nums">{guaranteeStatus.utilizationPct}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      guaranteeStatus.overLimit ? 'bg-rose-500' : 'bg-teal-500'
+                    }`}
+                    style={{ width: `${Math.min(100, guaranteeStatus.utilizationPct)}%` }}
+                  />
+                </div>
+              </div>
+
+              {guaranteeStatus.overLimit ? (
+                <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-800 ring-1 ring-rose-100" role="alert">
+                  Pending cheques exceed total guarantee by{' '}
+                  {formatLkrCompact(guaranteeStatus.pendingTotal - guaranteeStatus.totalGuarantee)}.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Card
           title="Cash in vs stock spend"
           subtitle="Last 7 days · Daily customer payments compared to stock load purchase totals"
           className="lg:col-span-3"
@@ -811,11 +988,9 @@ export default function AnalyticsPage() {
         ) : (
           <>
           <div className={mobileCardList}>
-            {chequeDepositQueue.items.map((row) => {
-              const rowKey = depositQueueRowKey(row);
-              return (
+            {chequeDepositQueue.items.map((row) => (
                 <MobileRowCard
-                  key={rowKey}
+                  key={depositQueueRowKey(row)}
                   title={row.customerName || '—'}
                   subtitle={`Bill #${row.billNumber || '—'} · Cheque #${row.chequeNumber || '—'}`}
                   fields={[
@@ -825,19 +1000,8 @@ export default function AnalyticsPage() {
                     },
                     { label: 'Amount', value: formatLkrExact(Number(row.chequeAmount) || 0) },
                   ]}
-                  actions={
-                    <button
-                      type="button"
-                      disabled={!!markingChequeId}
-                      onClick={() => handleMarkChequeDeposited(row)}
-                      className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {markingChequeId === rowKey ? 'Saving…' : 'Mark deposited'}
-                    </button>
-                  }
                 />
-              );
-            })}
+              ))}
           </div>
           <div className={`hidden sm:block ${scrollTableWrap}`}>
             <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
@@ -848,7 +1012,6 @@ export default function AnalyticsPage() {
                   <th className="whitespace-nowrap px-3 py-3 font-mono">Cheque #</th>
                   <th className="whitespace-nowrap px-3 py-3">Cheque date</th>
                   <th className="whitespace-nowrap px-3 py-3 text-right">Cheque amount</th>
-                  <th className="whitespace-nowrap px-3 py-3 text-center"> </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -864,16 +1027,6 @@ export default function AnalyticsPage() {
                     </td>
                     <td className="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-violet-800">
                       {formatLkrExact(Number(row.chequeAmount) || 0)}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-center">
-                      <button
-                        type="button"
-                        disabled={!!markingChequeId}
-                        onClick={() => handleMarkChequeDeposited(row)}
-                        className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {markingChequeId === depositQueueRowKey(row) ? 'Saving…' : 'Mark deposited'}
-                      </button>
                     </td>
                   </tr>
                 ))}

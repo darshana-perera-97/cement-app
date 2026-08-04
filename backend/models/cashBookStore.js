@@ -2,9 +2,31 @@ const fs = require('fs').promises;
 const path = require('path');
 const { toNonNegMoney } = require('./customersStore');
 
-const CASH_BOOK_FILE = path.join(__dirname, 'data', 'cashBookEntries.json');
+const CASH_BOOK_FILE = path.join(__dirname, '..', 'data', 'cashBookEntries.json');
 
-const CATEGORIES = ['bank_deposit', 'salary', 'fuel', 'maintenance', 'purchase_order', 'other'];
+const CATEGORIES = [
+  'bank_deposit',
+  'salary',
+  'fuel',
+  'maintenance',
+  'purchase_order',
+  'other',
+  'company_cheque',
+  'owner_share',
+];
+
+const OWNER_SHARE_DIRECTIONS = ['from_owner', 'to_owner'];
+const OWNER_SHARE_PAYMENT_METHODS = ['cash', 'cheque'];
+
+function isIncomingChequeEntry(entry) {
+  const category = String(entry?.category ?? '').trim();
+  if (category === 'company_cheque') return true;
+  if (category !== 'owner_share') return false;
+  return (
+    String(entry.ownerShareDirection ?? '').trim() === 'from_owner' &&
+    String(entry.paymentMethod ?? '').trim() === 'cheque'
+  );
+}
 
 const BANK_DEPOSIT_TYPES = ['transfer', 'bank_deposit', 'deposit_machine', 'other'];
 
@@ -85,6 +107,34 @@ function normalizeEntry(row) {
   if (depositType) entry.depositType = depositType;
   const depositTypeOther = String(row.depositTypeOther ?? '').trim();
   if (depositTypeOther) entry.depositTypeOther = depositTypeOther;
+  const chequeNumber = String(row.chequeNumber ?? '').trim();
+  const chequeDate = normalizeYmd(row.chequeDate);
+  const amountToAdd = toNonNegMoney(row.amountToAdd);
+  if (chequeNumber) entry.chequeNumber = chequeNumber;
+  if (chequeDate) entry.chequeDate = chequeDate;
+  if (amountToAdd > 0) entry.amountToAdd = amountToAdd;
+  const ownerShareDirection = String(row.ownerShareDirection ?? '').trim();
+  const paymentMethod = String(row.paymentMethod ?? '').trim();
+  if (ownerShareDirection) entry.ownerShareDirection = ownerShareDirection;
+  if (paymentMethod) entry.paymentMethod = paymentMethod;
+  if (category === 'company_cheque' || (category === 'owner_share' && isIncomingChequeEntry({ category, ownerShareDirection, paymentMethod }))) {
+    entry.chequeDeposited = !!row.chequeDeposited;
+    entry.chequeDepositedAt = String(row.chequeDepositedAt ?? '').trim();
+    entry.chequeDepositedBy = String(row.chequeDepositedBy ?? '').trim();
+    const depBankId = String(row.chequeDepositedBankAccountId ?? '').trim();
+    if (depBankId) entry.chequeDepositedBankAccountId = depBankId;
+    if (row.chequeDepositedBankAccount && typeof row.chequeDepositedBankAccount === 'object') {
+      entry.chequeDepositedBankAccount = {
+        id: String(row.chequeDepositedBankAccount.id ?? '').trim(),
+        nickName: String(row.chequeDepositedBankAccount.nickName ?? '').trim(),
+        bank: String(row.chequeDepositedBankAccount.bank ?? '').trim(),
+        accountNumber: String(row.chequeDepositedBankAccount.accountNumber ?? '').trim(),
+        accountType: String(row.chequeDepositedBankAccount.accountType ?? '').trim(),
+      };
+    }
+    const depNote = String(row.chequeDepositedNote ?? '').trim();
+    if (depNote) entry.chequeDepositedNote = depNote;
+  }
   const poId = String(row.poId ?? '').trim();
   const poNumber = String(row.poNumber ?? '').trim();
   const batchId = String(row.batchId ?? '').trim();
@@ -179,6 +229,44 @@ function validateCreateBody(body, { staffById, lorryById, bankAccountById } = {}
     if (!description) return { error: 'Description is required' };
   }
 
+  if (category === 'company_cheque') {
+    const chequeNumber = String(body.chequeNumber ?? '').trim();
+    if (!chequeNumber) return { error: 'Cheque number is required' };
+    const chequeDate = normalizeYmd(body.chequeDate);
+    if (!chequeDate) return { error: 'Cheque date is required' };
+    payload.chequeNumber = chequeNumber;
+    payload.chequeDate = chequeDate;
+    if (!description) {
+      payload.description = `Cheque #${chequeNumber}`;
+    }
+  }
+
+  if (category === 'owner_share') {
+    const ownerShareDirection = String(body.ownerShareDirection ?? '').trim();
+    if (!OWNER_SHARE_DIRECTIONS.includes(ownerShareDirection)) {
+      return { error: 'Select whether money is from owner or taken by owner' };
+    }
+    const paymentMethod = String(body.paymentMethod ?? '').trim();
+    if (!OWNER_SHARE_PAYMENT_METHODS.includes(paymentMethod)) {
+      return { error: 'Select cash or cheque' };
+    }
+    payload.ownerShareDirection = ownerShareDirection;
+    payload.paymentMethod = paymentMethod;
+    if (paymentMethod === 'cheque') {
+      const chequeNumber = String(body.chequeNumber ?? '').trim();
+      if (!chequeNumber) return { error: 'Cheque number is required' };
+      const chequeDate = normalizeYmd(body.chequeDate);
+      if (!chequeDate) return { error: 'Cheque date is required' };
+      payload.chequeNumber = chequeNumber;
+      payload.chequeDate = chequeDate;
+    }
+    if (!description) {
+      const dirLabel = ownerShareDirection === 'from_owner' ? 'From owner' : 'Taken by owner';
+      const methodLabel = paymentMethod === 'cheque' ? 'cheque' : 'cash';
+      payload.description = `${dirLabel} · ${methodLabel}`;
+    }
+  }
+
   if (category === 'bank_deposit') {
     const rawIds = body.bankAccountIds;
     const ids = Array.isArray(rawIds)
@@ -221,6 +309,23 @@ function validateCreateBody(body, { staffById, lorryById, bankAccountById } = {}
   return { payload };
 }
 
+function markCompanyChequeDeposited(entry, { recordedBy, depositedAt, bankAccountId, bankAccount, note }) {
+  const e = { ...entry };
+  if (!isIncomingChequeEntry(e)) {
+    return { entry: e, error: 'Not a depositable incoming cheque entry' };
+  }
+  if (e.chequeDeposited) {
+    return { entry: e, error: 'This cheque is already marked as deposited' };
+  }
+  e.chequeDeposited = true;
+  e.chequeDepositedAt = depositedAt;
+  e.chequeDepositedBy = recordedBy;
+  if (bankAccountId) e.chequeDepositedBankAccountId = bankAccountId;
+  if (bankAccount) e.chequeDepositedBankAccount = bankAccount;
+  if (note) e.chequeDepositedNote = note;
+  return { entry: e };
+}
+
 async function readCashBookEntries() {
   const rows = await readCashBookEntriesRaw();
   return rows.map(normalizeEntry).filter((r) => r.id && r.category && r.date);
@@ -233,6 +338,10 @@ module.exports = {
   writeCashBookEntries,
   normalizeEntry,
   validateCreateBody,
+  markCompanyChequeDeposited,
+  isIncomingChequeEntry,
+  OWNER_SHARE_DIRECTIONS,
+  OWNER_SHARE_PAYMENT_METHODS,
   BANK_DEPOSIT_TYPES,
   normalizeDepositType,
   paymentDateDefaultYmd,

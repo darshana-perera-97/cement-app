@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const SENT_EMAILS_FILE = path.join(__dirname, 'data', 'sentEmails.json');
+const SENT_EMAILS_FILE = path.join(__dirname, '..', 'data', 'sentEmails.json');
 const MAX_SENT_EMAILS = 40;
 
 async function readSentEmails() {

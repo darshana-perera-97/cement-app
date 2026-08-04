@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const PAYMENTS_FILE = path.join(__dirname, 'data', 'payments.json');
+const PAYMENTS_FILE = path.join(__dirname, '..', 'data', 'payments.json');
 
 async function readPayments() {
   try {

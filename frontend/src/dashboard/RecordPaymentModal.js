@@ -418,19 +418,15 @@ export default function RecordPaymentModal({
                           const checked = form.appliedBillIds.includes(b.id);
                           return (
                             <li key={b.id}>
-                              <label
-                                className={`flex cursor-pointer gap-3 rounded-lg px-3 py-3 text-sm ring-1 transition sm:py-2.5 ${
+                              <button
+                                type="button"
+                                onClick={() => toggleAppliedBill(b.id)}
+                                className={`flex w-full cursor-pointer gap-3 rounded-lg px-3 py-3 text-left text-sm ring-1 transition sm:py-2.5 ${
                                   checked
                                     ? 'bg-indigo-50 ring-indigo-200'
                                     : 'bg-white ring-slate-200 hover:bg-slate-50'
                                 }`}
                               >
-                                <input
-                                  type="checkbox"
-                                  className="mt-1 h-[1.125rem] w-[1.125rem] shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35 sm:mt-0.5 sm:h-4 sm:w-4"
-                                  checked={checked}
-                                  onChange={() => toggleAppliedBill(b.id)}
-                                />
                                 <span className="min-w-0 flex-1">
                                   <span className="flex flex-col gap-0.5 sm:block">
                                     <span className="font-medium tabular-nums text-slate-900">{b.billDate || '—'}</span>
@@ -447,7 +443,7 @@ export default function RecordPaymentModal({
                                   </span>
                                   <span className="mt-1 block text-xs leading-snug text-slate-600">{b.details}</span>
                                 </span>
-                              </label>
+                              </button>
                             </li>
                           );
                         })}

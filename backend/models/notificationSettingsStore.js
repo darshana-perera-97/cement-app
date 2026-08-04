@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const NOTIFICATION_SETTINGS_FILE = path.join(__dirname, 'data', 'notificationSettings.json');
+const NOTIFICATION_SETTINGS_FILE = path.join(__dirname, '..', 'data', 'notificationSettings.json');
 
 const OVERDUE_BALANCE_SHARE_MODES = ['overdue_only', 'pending_only', 'both'];
 

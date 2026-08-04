@@ -1,5 +1,5 @@
 import { inDateRange } from './tableToolbar';
-import { cashPortion } from './paymentCheques';
+import { buildChequeTableRows, cashPortion } from './paymentCheques';
 import { CASH_BOOK_CATEGORY_LABELS, cashBookEntryDetail } from './cashBookCategories';
 
 function compareByDateAsc(a, b) {
@@ -15,9 +15,109 @@ function roundMoney(n) {
 }
 
 function applyEntryToBalance(balance, entry) {
+  if (entry.affectsBalance === false) return balance;
   const debit = Number(entry.debit) || 0;
   const credit = Number(entry.credit) || 0;
   return roundMoney(balance + debit - credit);
+}
+
+/** Pending cheques held (not yet deposited) — customer payments + company cheques, any converting date. */
+function appendPendingChequeEntries(entries, payments, cashBookEntries) {
+  buildChequeTableRows(payments, (p, c, flat) => {
+    if (c.chequeDeposited || c.chequeReturned) return null;
+    const receivedDate = String(p.date ?? '').slice(0, 10);
+    const customerName = String(p.customerName ?? '').trim() || '—';
+    const billNumber = p.billNumber != null ? String(p.billNumber) : '—';
+    const chequeNumber = flat.chequeNumber && flat.chequeNumber !== '—' ? flat.chequeNumber : '';
+    const converting = flat.chequeDate || '—';
+    entries.push({
+      id: `chq:${flat.rowKey}`,
+      kind: 'cheque_in',
+      date: receivedDate,
+      sortAt: p.createdAt || `${receivedDate}T12:00:00`,
+      type: 'Customer cheque',
+      details: [
+        customerName !== '—' ? customerName : '',
+        billNumber !== '—' ? `Bill #${billNumber}` : '',
+        chequeNumber ? `#${chequeNumber}` : '',
+        converting !== '—' ? `Converting ${converting}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ') || '—',
+      debit: flat.amount,
+      credit: null,
+      affectsBalance: false,
+      recordedBy: String(p.recordedBy ?? '').trim() || '—',
+      detailKind: 'bankCheque',
+      detailRow: {
+        id: p.id,
+        chequeId: c.id,
+        chequeDate: converting,
+        amount: flat.amount,
+        chequeNumber: chequeNumber || '—',
+        chequeDeposited: false,
+        customerName,
+        billNumber,
+        paymentDate: receivedDate || '—',
+      },
+    });
+    return null;
+  });
+
+  for (const e of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    const category = String(e.category ?? '').trim();
+    if (category === 'company_cheque') {
+      appendPendingIncomingChequeEntry(entries, e, {
+        type: 'Company cheque',
+        detailKind: 'companyCheque',
+        idPrefix: 'chq:company',
+      });
+      continue;
+    }
+    if (
+      category === 'owner_share' &&
+      String(e.ownerShareDirection ?? '').trim() === 'from_owner' &&
+      String(e.paymentMethod ?? '').trim() === 'cheque'
+    ) {
+      appendPendingIncomingChequeEntry(entries, e, {
+        type: 'Owner cheque',
+        detailKind: 'ownerCheque',
+        idPrefix: 'chq:owner',
+      });
+    }
+  }
+}
+
+function appendPendingIncomingChequeEntry(entries, e, { type, detailKind, idPrefix }) {
+  if (e.chequeDeposited) return;
+  const amount = Math.max(0, Number(e.amount) || 0);
+  if (amount <= 0) return;
+  const receivedDate = String(e.date ?? '').slice(0, 10);
+  const chequeNumber = String(e.chequeNumber ?? '').trim();
+  const converting = String(e.chequeDate ?? e.date ?? '').slice(0, 10) || '—';
+  entries.push({
+    id: `${idPrefix}:${e.id}`,
+    kind: 'cheque_in',
+    date: receivedDate,
+    sortAt: e.createdAt || `${receivedDate}T12:00:00`,
+    type,
+    details: cashBookEntryDetail(e),
+    debit: amount,
+    credit: null,
+    affectsBalance: false,
+    recordedBy: String(e.recordedBy ?? '').trim() || '—',
+    detailKind,
+    detailRow: {
+      id: e.id,
+      chequeDate: converting,
+      amount,
+      chequeNumber: chequeNumber || '—',
+      chequeDeposited: false,
+      receivedDate: receivedDate || '—',
+      description: String(e.description ?? '').trim() || '—',
+      ownerShareDirection: String(e.ownerShareDirection ?? '').trim() || undefined,
+    },
+  });
 }
 
 /** Cash on hand before any activity on `beforeYmd` (YYYY-MM-DD). */
@@ -67,16 +167,45 @@ export function buildCashBookSourceEntries(payments, cashBookEntries) {
     });
   }
 
+  appendPendingChequeEntries(entries, payments, cashBookEntries);
+
   for (const e of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
     const date = String(e.date ?? '').slice(0, 10);
+    const category = String(e.category ?? '').trim();
+    if (category === 'company_cheque') continue;
+    if (
+      category === 'owner_share' &&
+      String(e.ownerShareDirection ?? '').trim() === 'from_owner' &&
+      String(e.paymentMethod ?? '').trim() === 'cheque'
+    ) {
+      continue;
+    }
     const amt = Math.max(0, Number(e.amount) || 0);
-    const isBankDeposit = String(e.category ?? '').trim() === 'bank_deposit';
+    if (category === 'owner_share') {
+      const direction = String(e.ownerShareDirection ?? '').trim();
+      const isFromOwner = direction === 'from_owner';
+      entries.push({
+        id: isFromOwner ? `in:owner:${e.id}` : `out:owner:${e.id}`,
+        kind: isFromOwner ? 'owner_in' : 'owner_out',
+        date,
+        sortAt: e.createdAt || `${date}T12:00:00`,
+        type: isFromOwner ? 'Owner contribution' : 'Owner withdrawal',
+        details: cashBookEntryDetail(e),
+        debit: isFromOwner ? amt : null,
+        credit: isFromOwner ? null : amt,
+        recordedBy: String(e.recordedBy ?? '').trim() || '—',
+        detailKind: 'expense',
+        detailRow: e,
+      });
+      continue;
+    }
+    const isBankDeposit = category === 'bank_deposit';
     entries.push({
       id: `out:${e.id}`,
       kind: isBankDeposit ? 'bank_deposit' : 'expense',
       date,
       sortAt: e.createdAt || `${date}T12:00:00`,
-      type: CASH_BOOK_CATEGORY_LABELS[e.category] || e.category || 'Expense',
+      type: CASH_BOOK_CATEGORY_LABELS[category] || category || 'Expense',
       details: cashBookEntryDetail(e),
       debit: null,
       credit: amt,
@@ -141,6 +270,7 @@ export function summarizeCashBookLedger(ledgerRows) {
   let count = 0;
   for (const row of ledgerRows) {
     if (row.kind === 'starting') continue;
+    if (row.kind === 'cheque_in') continue;
     count += 1;
     debit += Number(row.debit) || 0;
     credit += Number(row.credit) || 0;

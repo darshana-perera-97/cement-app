@@ -138,7 +138,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   const addressParts = [addressLine1, addressLine2].filter(Boolean);
   if (addressParts.length > 0) {
     const addr = addressParts.join(', ');
-    doc.text(addr.startsWith('#') || addr.startsWith('No') ? addr : `#: ${addr}`, MARGIN, y);
+    doc.text(addr, MARGIN, y);
     y += 5;
   }
 

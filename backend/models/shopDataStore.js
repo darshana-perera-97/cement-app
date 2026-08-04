@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const SHOP_DATA_FILE = path.join(__dirname, 'data', 'shopData.json');
+const SHOP_DATA_FILE = path.join(__dirname, '..', 'data', 'shopData.json');
 
 const ACCOUNT_TYPES = ['Savings', 'Current', 'Fixed deposit', 'Other'];
 

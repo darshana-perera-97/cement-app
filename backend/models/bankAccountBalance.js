@@ -82,6 +82,26 @@ function sumDepositedPaymentChequesByAccount(payments) {
   return totals;
 }
 
+function sumDepositedCompanyChequesByAccount(cashBookEntries) {
+  const totals = {};
+  for (const row of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    const category = String(row.category ?? '').trim();
+    const isCompany = category === 'company_cheque';
+    const isOwnerCheque =
+      category === 'owner_share' &&
+      String(row.ownerShareDirection ?? '').trim() === 'from_owner' &&
+      String(row.paymentMethod ?? '').trim() === 'cheque';
+    if (!isCompany && !isOwnerCheque) continue;
+    if (!row.chequeDeposited) continue;
+    const bankAccountId = String(row.chequeDepositedBankAccountId ?? '').trim();
+    if (!bankAccountId) continue;
+    const amt = toNonNegMoney(row.amount);
+    if (amt <= 0) continue;
+    totals[bankAccountId] = (totals[bankAccountId] || 0) + amt;
+  }
+  return totals;
+}
+
 /**
  * Running bank balance per account (may be negative).
  * Cleared PO cheques: converting date (chequeDate) <= asOf.
@@ -98,6 +118,7 @@ function computeBankAccountBalances({
   const accounts = Array.isArray(bankAccounts) ? bankAccounts : [];
   const deposits = sumDepositsByAccount(cashBookEntries);
   const incomingCheques = sumDepositedPaymentChequesByAccount(payments);
+  const companyCheques = sumDepositedCompanyChequesByAccount(cashBookEntries);
   const outgoing = collectPurchaseOrderOutgoingCheques(purchaseOrders);
 
   const clearedOutgoing = {};
@@ -119,7 +140,7 @@ function computeBankAccountBalances({
     const id = String(a.id ?? '').trim();
     if (!id) continue;
     const depositTotal = deposits[id] || 0;
-    const incomingTotal = incomingCheques[id] || 0;
+    const incomingTotal = (incomingCheques[id] || 0) + (companyCheques[id] || 0);
     const cleared = clearedOutgoing[id] || 0;
     const pending = pendingOutgoing[id] || 0;
     const balance = Math.round((depositTotal + incomingTotal - cleared) * 100) / 100;

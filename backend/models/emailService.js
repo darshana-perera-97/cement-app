@@ -3,7 +3,7 @@ const { readEmailConfig } = require('./emailConfigsStore');
 const { readNotificationSettings, isNotificationTypeEnabled } = require('./notificationSettingsStore');
 const { readCompanyData } = require('./companyDataStore');
 const { appendSentEmail } = require('./sentEmailsStore');
-const { buildBillEmail, buildPaymentEmail, buildPromotionEmail, buildOverdueBalanceEmail } = require('./emailTemplates');
+const { buildBillEmail, buildPaymentEmail, buildPromotionEmail, buildUnloadEmail, buildOverdueBalanceEmail } = require('./emailTemplates');
 
 async function createTransporter(config) {
   if (!config.host || !config.user || !config.pass) return null;
@@ -52,10 +52,13 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount, refe
       built = buildBillEmail({ customer, bill: record, remainingAmount, company, hideFinancialDetails });
       break;
     case 'payment':
-      built = buildPaymentEmail({ customer, payment: record, remainingAmount, company, hideFinancialDetails });
+      built = buildPaymentEmail({ customer, payment: record, remainingAmount, company });
       break;
     case 'promotion':
       built = buildPromotionEmail({ customer, promotion: record, company });
+      break;
+    case 'unload':
+      built = buildUnloadEmail({ customer, unload: record, company });
       break;
     case 'overdue_balance': {
       const payload = record && typeof record === 'object' ? record : {};
@@ -66,7 +69,6 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount, refe
         totalPendingAmount: payload.totalPendingAmount,
         shareMode: payload.shareMode,
         company,
-        hideFinancialDetails,
       });
       break;
     }
@@ -121,6 +123,10 @@ function notifyPromotionEmail(customer, promotion) {
   return sendCustomerEmail({ type: 'promotion', customer, record: promotion });
 }
 
+function notifyUnloadEmail(customer, unload) {
+  return sendCustomerEmail({ type: 'unload', customer, record: unload });
+}
+
 function notifyOverdueBalanceEmail(customer, payload, referenceId) {
   return sendCustomerEmail({ type: 'overdue_balance', customer, record: payload, referenceId });
 }
@@ -129,6 +135,7 @@ module.exports = {
   notifyBillEmail,
   notifyPaymentEmail,
   notifyPromotionEmail,
+  notifyUnloadEmail,
   notifyOverdueBalanceEmail,
   sendCustomerEmail,
 };

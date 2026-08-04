@@ -7,7 +7,7 @@ const {
   getEffectiveManagerAccess,
 } = require('./managerAccess');
 
-const USERS_FILE = path.join(__dirname, 'data', 'users.json');
+const USERS_FILE = path.join(__dirname, '..', 'data', 'users.json');
 
 const STAFF_ROLES = ['Admin', 'Manager', 'Driver', 'Collector'];
 

@@ -5,6 +5,23 @@ export const BANK_DEPOSIT_TYPE_OPTIONS = [
   { value: 'other', label: 'Other' },
 ];
 
+export const BANK_GUARANTEE_TYPE_OPTIONS = [
+  { value: 'fixed_deposit', label: 'Fixed deposit' },
+  { value: 'property', label: 'Property' },
+  { value: 'other', label: 'Other' },
+];
+
+export function bankGuaranteeTypeLabel(entry) {
+  if (!entry || typeof entry !== 'object') return '—';
+  const type = String(entry.guaranteeType ?? '').trim();
+  if (type === 'other') {
+    const custom = String(entry.guaranteeTypeOther ?? '').trim();
+    return custom || 'Other';
+  }
+  const found = BANK_GUARANTEE_TYPE_OPTIONS.find((o) => o.value === type);
+  return found?.label || type || '—';
+}
+
 export function bankDepositTypeLabel(entry) {
   if (!entry || typeof entry !== 'object') return '—';
   const type = String(entry.depositType ?? '').trim();
@@ -23,6 +40,18 @@ export const CASH_BOOK_CATEGORY_LABELS = {
   maintenance: 'Maintenance',
   purchase_order: 'Purchase order',
   other: 'Other',
+  company_cheque: 'Company cheque',
+  owner_share: 'Owner share',
+};
+
+export const OWNER_SHARE_DIRECTION_LABELS = {
+  from_owner: 'From owner',
+  to_owner: 'Taken by owner',
+};
+
+export const OWNER_SHARE_PAYMENT_METHOD_LABELS = {
+  cash: 'Cash',
+  cheque: 'Cheque',
 };
 
 export const CASHIER_EXPENSE_ACTIONS = [
@@ -65,6 +94,29 @@ export function cashBookEntryDetail(entry) {
     const poRef = String(entry.poNumber ?? '').trim();
     if (desc) return desc;
     return poRef ? `PO ${poRef}` : 'Purchase order payment';
+  }
+  if (cat === 'company_cheque') {
+    const num = String(entry.chequeNumber ?? '').trim();
+    const chequeDate = String(entry.chequeDate ?? '').trim();
+    const chequeAmt = Math.max(0, Number(entry.amount) || 0);
+    const parts = [
+      num ? `#${num}` : '',
+      chequeDate || '',
+      chequeAmt > 0 ? chequeAmt.toLocaleString() : '',
+    ].filter(Boolean);
+    const note = String(entry.description ?? '').trim();
+    if (parts.length > 0) return note ? `${parts.join(' · ')} — ${note}` : parts.join(' · ');
+    return note || 'Company cheque';
+  }
+  if (cat === 'owner_share') {
+    const dir = OWNER_SHARE_DIRECTION_LABELS[String(entry.ownerShareDirection ?? '').trim()] || '';
+    const method = OWNER_SHARE_PAYMENT_METHOD_LABELS[String(entry.paymentMethod ?? '').trim()] || '';
+    const num = String(entry.chequeNumber ?? '').trim();
+    const chequeDate = String(entry.chequeDate ?? '').trim();
+    const parts = [dir, method, num ? `#${num}` : '', chequeDate].filter(Boolean);
+    const note = String(entry.description ?? '').trim();
+    if (parts.length > 0) return note ? `${parts.join(' · ')} — ${note}` : parts.join(' · ');
+    return note || 'Owner share';
   }
   return String(entry.description ?? '').trim() || '—';
 }

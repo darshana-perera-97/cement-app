@@ -7,7 +7,7 @@ const {
   normalizeTimeHHMM,
   normalizeWeekday,
 } = require('./notificationSettingsStore');
-const { normalizeCustomerName, computeRemainingAmount, paymentCreditToCustomer } = require('./customerBalance');
+const { computeRemainingAmount, computeBillPaymentAllocation } = require('./customerBalance');
 const { notifyOverdueBalanceEmail } = require('./emailService');
 const { notifyOverdueBalanceWhatsApp } = require('./whatsappService');
 
@@ -73,26 +73,13 @@ function billDetailsLine(bill) {
 function getCustomerUnpaidBillRows(customer, bills, payments, overdueDates) {
   const todayYmd = todayYmdLocal();
   const settlementDays = getOverdueDaysForCustomer(overdueDates, customer.id) ?? DEFAULT_OVERDUE_DAYS;
-  const nk = normalizeCustomerName(customer.name);
-  const custBills = bills.filter((b) => normalizeCustomerName(b.customerName) === nk);
-  let paySum = 0;
-  for (const p of payments) {
-    if (p.customerId === customer.id) paySum += paymentCreditToCustomer(p);
-  }
-  const sortedBills = [...custBills].sort((a, b) => {
-    const cmp = String(a.date).localeCompare(String(b.date));
-    if (cmp !== 0) return cmp;
-    return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
-  });
-  let remainingCredit = paySum;
-  const pastOwed = toNonNegMoney(customer.pastBill);
-  remainingCredit -= Math.min(pastOwed, remainingCredit);
+  const { paidByBillId, custBills } = computeBillPaymentAllocation(customer, bills, payments);
 
   const rows = [];
-  for (const bill of sortedBills) {
+  for (const bill of custBills) {
     const total = toNonNegMoney(bill.totalAmount);
-    const paidTowardBill = Math.min(total, remainingCredit);
-    remainingCredit -= paidTowardBill;
+    const id = String(bill.id ?? '').trim();
+    const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
     const outstanding = Math.round((total - paidTowardBill) * 100) / 100;
     if (outstanding <= 0) continue;
     const dueDate = addDaysToYmd(bill.date, settlementDays);
@@ -117,7 +104,6 @@ function buildReminderPayload(customer, bills, payments, overdueDates, shareMode
   const totalPendingAmount = computeRemainingAmount(customer, bills, payments);
   const totalOverdueAmount = overdueBills.reduce((s, r) => s + r.outstandingAmount, 0);
 
-  const includeOverdue = shareMode === 'overdue_only' || shareMode === 'both';
   const includePending = shareMode === 'pending_only' || shareMode === 'both';
 
   let shouldSend = false;
@@ -132,7 +118,7 @@ function buildReminderPayload(customer, bills, payments, overdueDates, shareMode
   return {
     shouldSend,
     shareMode,
-    overdueBills: includeOverdue ? overdueBills : [],
+    overdueBills,
     pendingBills: includePending ? unpaidRows : [],
     totalOverdueAmount: Math.round(totalOverdueAmount * 100) / 100,
     totalPendingAmount: Math.round(totalPendingAmount * 100) / 100,

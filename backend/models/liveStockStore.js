@@ -5,7 +5,7 @@ const { readBills, sumAllBillBagsByBrand } = require('./billsStore');
 const { readPromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
 const { buildDailyStockPayload } = require('./dailyStockStore');
 
-const LIVE_FILE = path.join(__dirname, 'data', 'liveStock.json');
+const LIVE_FILE = path.join(__dirname, '..', 'data', 'liveStock.json');
 
 const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
 

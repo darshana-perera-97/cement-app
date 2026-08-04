@@ -75,17 +75,20 @@ const OVERDUE_SHARE_MODE_OPTIONS = [
   {
     value: 'overdue_only',
     label: 'Overdue bills only',
-    description: 'List bills past their settlement window. Skips customers with no overdue bills.',
+    description:
+      'List overdue bills with the amount still owed on each, plus a total. Skips customers with no overdue bills.',
   },
   {
     value: 'pending_only',
     label: 'Pending balance only',
-    description: 'Send the total amount still owed, without listing individual bills.',
+    description:
+      'Send the total amount still owed. Overdue bills are also listed with amounts when any exist.',
   },
   {
     value: 'both',
     label: 'Both',
-    description: 'List overdue bills and include the total pending balance.',
+    description:
+      'List overdue bills with amounts, total overdue, and the total pending balance.',
   },
 ];
 
@@ -93,7 +96,8 @@ const NOTIFICATION_STAGE_OPTIONS = [
   {
     key: 'notifyBill',
     label: 'Credit sale (bill)',
-    description: 'When a credit bill is recorded or an unload request is approved.',
+    description:
+      'When a credit bill is recorded. On unload approval, sent when prices are shown to customers.',
   },
   {
     key: 'notifyPayment',
@@ -108,7 +112,8 @@ const NOTIFICATION_STAGE_OPTIONS = [
   {
     key: 'notifyUnload',
     label: 'Delivery unloaded',
-    description: 'When a driver unload is approved at the shop.',
+    description:
+      'When bags are unloaded at a shop (/unloads), sends the customer a delivery confirmation with bag type and bag count only.',
   },
   {
     key: 'notifyChequeReturn',
@@ -779,10 +784,12 @@ export default function MessagesPage() {
                 Hide prices and balances from customers
               </span>
               <span className="mt-0.5 block text-xs text-slate-600">
-                When ticked, messages hide bill totals, cheque amounts, and balance to pay. Cash
-                received on payments is still included so customers get a receipt for money they
-                handed over. This controls what you share with customers; it does not change how
-                prices are calculated in the app.
+                When ticked, new credit-sale messages hide per-bag prices, bill totals, and balance
+                to pay. On unload approval, the credit-sale message is skipped when a delivery
+                confirmation is sent instead. Payment receipts, cheque-return notices, and balance
+                reminders always include amounts. When unticked, unload approval also sends the
+                credit-sale message with prices. This does not change how prices are calculated in
+                the app.
               </span>
             </span>
           </label>
@@ -808,7 +815,9 @@ export default function MessagesPage() {
             <span className="min-w-0">
               <span className="block text-sm font-semibold text-slate-800">Enable weekly balance reminders</span>
               <span className="mt-0.5 block text-xs text-slate-600">
-                Customers with a contact number or email receive a reminder when they have amounts to collect.
+                Customers with a contact number or email receive a weekly reminder with amounts
+                still owed. Overdue bills are always listed with the outstanding amount on each bill
+                when any exist.
               </span>
             </span>
           </label>

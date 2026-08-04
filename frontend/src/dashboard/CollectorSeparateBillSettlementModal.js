@@ -360,7 +360,7 @@ export default function CollectorSeparateBillSettlementModal({
               <p className="mt-1 text-sm text-slate-500">
                 {step === 1
                   ? 'Select the shop and enter cash or cheque payment details.'
-                  : 'Split the payment across pending invoices. Partial amounts are allowed.'}
+                  : 'Split the payment across pending invoices. You can settle any invoices in any order — partial amounts are allowed.'}
               </p>
             </div>
             <span className="shrink-0 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
@@ -567,7 +567,7 @@ export default function CollectorSeparateBillSettlementModal({
                       </p>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
-                      Enter how much of this payment applies to each invoice. Partial amounts are allowed.
+                      Enter how much of this payment applies to each invoice. Settle any invoices in any order — partial amounts are allowed.
                     </p>
                     {pendingBills.length === 0 ? (
                       <p className="mt-3 text-sm text-slate-500">No outstanding credit invoices for this shop.</p>

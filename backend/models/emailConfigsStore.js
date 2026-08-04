@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-const EMAIL_CONFIG_FILE = path.join(__dirname, 'data', 'emailConfigs.json');
+const EMAIL_CONFIG_FILE = path.join(__dirname, '..', 'data', 'emailConfigs.json');
 
 const DEFAULT_EMAIL_CONFIG = {
   enabled: false,

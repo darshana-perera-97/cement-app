@@ -18,12 +18,23 @@ function formatDate(ymd) {
   return dt.toLocaleDateString('en-LK', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function billBagLines(record) {
+function billBagLines(record, hideFinancialDetails = false) {
   const lines = [];
   for (const key of Object.keys(BRAND_LABELS)) {
     const bags = Number(record[`${key}Bags`]) || 0;
     if (bags > 0) {
-      lines.push(`• ${BRAND_LABELS[key]}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
+      let line = `• ${BRAND_LABELS[key]}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
+      if (!hideFinancialDetails) {
+        const unitPrice = Number(record[`${key}UnitPrice`]);
+        const lineTotal = Number(record[`${key}Line`]);
+        if (Number.isFinite(unitPrice) && unitPrice > 0) {
+          line += ` @ ${formatMoney(unitPrice)}`;
+        }
+        if (Number.isFinite(lineTotal) && lineTotal > 0) {
+          line += ` · ${formatMoney(lineTotal)}`;
+        }
+      }
+      lines.push(line);
     }
   }
   return lines;
@@ -57,9 +68,13 @@ function buildBillWhatsApp({ customer, bill, remainingAmount, company, hideFinan
     messageHeader({ company, title: 'Credit sale recorded' }),
     `Customer: ${customer.name}`,
     `Date: ${formatDate(bill.date)}`,
-    ...billBagLines(bill),
+    ...billBagLines(bill, hideFinancialDetails),
   ];
   if (!hideFinancialDetails) {
+    const billTotal = Number(bill.totalAmount);
+    if (Number.isFinite(billTotal) && billTotal > 0) {
+      lines.push('', `*Bill total:* ${formatMoney(billTotal)}`);
+    }
     lines.push('', `*Balance to pay:* ${formatMoney(remainingAmount)}`);
   }
   lines.push('', 'This is an automated notification from your cement distributor account.');
@@ -188,8 +203,7 @@ function unloadBagLines(record) {
   for (const key of Object.keys(BRAND_LABELS)) {
     const bags = Number(record[`${key}Bags`]) || 0;
     if (bags > 0) {
-      const label = BRAND_LABELS[key];
-      lines.push(`${label} ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'} has been unloaded.`);
+      lines.push(`• ${BRAND_LABELS[key]}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
     }
   }
   return lines;
@@ -222,30 +236,19 @@ function buildOverdueBalanceWhatsApp({
     `Date: ${formatDate(new Date().toISOString().slice(0, 10))}`,
   ];
 
-  if (shareMode === 'overdue_only' || shareMode === 'both') {
-    if (overdueBills.length > 0) {
-      lines.push('', '*Overdue bills*');
-      for (const bill of overdueBills) {
-        lines.push(formatBillLine({ ...bill, hideFinancialDetails }));
-      }
-      if (!hideFinancialDetails && totalOverdueAmount > 0) {
-        lines.push('', `*Total overdue:* ${formatMoney(totalOverdueAmount)}`);
-      }
+  if (overdueBills.length > 0) {
+    lines.push('', '*Overdue bills*');
+    for (const bill of overdueBills) {
+      lines.push(formatBillLine({ ...bill, hideFinancialDetails: false }));
+    }
+    if (totalOverdueAmount > 0) {
+      lines.push('', `*Total overdue:* ${formatMoney(totalOverdueAmount)}`);
     }
   }
 
-  if (shareMode === 'pending_only') {
-    if (!hideFinancialDetails && totalPendingAmount > 0) {
+  if (shareMode === 'pending_only' || shareMode === 'both') {
+    if (totalPendingAmount > 0) {
       lines.push('', `*Total pending balance:* ${formatMoney(totalPendingAmount)}`);
-    } else if (hideFinancialDetails) {
-      lines.push('', 'You have an outstanding balance on your account.');
-    }
-  } else if (shareMode === 'both') {
-    if (!hideFinancialDetails && totalPendingAmount > 0) {
-      lines.push('', `*Total pending balance:* ${formatMoney(totalPendingAmount)}`);
-    }
-    if (hideFinancialDetails && pendingBills.length > 0 && overdueBills.length === 0) {
-      lines.push('', 'You have unpaid bills on your account.');
     }
   }
 
@@ -257,30 +260,30 @@ function buildOverdueBalanceWhatsApp({
       ? totalPendingAmount
       : totalOverdueAmount;
   return {
-    preview: hideFinancialDetails
-      ? `Balance reminder · ${customer.name}`
-      : `Balance reminder — ${formatMoney(previewAmount)} · ${customer.name}`,
+    preview: `Balance reminder — ${formatMoney(previewAmount)} · ${customer.name}`,
     text: lines.join('\n'),
   };
 }
 
 function buildUnloadWhatsApp({ customer, unload, company }) {
-  const unloadLines = unloadBagLines(unload);
-  const previewBrand = unloadLines.length === 1
-    ? unloadLines[0].replace(' has been unloaded.', ' unloaded')
-    : `${unloadLines.length} brands unloaded`;
+  const bagLines = unloadBagLines(unload);
+  const totalBags = bagLines.length
+    ? Object.keys(BRAND_LABELS).reduce((sum, key) => sum + (Number(unload[`${key}Bags`]) || 0), 0)
+    : 0;
+  const previewBrand =
+    bagLines.length === 1
+      ? bagLines[0].replace(/^• /, '').replace(/: \d+ bag.*$/, ' unloaded')
+      : `${totalBags.toLocaleString()} bags unloaded`;
 
   const lines = [
     messageHeader({ company, title: 'Delivery unloaded' }),
     `Shop: ${customer.name}`,
     `Date: ${formatDate(unload.date)}`,
     '',
-    ...unloadLines,
+    ...bagLines,
+    '',
+    'This is an automated notification from your cement distributor account.',
   ];
-  if (unload.driverName) lines.push('', `Driver: ${unload.driverName}`);
-  if (unload.note) lines.push(`Note: ${unload.note}`);
-  lines.push('');
-  lines.push('This is an automated notification from your cement distributor account.');
   return {
     preview: `${previewBrand} · ${customer.name}`,
     text: lines.join('\n'),
