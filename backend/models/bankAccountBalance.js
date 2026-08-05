@@ -35,6 +35,8 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
           : `po:${poId}:${i}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
+      const distributorId = String(po.distributorId ?? '').trim();
+      const distributorName = String(po.distributorName ?? '').trim();
       rows.push({
         bankAccountId,
         amount,
@@ -44,6 +46,8 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
         batchId: batchId || undefined,
         product: String(po.product ?? '').trim() || undefined,
         source: 'purchase_order',
+        ...(distributorId ? { distributorId } : {}),
+        ...(distributorName ? { distributorName } : {}),
       });
     }
   }

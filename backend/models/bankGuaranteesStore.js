@@ -53,13 +53,26 @@ function normalizeEntry(row) {
       accountType: String(row.bankAccount.accountType ?? '').trim(),
     };
   }
+  const distributorId = String(row.distributorId ?? '').trim();
+  if (distributorId) entry.distributorId = distributorId;
+  const distributorName = String(row.distributorName ?? '').trim();
+  if (distributorName) entry.distributorName = distributorName;
   return entry;
 }
 
-function validateCreateBody(body, { bankAccountById } = {}) {
+function validateCreateBody(body, { bankAccountById, distributorById } = {}) {
   const recordedBy = String(body.recordedBy ?? '').trim();
   if (!recordedBy) {
     return { error: 'recordedBy (username) is required' };
+  }
+
+  const distributorId = String(body.distributorId ?? '').trim();
+  if (!distributorId) {
+    return { error: 'Select a distributor' };
+  }
+  const distributor = distributorById?.get(distributorId);
+  if (!distributor) {
+    return { error: 'Selected distributor was not found' };
   }
 
   const amount = toNonNegMoney(body.amount);
@@ -82,6 +95,8 @@ function validateCreateBody(body, { bankAccountById } = {}) {
     guaranteeType,
     description,
     recordedBy,
+    distributorId,
+    distributorName: String(distributor.name ?? '').trim() || distributorId,
   };
 
   const guaranteeTypeOther = String(body.guaranteeTypeOther ?? '').trim();

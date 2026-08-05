@@ -204,7 +204,7 @@ export default function DashboardLayout() {
     let cancelled = false;
     async function loadStock() {
       try {
-        const res = await fetch(`${apiRoot}/api/stocks/summary`);
+        const res = await fetch(`${apiRoot}/api/stocks/summary?distributorProductsOnly=1`);
         if (!cancelled && res.ok) {
           const sum = await res.json();
           setSidebarStockSummary({
@@ -435,7 +435,15 @@ export default function DashboardLayout() {
               ) : !sidebarStockSummary?.brands?.length ? (
                 <p className="mt-2 text-xs text-slate-500">No stock data.</p>
               ) : (
-                <div className="mt-2 grid grid-cols-4 gap-1.5">
+                <div
+                  className={`mt-2 grid gap-1.5 ${
+                    sidebarStockSummary.brands.length <= 2
+                      ? 'grid-cols-2'
+                      : sidebarStockSummary.brands.length === 3
+                        ? 'grid-cols-3'
+                        : 'grid-cols-4'
+                  }`}
+                >
                   {sidebarStockSummary.brands.map((b) => (
                     <div
                       key={b.key}
@@ -561,7 +569,7 @@ function RightPanel() {
     async function loadPanel() {
       try {
         const [stockRes, cashRes] = await Promise.all([
-          fetch(`${apiRoot}/api/stocks/summary`),
+          fetch(`${apiRoot}/api/stocks/summary?distributorProductsOnly=1`),
           fetch(`${apiRoot}/api/cash-summary`),
         ]);
 

@@ -8,6 +8,7 @@ import CashBookChequeDepositModal from './CashBookChequeDepositModal';
 import CashBookCompanyChequeModal from './CashBookCompanyChequeModal';
 import CashBookOwnerShareModal from './CashBookOwnerShareModal';
 import CashBookBankGuaranteeModal from './CashBookBankGuaranteeModal';
+import { summarizeGuaranteesByDistributor } from './guaranteeStatus';
 import BankAccountMultiSelect, { formatBankAccountsLabel } from './BankAccountMultiSelect';
 import {
   CASHIER_EXPENSE_ACTIONS,
@@ -1539,12 +1540,14 @@ function BankPanel({ refreshToken, onBooksChanged }) {
 function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
   const [guarantees, setGuarantees] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [distributors, setDistributors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [distributorFilter, setDistributorFilter] = useState('all');
   const [addOpen, setAddOpen] = useState(false);
   const [removeBusyId, setRemoveBusyId] = useState(null);
   const [removeErr, setRemoveErr] = useState(null);
@@ -1553,9 +1556,10 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     setLoading(true);
     setError(null);
     try {
-      const [bgRes, shopRes] = await Promise.all([
+      const [bgRes, shopRes, distRes] = await Promise.all([
         fetch(`${apiBase}/api/bank-guarantees`),
         fetch(`${apiBase}/api/shop`),
+        fetch(`${apiBase}/api/distributors`),
       ]);
       if (!bgRes.ok) throw new Error('Failed to load bank guarantees');
       const bgData = await bgRes.json();
@@ -1566,6 +1570,13 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
         setBankAccounts(Array.isArray(shopData.bankAccounts) ? shopData.bankAccounts : []);
       } else {
         setBankAccounts([]);
+      }
+
+      if (distRes.ok) {
+        const distData = await distRes.json();
+        setDistributors(Array.isArray(distData) ? distData : []);
+      } else {
+        setDistributors([]);
       }
     } catch (e) {
       setError(e.message || 'Could not load bank guarantees');
@@ -1584,6 +1595,13 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     if (typeFilter !== 'all') {
       list = list.filter((g) => g.guaranteeType === typeFilter);
     }
+    if (distributorFilter !== 'all') {
+      if (distributorFilter === '__unassigned__') {
+        list = list.filter((g) => !String(g.distributorId ?? '').trim());
+      } else {
+        list = list.filter((g) => g.distributorId === distributorFilter);
+      }
+    }
     if (!search.trim()) return list;
     return list.filter((g) =>
       rowMatchesQuery(search, [
@@ -1591,12 +1609,18 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
         bankGuaranteeTypeLabel(g),
         g.description,
         g.recordedBy,
+        g.distributorName,
         g.bankAccount?.nickName,
         g.bankAccount?.bank,
         String(g.amount),
       ]),
     );
-  }, [guarantees, dateFrom, dateTo, typeFilter, search]);
+  }, [guarantees, dateFrom, dateTo, typeFilter, distributorFilter, search]);
+
+  const distributorSummaries = useMemo(
+    () => summarizeGuaranteesByDistributor(guarantees.filter((row) => inDateRange(row.date, dateFrom, dateTo))),
+    [guarantees, dateFrom, dateTo],
+  );
 
   const totalAmount = useMemo(
     () => filteredRows.reduce((s, g) => s + Math.max(0, Number(g.amount) || 0), 0),
@@ -1611,7 +1635,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     return counts;
   }, [guarantees, dateFrom, dateTo]);
 
-  const pagination = useTablePagination(filteredRows.length, [dateFrom, dateTo, search, typeFilter]);
+  const pagination = useTablePagination(filteredRows.length, [dateFrom, dateTo, search, typeFilter, distributorFilter]);
   const pagedRows = useMemo(
     () => filteredRows.slice(pagination.offset, pagination.offset + pagination.pageSize),
     [filteredRows, pagination.offset, pagination.pageSize],
@@ -1661,6 +1685,15 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     return String(a.nickName ?? '').trim() || String(a.bank ?? '').trim() || id;
   };
 
+  const distributorLabelForRow = (g) => {
+    const name = String(g.distributorName ?? '').trim();
+    if (name) return name;
+    const id = String(g.distributorId ?? '').trim();
+    if (!id) return 'Unassigned';
+    const d = distributors.find((x) => x.id === id);
+    return d ? String(d.name ?? '').trim() || id : id;
+  };
+
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -1683,12 +1716,63 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
         </div>
       </div>
 
+      {!loading && distributorSummaries.length > 0 ? (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">By distributor</h2>
+            <p className="mt-0.5 text-sm text-slate-500">Total collateral recorded per distributor in the current date range.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {distributorSummaries.map((row) => (
+              <button
+                key={row.distributorId ?? '__unassigned__'}
+                type="button"
+                onClick={() =>
+                  setDistributorFilter((prev) => {
+                    const key = row.distributorId ?? '__unassigned__';
+                    return prev === key ? 'all' : key;
+                  })
+                }
+                className={`rounded-[20px] p-4 text-left shadow-lg shadow-slate-200/40 ring-1 transition hover:brightness-[1.01] sm:p-5 ${
+                  distributorFilter === (row.distributorId ?? '__unassigned__')
+                    ? 'bg-teal-50 ring-teal-200'
+                    : 'bg-white ring-slate-100'
+                }`}
+              >
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{row.distributorName}</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-teal-900">{money(row.total)}</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {row.count} guarantee{row.count === 1 ? '' : 's'}
+                </p>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="space-y-3">
         <div>
           <h2 className="text-sm font-bold text-slate-900">Bank guarantees</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Collateral held at the bank — fixed deposits, property, or other types.
+            Collateral held at the bank — grouped by distributor, type, and date.
           </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block text-sm font-medium text-slate-700">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Distributor</span>
+            <select
+              value={distributorFilter}
+              onChange={(e) => setDistributorFilter(e.target.value)}
+              className="rounded-xl border-0 bg-white px-3 py-2 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/35"
+            >
+              <option value="all">All distributors</option>
+              {distributorSummaries.map((row) => (
+                <option key={row.distributorId ?? '__unassigned__'} value={row.distributorId ?? '__unassigned__'}>
+                  {row.distributorName}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="flex flex-wrap gap-2">
           {BANK_GUARANTEE_TYPE_OPTIONS.map(({ value, label }) => {
@@ -1740,7 +1824,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Type, notes, account, amount…"
+            placeholder="Distributor, type, notes, account, amount…"
             className={filterControl}
           />
         </label>
@@ -1777,6 +1861,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                 subtitle={bankGuaranteeTypeLabel(g)}
                 badge={<GuaranteeTypeBadge guaranteeType={g.guaranteeType} />}
                 fields={[
+                  { label: 'Distributor', value: distributorLabelForRow(g) },
                   { label: 'Amount', value: money(g.amount) },
                   { label: 'Bank account', value: bankAccountLabelForRow(g) },
                   { label: 'Notes', value: g.description || '—' },
@@ -1797,10 +1882,11 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+                <th className="whitespace-nowrap px-4 py-3">Distributor</th>
                 <th className="whitespace-nowrap px-4 py-3">Type</th>
                 <th className="px-4 py-3">Bank account</th>
                 <th className="px-4 py-3">Notes</th>
@@ -1812,13 +1898,13 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                     {guarantees.length === 0
                       ? 'No bank guarantees yet.'
                       : 'No guarantees match your filters.'}
@@ -1829,6 +1915,9 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                   <tr key={g.id} className="hover:bg-slate-50/80">
                     <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>
                       {formatDisplayDate(g.date)}
+                    </td>
+                    <td className="max-w-[10rem] px-4 py-3 text-sm font-medium text-slate-800">
+                      {distributorLabelForRow(g)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <GuaranteeTypeBadge guaranteeType={g.guaranteeType} />
@@ -1861,7 +1950,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
             {!loading && filteredRows.length > 0 ? (
               <tfoot>
                 <tr className="border-t border-slate-200 bg-slate-50/90 text-sm font-semibold text-slate-900">
-                  <td className="px-4 py-3" colSpan={4}>
+                  <td className="px-4 py-3" colSpan={5}>
                     Total ({filteredRows.length})
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-900">
@@ -1893,6 +1982,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
           load();
         }}
         bankAccounts={bankAccounts}
+        distributors={distributors}
       />
     </>
   );

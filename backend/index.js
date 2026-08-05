@@ -1205,10 +1205,14 @@ app.get('/api/bank-guarantees', async (req, res) => {
     const from = String(req.query.from ?? '').trim().slice(0, 10);
     const to = String(req.query.to ?? '').trim().slice(0, 10);
     const guaranteeType = String(req.query.guaranteeType ?? '').trim();
+    const distributorId = String(req.query.distributorId ?? '').trim();
 
     let rows = await readBankGuarantees();
     if (guaranteeType) {
       rows = rows.filter((r) => r.guaranteeType === guaranteeType);
+    }
+    if (distributorId) {
+      rows = rows.filter((r) => r.distributorId === distributorId);
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
       rows = rows.filter((r) => r.date >= from);
@@ -1234,8 +1238,10 @@ app.post('/api/bank-guarantees', async (req, res) => {
     const body = req.body || {};
     const shop = await readShopData();
     const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+    const distributors = await readDistributors();
+    const distributorById = new Map(distributors.map((d) => [d.id, d]));
 
-    const validated = validateBankGuaranteeCreateBody(body, { bankAccountById });
+    const validated = validateBankGuaranteeCreateBody(body, { bankAccountById, distributorById });
     if (validated.error) {
       return res.status(400).json({ error: validated.error });
     }
@@ -3486,7 +3492,9 @@ app.get('/api/daily-stock', async (req, res) => {
 
 app.get('/api/stocks/summary', async (req, res) => {
   try {
-    const payload = await getLiveStockSummary();
+    const distributorProductsOnly =
+      req.query.distributorProductsOnly === '1' || req.query.distributorProductsOnly === 'true';
+    const payload = await getLiveStockSummary({ distributorProductsOnly });
     const unloads = await readUnloads();
     const pending = sumPendingUnloadBagsByBrand(unloads);
     const brands = (payload.brands || []).map((b) => {

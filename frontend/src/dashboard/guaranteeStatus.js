@@ -81,3 +81,113 @@ export function canIssueChequeUnderGuarantee(row, status) {
   }
   return false;
 }
+
+function sumPoPendingForDistributor(outgoingCheques, distributorId, asOfDate) {
+  const distId = String(distributorId ?? '').trim();
+  if (!distId) return { total: 0, count: 0 };
+  let total = 0;
+  let count = 0;
+  for (const row of Array.isArray(outgoingCheques) ? outgoingCheques : []) {
+    if (String(row.distributorId ?? '').trim() !== distId) continue;
+    const converting = String(row.chequeDate ?? '').slice(0, 10);
+    if (converting && converting <= asOfDate) continue;
+    const amount = Math.max(0, Number(row.amount) || 0);
+    if (amount <= 0) continue;
+    total += amount;
+    count += 1;
+  }
+  return { total, count };
+}
+
+function buildDistributorGuaranteeStatus({
+  distributorId,
+  distributorName,
+  guarantees,
+  poPendingOutgoing,
+  poPendingCount,
+}) {
+  const totalGuarantee = (Array.isArray(guarantees) ? guarantees : []).reduce(
+    (sum, g) => sum + Math.max(0, Number(g.amount) || 0),
+    0,
+  );
+  const pendingTotal = Math.max(0, Number(poPendingOutgoing) || 0);
+  const available = Math.max(0, totalGuarantee - pendingTotal);
+  const utilizationPct =
+    totalGuarantee > 0 ? Math.min(100, Math.round((pendingTotal / totalGuarantee) * 1000) / 10) : 0;
+  const overLimit = totalGuarantee > 0 && pendingTotal > totalGuarantee;
+
+  return {
+    distributorId,
+    distributorName,
+    totalGuarantee,
+    pendingTotal,
+    poPendingOutgoingTotal: pendingTotal,
+    poPendingCount: Math.max(0, Number(poPendingCount) || 0),
+    available,
+    utilizationPct,
+    overLimit,
+    hasGuarantee: totalGuarantee > 0,
+  };
+}
+
+/** Per-distributor guarantee vs PO outgoing cheques not yet converted. */
+export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheques = [], asOfDate = '' } = {}) {
+  const asOf = String(asOfDate ?? '').slice(0, 10);
+  const byDistributor = new Map();
+
+  for (const g of Array.isArray(guarantees) ? guarantees : []) {
+    const distributorId = String(g.distributorId ?? '').trim();
+    if (!distributorId) continue;
+    const distributorName = String(g.distributorName ?? '').trim() || distributorId;
+    if (!byDistributor.has(distributorId)) {
+      byDistributor.set(distributorId, { distributorId, distributorName, guarantees: [] });
+    }
+    byDistributor.get(distributorId).guarantees.push(g);
+  }
+
+  for (const row of Array.isArray(outgoingCheques) ? outgoingCheques : []) {
+    const distributorId = String(row.distributorId ?? '').trim();
+    if (!distributorId || byDistributor.has(distributorId)) continue;
+    const distributorName = String(row.distributorName ?? '').trim() || distributorId;
+    byDistributor.set(distributorId, { distributorId, distributorName, guarantees: [] });
+  }
+
+  const statuses = [];
+  for (const { distributorId, distributorName, guarantees: distGuarantees } of byDistributor.values()) {
+    const { total, count } = sumPoPendingForDistributor(outgoingCheques, distributorId, asOf);
+    statuses.push(
+      buildDistributorGuaranteeStatus({
+        distributorId,
+        distributorName,
+        guarantees: distGuarantees,
+        poPendingOutgoing: total,
+        poPendingCount: count,
+      }),
+    );
+  }
+
+  statuses.sort((a, b) => a.distributorName.localeCompare(b.distributorName));
+  return statuses;
+}
+
+export function summarizeGuaranteesByDistributor(guarantees) {
+  const byDistributor = new Map();
+  for (const g of Array.isArray(guarantees) ? guarantees : []) {
+    const distributorId = String(g.distributorId ?? '').trim();
+    const key = distributorId || '__unassigned__';
+    const distributorName = distributorId
+      ? String(g.distributorName ?? '').trim() || distributorId
+      : 'Unassigned';
+    if (!byDistributor.has(key)) {
+      byDistributor.set(key, { distributorId: distributorId || null, distributorName, total: 0, count: 0 });
+    }
+    const row = byDistributor.get(key);
+    row.total += Math.max(0, Number(g.amount) || 0);
+    row.count += 1;
+  }
+  return [...byDistributor.values()].sort((a, b) => {
+    if (a.distributorId == null) return 1;
+    if (b.distributorId == null) return -1;
+    return a.distributorName.localeCompare(b.distributorName);
+  });
+}

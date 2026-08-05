@@ -4,10 +4,36 @@ const { readStocks, sumLoadBagsByBrand } = require('./stocksStore');
 const { readBills, sumAllBillBagsByBrand } = require('./billsStore');
 const { readPromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
 const { buildDailyStockPayload } = require('./dailyStockStore');
+const { readDistributors } = require('./distributorsStore');
 
 const LIVE_FILE = path.join(__dirname, '..', 'data', 'liveStock.json');
 
 const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
+const BRAND_LABELS = { tokyo: 'Tokyo', samudra: 'Samudra', atlas: 'Atlas', nippon: 'Nippon' };
+
+/** Map distributor product name (e.g. "Tokyo 50KG") → brand key. */
+function productToBrandKey(product) {
+  const p = String(product || '').toLowerCase();
+  if (!p) return null;
+  for (const key of BRAND_KEYS) {
+    if (p.includes(key) || p.includes(BRAND_LABELS[key].toLowerCase())) return key;
+  }
+  return null;
+}
+
+/** Brand keys referenced in at least one distributor's products list. */
+async function getBrandKeysFromDistributorProducts() {
+  const distributors = await readDistributors();
+  const keys = new Set();
+  for (const d of distributors) {
+    const products = Array.isArray(d.products) ? d.products : [];
+    for (const product of products) {
+      const key = productToBrandKey(product);
+      if (key) keys.add(key);
+    }
+  }
+  return BRAND_KEYS.filter((k) => keys.has(k));
+}
 
 async function readLiveStock() {
   try {
@@ -54,16 +80,19 @@ async function refreshLiveStockFromSources() {
 }
 
 /** Dashboard / Stock page cards — served from file (refreshed on load & bill saves). */
-async function getLiveStockSummary() {
+async function getLiveStockSummary(options = {}) {
   let live = await readLiveStock();
   if (!live?.bags) {
     await refreshLiveStockFromSources();
     live = await readLiveStock();
   }
-  const labels = { tokyo: 'Tokyo', samudra: 'Samudra', atlas: 'Atlas', nippon: 'Nippon' };
-  const brands = BRAND_KEYS.map((key) => ({
+  const brandKeys =
+    options.distributorProductsOnly === true
+      ? await getBrandKeysFromDistributorProducts()
+      : BRAND_KEYS;
+  const brands = brandKeys.map((key) => ({
     key,
-    label: labels[key],
+    label: BRAND_LABELS[key],
     bags: Math.max(0, Math.floor(Number(live.bags[key]) || 0)),
   }));
   return { liveAt: live.updatedAt || new Date().toISOString(), brands };
@@ -88,5 +117,7 @@ module.exports = {
   refreshLiveStockFromSources,
   getLiveStockSummary,
   getLiveDailyLedgerPayload,
+  productToBrandKey,
+  getBrandKeysFromDistributorProducts,
   LIVE_FILE,
 };

@@ -42,7 +42,7 @@ import {
   buildCashBookLedgerRows,
   summarizeCashBookLedger,
 } from './cashBookLedger';
-import { computeGuaranteeStatus } from './guaranteeStatus';
+import { computeGuaranteeStatus, computeGuaranteeStatusByDistributor } from './guaranteeStatus';
 
 /** Bar fills aligned with `BRANDS` — same hues as light theme, higher chroma for readability */
 const BRAND_BAR_COLORS = {
@@ -125,14 +125,59 @@ function overdueDaysFromBillDate(row) {
   return daysFromYmdToToday(row?.billDate);
 }
 
-function DashboardStatAmount({ value, loading, valueClassName = 'text-slate-900' }) {
+function DashboardStatAmount({ value, loading, valueClassName = 'text-slate-900', compact = false }) {
   if (loading) {
-    return <p className="mt-1 text-xl font-bold tabular-nums text-slate-400">—</p>;
+    return (
+      <p
+        className={`font-bold tabular-nums text-slate-400 ${compact ? 'mt-0.5 text-base' : 'mt-1 text-xl'}`}
+      >
+        —
+      </p>
+    );
   }
   return (
-    <p className={`mt-1 text-xl font-bold tabular-nums tracking-tight ${valueClassName}`}>
+    <p
+      className={`font-bold tabular-nums tracking-tight ${compact ? 'mt-0.5 text-base sm:text-lg' : 'mt-1 text-xl'} ${valueClassName}`}
+    >
       {formatLkrCompact(value)}
     </p>
+  );
+}
+
+function DashboardStatStripCell({ label, value, valueClassName, hint, tone = 'slate', loading = false }) {
+  const toneClass =
+    tone === 'sky'
+      ? 'bg-sky-50/80'
+      : tone === 'amber'
+        ? 'bg-amber-50/80'
+        : tone === 'indigo'
+          ? 'bg-indigo-50/80'
+          : 'bg-slate-50/80';
+  return (
+    <div className={`min-w-0 px-3 py-3 sm:px-4 sm:py-3.5 ${toneClass}`}>
+      <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <DashboardStatAmount
+        loading={loading}
+        value={value}
+        valueClassName={valueClassName}
+        compact
+      />
+      {hint ? <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+function GuaranteeUtilizationBar({ pct, overLimit }) {
+  return (
+    <div className="flex min-w-[5.5rem] items-center gap-2">
+      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={`h-full rounded-full transition-all ${overLimit ? 'bg-rose-500' : 'bg-teal-500'}`}
+          style={{ width: `${Math.min(100, pct)}%` }}
+        />
+      </div>
+      <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-600">{pct}%</span>
+    </div>
   );
 }
 
@@ -491,6 +536,14 @@ export default function AnalyticsPage() {
     [bankGuarantees, payments, poPendingMetrics],
   );
 
+  const distributorGuaranteeStatuses = useMemo(() => {
+    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
+    const outgoing = Array.isArray(bankBalancePayload?.outgoingCheques)
+      ? bankBalancePayload.outgoingCheques
+      : [];
+    return computeGuaranteeStatusByDistributor(bankGuarantees, { outgoingCheques: outgoing, asOfDate: asOf });
+  }, [bankGuarantees, bankBalancePayload]);
+
   const overdueSearchInput = (
     <label className={filterLabel}>
       Search
@@ -711,11 +764,10 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-5">
+      <div className="space-y-6">
         <Card
           title="Bank & cashier"
           subtitle="Live cash on hand and bank positions — same totals as Cash Book"
-          className="lg:col-span-3"
           headerExtra={
             <Link
               to="/dashboard/bank"
@@ -726,50 +778,39 @@ export default function AnalyticsPage() {
           }
         >
           {cashDashLoading ? (
-            <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500">
+            <div className="flex min-h-[88px] items-center justify-center text-sm text-slate-500">
               <LoadingSpinner />
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-100">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cashier · closing balance</p>
-                <DashboardStatAmount
-                  loading={false}
+            <div className="overflow-hidden rounded-2xl ring-1 ring-slate-100">
+              <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0">
+                <DashboardStatStripCell
+                  label="Cashier · closing"
                   value={cashierSummary.closing}
                   valueClassName="text-indigo-900"
+                  hint={`In ${formatLkrCompact(cashierSummary.debit)} · out ${formatLkrCompact(cashierSummary.credit)}`}
+                  tone="indigo"
                 />
-                <p className="mt-2 text-xs text-slate-500">
-                  Cash in {formatLkrCompact(cashierSummary.debit)} · Cash out{' '}
-                  {formatLkrCompact(cashierSummary.credit)}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-100">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cashier · net movement</p>
-                <DashboardStatAmount
-                  loading={false}
+                <DashboardStatStripCell
+                  label="Cashier · net movement"
                   value={cashierSummary.netInPeriod}
                   valueClassName={cashierSummary.netInPeriod >= 0 ? 'text-emerald-800' : 'text-rose-800'}
+                  hint="All-time ledger through today"
                 />
-                <p className="mt-2 text-xs text-slate-500">All-time ledger through today</p>
-              </div>
-              <div className="rounded-2xl bg-sky-50/70 p-4 ring-1 ring-sky-100">
-                <p className="text-xs font-semibold uppercase tracking-wide text-sky-800/80">Bank · total balance</p>
-                <DashboardStatAmount loading={false} value={bankSummary.totalBalance} valueClassName="text-sky-900" />
-                <p className="mt-2 text-xs text-slate-600">
-                  {bankSummary.accountCount} account{bankSummary.accountCount === 1 ? '' : 's'} · deposits & deposited
-                  cheques minus cleared PO cheques
-                </p>
-              </div>
-              <div className="rounded-2xl bg-amber-50/70 p-4 ring-1 ring-amber-100">
-                <p className="text-xs font-semibold uppercase tracking-wide text-amber-900/80">
-                  Bank · pending outgoing
-                </p>
-                <DashboardStatAmount
-                  loading={false}
+                <DashboardStatStripCell
+                  label="Bank · total balance"
+                  value={bankSummary.totalBalance}
+                  valueClassName="text-sky-900"
+                  hint={`${bankSummary.accountCount} account${bankSummary.accountCount === 1 ? '' : 's'} · cleared PO cheques deducted`}
+                  tone="sky"
+                />
+                <DashboardStatStripCell
+                  label="Bank · pending outgoing"
                   value={bankSummary.totalPendingOutgoing}
                   valueClassName="text-amber-900"
+                  hint="PO cheques before converting date"
+                  tone="amber"
                 />
-                <p className="mt-2 text-xs text-slate-600">PO cheques before converting date</p>
               </div>
             </div>
           )}
@@ -777,77 +818,146 @@ export default function AnalyticsPage() {
 
         <Card
           title="Bank guarantee status"
-          subtitle="Incoming customer cheques not deposited plus PO purchase cheques not yet converted"
-          className="lg:col-span-2"
+          subtitle="Per distributor — PO cheques not yet converted vs collateral recorded for that distributor"
+          headerExtra={
+            <Link
+              to="/dashboard/bank"
+              className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-teal-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-teal-50 sm:w-auto"
+            >
+              Manage in Cash Book →
+            </Link>
+          }
         >
           {cashDashLoading ? (
-            <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500">
+            <div className="flex min-h-[88px] items-center justify-center text-sm text-slate-500">
               <LoadingSpinner />
             </div>
-          ) : !guaranteeStatus.hasGuarantee ? (
-            <div className="space-y-3 py-2">
+          ) : distributorGuaranteeStatuses.length === 0 ? (
+            <div className="space-y-3">
               <p className="text-sm text-slate-600">
-                No bank guarantees recorded yet. Add guarantees in Cash Book to track cheque exposure against
-                collateral.
+                No bank guarantees recorded yet. Add guarantees in Cash Book — one per distributor — to track PO
+                cheque exposure against collateral.
               </p>
+              <div className="overflow-hidden rounded-2xl ring-1 ring-slate-100">
+                <div className="grid grid-cols-2 divide-x divide-slate-100">
+                  <DashboardStatStripCell
+                    label="Incoming cheques"
+                    value={guaranteeStatus.incomingPendingTotal}
+                    valueClassName="text-violet-900"
+                    hint="Customer cheques not deposited"
+                    tone="indigo"
+                  />
+                  <DashboardStatStripCell
+                    label="PO pending"
+                    value={guaranteeStatus.poPendingOutgoingTotal}
+                    valueClassName="text-amber-900"
+                    hint="All distributors combined"
+                    tone="amber"
+                  />
+                </div>
+              </div>
               <Link
                 to="/dashboard/bank"
                 className="inline-flex items-center justify-center rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700"
               >
                 Add guarantee in Cash Book
               </Link>
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="rounded-xl bg-violet-50 px-3 py-2 ring-1 ring-violet-100">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700">Pending cheques</p>
-                  <p className="mt-0.5 text-sm font-bold tabular-nums text-violet-900">
-                    {formatLkrCompact(guaranteeStatus.pendingTotal)}
-                  </p>
-                </div>
-              </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl bg-violet-50 px-3 py-2.5 ring-1 ring-violet-100">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-800">Pending</p>
-                  <p className="mt-0.5 text-base font-bold tabular-nums text-violet-900">
-                    {formatLkrCompact(guaranteeStatus.pendingTotal)}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-violet-700">
-                    {guaranteeStatus.pendingChequeCount} cheque
-                    {guaranteeStatus.pendingChequeCount === 1 ? '' : 's'} · incl. PO not converted
-                  </p>
-                </div>
-                <div className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-200">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Available</p>
-                  <p className="mt-0.5 text-base font-bold tabular-nums text-slate-900">
-                    {formatLkrCompact(guaranteeStatus.available)}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-slate-500">Headroom under guarantee</p>
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-slate-500">
-                  <span>Guarantee utilization (pending)</span>
-                  <span className="tabular-nums">{guaranteeStatus.utilizationPct}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      guaranteeStatus.overLimit ? 'bg-rose-500' : 'bg-teal-500'
-                    }`}
-                    style={{ width: `${Math.min(100, guaranteeStatus.utilizationPct)}%` }}
+            <div className="space-y-3">
+              <div className={mobileCardList}>
+                {distributorGuaranteeStatuses.map((dist) => (
+                  <MobileRowCard
+                    key={dist.distributorId}
+                    title={dist.distributorName}
+                    subtitle={
+                      dist.poPendingCount > 0
+                        ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
+                        : 'No pending PO cheques'
+                    }
+                    badge={
+                      dist.overLimit ? (
+                        <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                          Over limit
+                        </span>
+                      ) : dist.hasGuarantee ? (
+                        <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-teal-900">
+                          {dist.utilizationPct}%
+                        </span>
+                      ) : (
+                        <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                          No guarantee
+                        </span>
+                      )
+                    }
+                    fields={[
+                      { label: 'Guarantee', value: formatLkrCompact(dist.totalGuarantee) },
+                      { label: 'PO pending', value: formatLkrCompact(dist.pendingTotal) },
+                      { label: 'Available', value: formatLkrCompact(dist.available) },
+                    ]}
                   />
-                </div>
+                ))}
               </div>
 
-              {guaranteeStatus.overLimit ? (
-                <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-800 ring-1 ring-rose-100" role="alert">
-                  Pending cheques exceed total guarantee by{' '}
-                  {formatLkrCompact(guaranteeStatus.pendingTotal - guaranteeStatus.totalGuarantee)}.
+              <div className={`hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`px-4 py-2.5 ${stickyFirstTh}`}>Distributor</th>
+                      <th className="whitespace-nowrap px-3 py-2.5 text-right">Guarantee</th>
+                      <th className="whitespace-nowrap px-3 py-2.5 text-right">PO pending</th>
+                      <th className="whitespace-nowrap px-3 py-2.5 text-right">Available</th>
+                      <th className="min-w-[8rem] px-3 py-2.5">Utilization</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {distributorGuaranteeStatuses.map((dist) => (
+                      <tr key={dist.distributorId} className="hover:bg-slate-50/70">
+                        <td className={`max-w-[12rem] px-4 py-2.5 ${stickyFirstTd}`}>
+                          <span className="block font-medium text-slate-900">{dist.distributorName}</span>
+                          <span className="mt-0.5 block text-xs text-slate-500">
+                            {dist.poPendingCount > 0
+                              ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
+                              : dist.hasGuarantee
+                                ? 'No pending PO cheques'
+                                : 'No guarantee recorded'}
+                          </span>
+                          {dist.overLimit ? (
+                            <span className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-800">
+                              Over limit
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
+                          {formatLkrCompact(dist.totalGuarantee)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-violet-900">
+                          {formatLkrCompact(dist.pendingTotal)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
+                          {formatLkrCompact(dist.available)}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {dist.hasGuarantee ? (
+                            <GuaranteeUtilizationBar pct={dist.utilizationPct} overLimit={dist.overLimit} />
+                          ) : (
+                            <span className="text-xs text-amber-800">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-col gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-3 py-2.5 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+                <p>
+                  <span className="font-semibold text-slate-700">Incoming cheques (all customers)</span>
+                  <span className="mx-1.5 text-slate-300">·</span>
+                  <span className="tabular-nums">{formatLkrCompact(guaranteeStatus.incomingPendingTotal)} pending</span>
+                  <span className="hidden text-slate-500 sm:inline"> — not tied to a distributor</span>
                 </p>
-              ) : null}
+              </div>
             </div>
           )}
         </Card>

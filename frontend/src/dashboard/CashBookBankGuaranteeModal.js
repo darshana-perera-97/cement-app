@@ -29,10 +29,11 @@ const emptyForm = () => ({
   guaranteeType: 'fixed_deposit',
   guaranteeTypeOther: '',
   bankAccountId: '',
+  distributorId: '',
   description: '',
 });
 
-export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, bankAccounts = [] }) {
+export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, bankAccounts = [], distributors = [] }) {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -63,6 +64,11 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
       setSaveError('Describe the guarantee type when Other is selected.');
       return;
     }
+    const distributorId = String(form.distributorId ?? '').trim();
+    if (!distributorId) {
+      setSaveError('Select a distributor.');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -72,6 +78,7 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
         guaranteeType: form.guaranteeType,
         description: String(form.description ?? '').trim(),
         recordedBy,
+        distributorId,
       };
       if (form.guaranteeType === 'other') {
         body.guaranteeTypeOther = String(form.guaranteeTypeOther ?? '').trim();
@@ -116,10 +123,31 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
           <h2 id="bank-guarantee-title" className="text-lg font-bold text-slate-900">
             Add bank guarantee
           </h2>
-          <p className="mt-1 text-sm text-slate-500">Record collateral held at the bank (fixed deposit, property, or other).</p>
+          <p className="mt-1 text-sm text-slate-500">Record collateral held at the bank for a specific distributor.</p>
         </div>
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4 sm:px-6">
+            <label className="block text-sm font-medium text-slate-700">
+              Distributor
+              <select
+                value={form.distributorId}
+                onChange={(e) => handleChange('distributorId', e.target.value)}
+                className={fieldClass}
+                required
+              >
+                <option value="">— Select distributor —</option>
+                {distributors.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {String(d.name ?? '').trim() || d.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {distributors.length === 0 ? (
+              <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 ring-1 ring-amber-100">
+                Add distributors in Shop before recording a bank guarantee.
+              </p>
+            ) : null}
             <label className="block text-sm font-medium text-slate-700">
               Type
               <select
@@ -214,7 +242,7 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || distributors.length === 0}
               className="flex-1 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Add guarantee'}
