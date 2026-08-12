@@ -163,15 +163,20 @@ function WhatsAppConnectionSection({
   saving,
   saveError,
   reconnecting,
+  resettingSession,
   onSave,
   onReconnect,
+  onResetSession,
 }) {
   const state = status.state || 'idle';
   const stateLabel = WHATSAPP_STATE_LABELS[state] || state || 'Unknown';
   const stateTone = WHATSAPP_STATE_TONE[state] || WHATSAPP_STATE_TONE.idle;
   const activeConnection = status.connected ? status.connection : null;
   const rememberedConnection = status.lastConnection || null;
-  const displayConnection = activeConnection || rememberedConnection;
+  const displayConnection =
+    resettingSession || state === 'qr' ? null : activeConnection || rememberedConnection;
+  const showConnectedPanel = Boolean(status.connected && activeConnection && !resettingSession);
+  const showQrPanel = state === 'qr' && status.qrDataUrl;
 
   return (
     <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
@@ -227,14 +232,24 @@ function WhatsAppConnectionSection({
               {saving ? 'Saving…' : enabled ? 'Save & connect' : 'Save'}
             </button>
             {enabled ? (
-              <button
-                type="button"
-                onClick={onReconnect}
-                disabled={loading || saving || reconnecting}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {reconnecting ? 'Reconnecting…' : 'Reconnect now'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onReconnect}
+                  disabled={loading || saving || reconnecting || resettingSession}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {reconnecting ? 'Reconnecting…' : 'Reconnect now'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onResetSession}
+                  disabled={loading || saving || reconnecting || resettingSession}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {resettingSession ? 'Preparing QR…' : 'Link new account'}
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -242,7 +257,19 @@ function WhatsAppConnectionSection({
         <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
           {!enabled ? (
             <p className="text-sm text-slate-500">Enable WhatsApp notifications, then save to show a QR code or restore the last linked account.</p>
-          ) : status.connected && activeConnection ? (
+          ) : showQrPanel ? (
+            <div className="flex flex-col items-center gap-3">
+              <p className="self-stretch text-sm font-medium text-slate-800">Scan to link this server</p>
+              <img
+                src={status.qrDataUrl}
+                alt="WhatsApp QR code"
+                className="h-52 w-52 rounded-xl bg-white p-3 ring-1 ring-slate-200"
+              />
+              <p className="text-center text-xs text-slate-500">
+                On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code.
+              </p>
+            </div>
+          ) : showConnectedPanel ? (
             <div className="space-y-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Connected account</p>
               <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
@@ -264,28 +291,38 @@ function WhatsAppConnectionSection({
                 </div>
               </dl>
               <p className="text-sm text-emerald-700">Ready to send messages to customers with contact numbers.</p>
-            </div>
-          ) : state === 'qr' && status.qrDataUrl ? (
-            <div className="flex flex-col items-center gap-3">
-              <p className="self-stretch text-sm font-medium text-slate-800">Scan to link this server</p>
-              <img
-                src={status.qrDataUrl}
-                alt="WhatsApp QR code"
-                className="h-52 w-52 rounded-xl bg-white p-3 ring-1 ring-slate-200"
-              />
-              <p className="text-center text-xs text-slate-500">
-                On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code.
-              </p>
+              <div className="border-t border-slate-200 pt-4">
+                <button
+                  type="button"
+                  onClick={onResetSession}
+                  disabled={loading || saving || reconnecting || resettingSession}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {resettingSession ? 'Preparing QR…' : 'Link new account'}
+                </button>
+                <p className="mt-2 text-xs text-slate-500">
+                  Clears the saved session and shows a QR code to link a different WhatsApp number.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-slate-600">
-                {state === 'initializing' || state === 'authenticated'
-                  ? 'Restoring the saved WhatsApp session…'
-                  : state === 'disconnected' || state === 'auth_failure'
-                    ? 'Connection lost. The server will retry automatically, or use Reconnect now.'
-                    : 'Waiting for the WhatsApp client to start…'}
+                {resettingSession
+                  ? 'Clearing the saved session and preparing a new QR code…'
+                  : state === 'initializing' || state === 'authenticated'
+                    ? rememberedConnection
+                      ? 'Restoring the saved WhatsApp session…'
+                      : 'Starting the WhatsApp client…'
+                    : state === 'disconnected' || state === 'auth_failure'
+                      ? 'Connection lost. The server will retry automatically, or use Reconnect now.'
+                      : 'Waiting for the WhatsApp client to start…'}
               </p>
+              {status.lastError ? (
+                <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800 ring-1 ring-rose-100">
+                  {status.lastError}
+                </p>
+              ) : null}
               {displayConnection ? (
                 <div className="rounded-lg bg-white px-3 py-3 ring-1 ring-slate-200">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -309,7 +346,7 @@ function WhatsAppConnectionSection({
                   </dl>
                 </div>
               ) : null}
-              {(state === 'initializing' || state === 'authenticated' || state === 'disconnected') && (
+              {(resettingSession || state === 'initializing' || state === 'authenticated' || state === 'disconnected') && (
                 <div className="flex justify-center py-4">
                   <LoadingSpinner />
                 </div>
@@ -390,8 +427,10 @@ export default function MessagesPage() {
     qrDataUrl: null,
     connection: null,
     lastConnection: null,
+    lastError: null,
   });
   const [whatsappReconnecting, setWhatsappReconnecting] = useState(false);
+  const [whatsappResettingSession, setWhatsappResettingSession] = useState(false);
   const [sentEmails, setSentEmails] = useState([]);
   const [sentWhatsapp, setSentWhatsapp] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -459,6 +498,7 @@ export default function MessagesPage() {
           qrDataUrl: null,
           connection: null,
           lastConnection: settings.whatsappConfig?.lastConnection ?? null,
+          lastError: null,
         },
       );
       setSentEmails(Array.isArray(history) ? history : []);
@@ -490,7 +530,8 @@ export default function MessagesPage() {
             connected: Boolean(data.connected),
             qrDataUrl: data.qrDataUrl ?? null,
             connection: data.connection ?? null,
-            lastConnection: data.lastConnection ?? null,
+            lastConnection: whatsappResettingSession ? null : (data.lastConnection ?? null),
+            lastError: data.lastError ?? null,
           });
         }
       } catch {
@@ -503,7 +544,18 @@ export default function MessagesPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [apiBase, whatsappForm.enabled]);
+  }, [apiBase, whatsappForm.enabled, whatsappResettingSession]);
+
+  useEffect(() => {
+    if (!whatsappResettingSession) return;
+    if (whatsappStatus.state === 'qr' && whatsappStatus.qrDataUrl) {
+      setWhatsappResettingSession(false);
+      return;
+    }
+    if (whatsappStatus.lastError && (whatsappStatus.state === 'disconnected' || whatsappStatus.state === 'auth_failure')) {
+      setWhatsappResettingSession(false);
+    }
+  }, [whatsappResettingSession, whatsappStatus]);
 
   const saveCompany = async () => {
     setCompanySaving(true);
@@ -639,6 +691,7 @@ export default function MessagesPage() {
           qrDataUrl: null,
           connection: null,
           lastConnection: data.whatsappConfig?.lastConnection ?? null,
+          lastError: null,
         },
       );
     } catch {
@@ -665,12 +718,50 @@ export default function MessagesPage() {
           qrDataUrl: null,
           connection: null,
           lastConnection: whatsappStatus.lastConnection,
+          lastError: null,
         },
       );
     } catch {
       setWhatsappSaveError('Could not reach the server.');
     } finally {
       setWhatsappReconnecting(false);
+    }
+  };
+
+  const resetWhatsAppSession = async () => {
+    if (!window.confirm('Clear the saved WhatsApp session and show a new QR code? You will need to scan again on your phone.')) {
+      return;
+    }
+    setWhatsappResettingSession(true);
+    setWhatsappSaveError(null);
+    setWhatsappStatus((prev) => ({
+      ...prev,
+      state: 'initializing',
+      connected: false,
+      qrDataUrl: null,
+      connection: null,
+      lastConnection: null,
+      lastError: null,
+    }));
+    try {
+      const res = await fetch(`${apiBase}/api/messages/whatsapp/reset-session`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setWhatsappSaveError(data.error || 'Reset failed');
+        setWhatsappResettingSession(false);
+        return;
+      }
+      setWhatsappStatus({
+        state: data.whatsappStatus?.state ?? 'initializing',
+        connected: false,
+        qrDataUrl: data.whatsappStatus?.qrDataUrl ?? null,
+        connection: null,
+        lastConnection: null,
+        lastError: data.whatsappStatus?.lastError ?? null,
+      });
+    } catch {
+      setWhatsappSaveError('Could not reach the server.');
+      setWhatsappResettingSession(false);
     }
   };
 
@@ -734,8 +825,10 @@ export default function MessagesPage() {
         saving={whatsappSaving}
         saveError={whatsappSaveError}
         reconnecting={whatsappReconnecting}
+        resettingSession={whatsappResettingSession}
         onSave={saveWhatsAppConfig}
         onReconnect={reconnectWhatsApp}
+        onResetSession={resetWhatsAppSession}
       />
 
       <SettingsCard

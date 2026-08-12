@@ -28,6 +28,7 @@ const STUCK_RESTORE_TIMEOUT_MS = 90000;
 let client = null;
 let clientState = 'idle';
 let lastQrDataUrl = null;
+let lastClientError = null;
 let initPromise = null;
 let reconnectTimer = null;
 let stuckWatchdogTimer = null;
@@ -120,14 +121,29 @@ function scheduleStuckWatchdog() {
   }, STUCK_RESTORE_TIMEOUT_MS);
 }
 
+function hasLocalWebVersionCache() {
+  try {
+    return fs.existsSync(path.join(WEB_CACHE_PATH, `${WEB_VERSION}.html`));
+  } catch (_) {
+    return false;
+  }
+}
+
 function buildWhatsAppClientOptions() {
+  const hasLocalCache = hasLocalWebVersionCache();
+  if (!hasLocalCache) {
+    console.warn(
+      `[whatsapp] local web version cache missing for ${WEB_VERSION} — will download on first connect`,
+    );
+  }
   return {
     authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
     webVersion: WEB_VERSION,
     webVersionCache: {
       type: 'local',
       path: WEB_CACHE_PATH,
-      strict: true,
+      // strict: true fails immediately when .wwebjs_cache is not deployed on the server.
+      strict: hasLocalCache,
     },
     takeoverOnConflict: true,
     puppeteer: {
@@ -244,6 +260,7 @@ function getWhatsAppStatus() {
     qrDataUrl: clientState === 'qr' ? lastQrDataUrl : null,
     connection: activeConnection,
     lastConnection: activeConnection || lastKnownConnection,
+    lastError: lastClientError,
   };
 }
 
@@ -251,6 +268,7 @@ function attachClientEvents(waClient) {
   waClient.on('qr', async (qr) => {
     if (clientState === 'ready') return;
     clientState = 'qr';
+    lastClientError = null;
     markStateEntered('qr');
     try {
       lastQrDataUrl = await qrcode.toDataURL(qr);
@@ -282,6 +300,7 @@ function attachClientEvents(waClient) {
     clientState = 'ready';
     markStateEntered('ready');
     lastQrDataUrl = null;
+    lastClientError = null;
     clearReconnectTimer();
     connectionInfo = readClientConnectionInfo(waClient);
     if (connectionInfo) {
@@ -294,6 +313,7 @@ function attachClientEvents(waClient) {
     clientState = 'auth_failure';
     markStateEntered('auth_failure');
     lastQrDataUrl = null;
+    lastClientError = String(msg || 'Authentication failed');
     connectionInfo = null;
     console.error('[whatsapp] auth failure', msg);
     scheduleReconnect('auth_failure');
@@ -315,6 +335,16 @@ function attachClientEvents(waClient) {
     }
     scheduleReconnect(reason);
   });
+}
+
+async function clearSavedWhatsAppSession() {
+  await destroyClient();
+  try {
+    fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+  } catch (err) {
+    console.error('[whatsapp] clear saved session', err);
+  }
+  killOrphanedSessionBrowsers();
 }
 
 async function destroyClient() {
@@ -373,6 +403,7 @@ async function startWhatsAppClient() {
       await waClient.initialize();
     } catch (err) {
       console.error('whatsapp initialize', err);
+      lastClientError = String(err?.message || err || 'Failed to start WhatsApp client');
       try {
         await waClient.destroy();
       } catch (destroyErr) {
@@ -408,8 +439,27 @@ async function reconnectWhatsAppClient() {
   if (!config.enabled) {
     return { ok: false, error: 'WhatsApp notifications are disabled' };
   }
+  lastClientError = null;
   await destroyClient();
   startWhatsAppClient().catch((err) => console.error('whatsapp manual reconnect', err));
+  return { ok: true, status: getWhatsAppStatus() };
+}
+
+async function resetWhatsAppSession() {
+  const config = await readWhatsAppConfig();
+  if (!config.enabled) {
+    return { ok: false, error: 'WhatsApp notifications are disabled' };
+  }
+  lastClientError = null;
+  lastKnownConnection = null;
+  await clearSavedWhatsAppSession();
+  try {
+    const next = { ...config, lastConnection: null };
+    await writeWhatsAppConfig(next);
+  } catch (err) {
+    console.error('[whatsapp] clear last connection', err);
+  }
+  startWhatsAppClient().catch((err) => console.error('whatsapp start after session reset', err));
   return { ok: true, status: getWhatsAppStatus() };
 }
 
@@ -593,6 +643,7 @@ module.exports = {
   startWhatsAppClient,
   applyWhatsAppConfigChange,
   reconnectWhatsAppClient,
+  resetWhatsAppSession,
   bootstrapWhatsAppOnStartup,
   destroyClient,
   notifyBillWhatsApp,

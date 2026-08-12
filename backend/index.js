@@ -74,6 +74,7 @@ const {
   startWhatsAppClient,
   applyWhatsAppConfigChange,
   reconnectWhatsAppClient,
+  resetWhatsAppSession,
   bootstrapWhatsAppOnStartup,
   notifyBillWhatsApp,
   notifyPaymentWhatsApp,
@@ -4253,6 +4254,19 @@ app.post('/api/messages/whatsapp/reconnect', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to reconnect WhatsApp' });
+  }
+});
+
+app.post('/api/messages/whatsapp/reset-session', async (req, res) => {
+  try {
+    const result = await resetWhatsAppSession();
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({ whatsappStatus: result.status });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to reset WhatsApp session' });
   }
 });
 
