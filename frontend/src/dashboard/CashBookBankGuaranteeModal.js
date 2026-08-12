@@ -25,6 +25,7 @@ function bankAccountOptionLabel(a) {
 
 const emptyForm = () => ({
   date: todayYmdLocal(),
+  expireDate: '',
   amount: '',
   guaranteeType: 'fixed_deposit',
   guaranteeTypeOther: '',
@@ -85,6 +86,8 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
       }
       const bankAccountId = String(form.bankAccountId ?? '').trim();
       if (bankAccountId) body.bankAccountId = bankAccountId;
+      const expireDate = String(form.expireDate ?? '').trim();
+      if (expireDate) body.expireDate = expireDate;
       const res = await fetch(`${apiBase}/api/bank-guarantees`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -187,6 +190,16 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
               />
             </label>
             <label className="block text-sm font-medium text-slate-700">
+              Expiry date <span className="font-normal text-slate-400">(optional)</span>
+              <input
+                type="date"
+                value={form.expireDate}
+                onChange={(e) => handleChange('expireDate', e.target.value)}
+                className={fieldClass}
+                min={form.date || undefined}
+              />
+            </label>
+            <label className="block text-sm font-medium text-slate-700">
               Amount (LKR)
               <input
                 type="number"
@@ -222,7 +235,7 @@ export default function CashBookBankGuaranteeModal({ open, onClose, onSaved, ban
                 value={form.description}
                 onChange={(e) => handleChange('description', e.target.value)}
                 className={`${fieldClass} min-h-[4.5rem] resize-y`}
-                placeholder="Reference, expiry, bank branch…"
+                placeholder="Reference, bank branch…"
                 rows={3}
               />
             </label>

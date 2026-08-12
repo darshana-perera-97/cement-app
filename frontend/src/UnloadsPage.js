@@ -9,13 +9,13 @@ import {
   setDriverAuth,
 } from './auth';
 import { shopNameInitials, useShopName } from './shopConfig';
-import { BRANDS } from './dashboard/brandTheme';
+import { useBagProducts } from './dashboard/BagProductsContext';
 import { LoadingSpinner } from './dashboard/tableToolbar';
 
 const apiBase = getApiBase();
 
-function totalBags(row) {
-  return BRANDS.reduce((s, b) => s + (Number(row[`${b.key}Bags`]) || 0), 0);
+function totalBags(row, bagBrands) {
+  return bagBrands.reduce((s, b) => s + (Number(row[`${b.key}Bags`]) || 0), 0);
 }
 
 function todayYmdLocal() {
@@ -33,11 +33,11 @@ function requestedBags(value) {
 }
 
 /** @returns {string[]} user-facing errors; empty if valid */
-function validateUnloadAgainstStock(form, stockByBrand) {
+function validateUnloadAgainstStock(form, stockByBrand, bagBrands) {
   const issues = [];
   let anyRequested = false;
 
-  for (const b of BRANDS) {
+  for (const b of bagBrands) {
     const requested = requestedBags(form[`${b.key}Bags`]);
     if (requested <= 0) continue;
     anyRequested = true;
@@ -52,7 +52,7 @@ function validateUnloadAgainstStock(form, stockByBrand) {
   }
 
   if (!anyRequested) {
-    const anyInStock = BRANDS.some((b) => (stockByBrand[b.key] ?? 0) > 0);
+    const anyInStock = bagBrands.some((b) => (stockByBrand[b.key] ?? 0) > 0);
     if (!anyInStock) {
       issues.push('No bags in stock right now — nothing can be unloaded.');
     } else {
@@ -63,13 +63,13 @@ function validateUnloadAgainstStock(form, stockByBrand) {
   return issues;
 }
 
-function emptyUnloadForm() {
+function emptyUnloadForm(bagBrands) {
   const f = {
     date: todayYmdLocal(),
     customerId: '',
     note: '',
   };
-  for (const b of BRANDS) {
+  for (const b of bagBrands) {
     f[`${b.key}Bags`] = '';
   }
   return f;
@@ -179,17 +179,17 @@ function DriverLogin({ onSuccess }) {
   );
 }
 
-function StockStrip({ brands, loading, onRefresh }) {
+function StockStrip({ summaryBrands, bagBrands, loading, onRefresh }) {
   const totals = useMemo(() => {
     const t = {};
-    for (const b of BRANDS) {
-      const found = brands?.find((x) => x.key === b.key);
+    for (const b of bagBrands) {
+      const found = summaryBrands?.find((x) => x.key === b.key);
       const available = found?.availableForRequest;
       const bags = found ? Number(found.bags) || 0 : 0;
       t[b.key] = Math.max(0, Math.floor(Number(available != null ? available : bags) || 0));
     }
     return t;
-  }, [brands]);
+  }, [summaryBrands, bagBrands]);
 
   return (
     <section className="sticky top-0 z-20 border-b border-slate-200/80 bg-slate-50/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80 sm:px-6 lg:px-8">
@@ -204,7 +204,7 @@ function StockStrip({ brands, loading, onRefresh }) {
         </button>
       </div>
       <div className="mx-auto mt-2 grid max-w-6xl grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
-        {BRANDS.map((b) => (
+        {bagBrands.map((b) => (
           <div
             key={b.key}
             className={`min-w-0 rounded-xl bg-white px-3 py-2.5 shadow-sm ring-1 sm:px-4 sm:py-3 ${b.ring}`}
@@ -223,13 +223,14 @@ function StockStrip({ brands, loading, onRefresh }) {
   );
 }
 
-function brandSummaryLine(row) {
-  return BRANDS.filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0)
+function brandSummaryLine(row, bagBrands) {
+  return bagBrands.filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0)
     .map((b) => `${b.label} ${Number(row[`${b.key}Bags`])}`)
     .join(' · ');
 }
 
 function UnloadsWorkspace() {
+  const { brands: bagBrands } = useBagProducts();
   const shopName = useShopName();
   const driverLabel = getDisplayName();
   const [summaryBrands, setSummaryBrands] = useState([]);
@@ -237,7 +238,7 @@ function UnloadsWorkspace() {
   const [customers, setCustomers] = useState([]);
   const [recent, setRecent] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
-  const [form, setForm] = useState(emptyUnloadForm);
+  const [form, setForm] = useState(() => emptyUnloadForm([]));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(null);
@@ -296,7 +297,7 @@ function UnloadsWorkspace() {
 
   const stockByBrand = useMemo(() => {
     const map = {};
-    for (const b of BRANDS) {
+    for (const b of bagBrands) {
       const found = summaryBrands.find((x) => x.key === b.key);
       const available = found?.availableForRequest;
       const bags = Math.max(0, Math.floor(Number(found?.bags) || 0));
@@ -306,11 +307,11 @@ function UnloadsWorkspace() {
       );
     }
     return map;
-  }, [summaryBrands]);
+  }, [summaryBrands, bagBrands]);
 
   const anyStockAvailable = useMemo(
-    () => BRANDS.some((b) => (stockByBrand[b.key] ?? 0) > 0),
-    [stockByBrand],
+    () => bagBrands.some((b) => (stockByBrand[b.key] ?? 0) > 0),
+    [stockByBrand, bagBrands],
   );
 
   const handleSignOut = () => {
@@ -327,7 +328,7 @@ function UnloadsWorkspace() {
       return;
     }
 
-    const stockIssues = validateUnloadAgainstStock(form, stockByBrand);
+    const stockIssues = validateUnloadAgainstStock(form, stockByBrand, bagBrands);
     if (stockIssues.length > 0) {
       setSaveError(stockIssues.join(' '));
       return;
@@ -339,7 +340,7 @@ function UnloadsWorkspace() {
       customerId: form.customerId,
       note: form.note,
     };
-    for (const b of BRANDS) {
+    for (const b of bagBrands) {
       payload[`${b.key}Bags`] = form[`${b.key}Bags`];
     }
     setSaving(true);
@@ -355,9 +356,9 @@ function UnloadsWorkspace() {
         return;
       }
       setSaveSuccess(
-        `Request submitted (${totalBags(data).toLocaleString()} bag${totalBags(data) === 1 ? '' : 's'} for ${data.customerName || 'shop'}). The shop is notified if delivery messages are enabled. Waiting for manager approval — stock updates when approved.`,
+        `Request submitted (${totalBags(data, bagBrands).toLocaleString()} bag${totalBags(data, bagBrands) === 1 ? '' : 's'} for ${data.customerName || 'shop'}). The shop is notified if delivery messages are enabled. Waiting for manager approval — stock updates when approved.`,
       );
-      setForm(emptyUnloadForm());
+      setForm(emptyUnloadForm(bagBrands));
       await Promise.all([loadStock(), loadRecent()]);
     } catch {
       setSaveError('Network error. Try again.');
@@ -398,7 +399,7 @@ function UnloadsWorkspace() {
         </button>
       </header>
 
-      <StockStrip brands={summaryBrands} loading={stockLoading} onRefresh={loadStock} />
+      <StockStrip summaryBrands={summaryBrands} bagBrands={bagBrands} loading={stockLoading} onRefresh={loadStock} />
 
       <div className="flex-1 px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-8">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-start lg:gap-8">
@@ -462,7 +463,7 @@ function UnloadsWorkspace() {
                 </p>
               ) : null}
               <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {BRANDS.map((b) => {
+                {bagBrands.map((b) => {
                   const available = stockByBrand[b.key] ?? 0;
                   const outOfStock = !stockLoading && available <= 0;
                   return (
@@ -551,14 +552,14 @@ function UnloadsWorkspace() {
             ) : (
               <ul className="mt-3 divide-y divide-slate-100">
                 {recent.map((row) => {
-                  const brands = brandSummaryLine(row);
+                  const brands = brandSummaryLine(row, bagBrands);
                   return (
                     <li key={row.id} className="py-3 first:pt-0">
                       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                         <div className="min-w-0">
                           <p className="font-semibold text-slate-900 break-words">{row.customerName}</p>
                           <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
-                            {row.date} · {totalBags(row).toLocaleString()} bags
+                            {row.date} · {totalBags(row, bagBrands).toLocaleString()} bags
                             {row.status ? (
                               <span className="ml-1 capitalize text-slate-400">· {row.status}</span>
                             ) : null}

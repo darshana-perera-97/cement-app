@@ -1,4 +1,4 @@
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 
 function todayYmdLocal() {
   const d = new Date();
@@ -7,10 +7,11 @@ function todayYmdLocal() {
 
 /** Flatten stock load records into one row per cheque (from Add a stock load). */
 export function buildStockChequeRows(loads) {
+  const brands = getCachedBrands();
   const rows = [];
   for (const load of loads) {
     const loadDate = String(load.date ?? '').slice(0, 10);
-    for (const b of BRANDS) {
+    for (const b of brands) {
       const chequeNumber = String(load[`${b.key}Cheque`] ?? '').trim();
       if (!chequeNumber) continue;
       const convertingDate = String(load[`${b.key}ConvertingDate`] ?? '').slice(0, 10);

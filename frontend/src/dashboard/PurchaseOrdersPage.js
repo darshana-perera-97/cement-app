@@ -334,6 +334,7 @@ const emptyForm = () => ({
   distributorId: '',
   distributionLocation: '',
   chequePerProduct: true,
+  doorStock: false,
   items: [newItemLine()],
   cheques: [newChequeLine()],
   vehicleNumber: '',
@@ -882,6 +883,7 @@ export default function PurchaseOrdersPage() {
           driverName,
           ...(driverId ? { driverId } : {}),
           chequePerProduct: !!form.chequePerProduct,
+          doorStock: !!form.doorStock,
           cheques,
           items,
           createdBy: username,
@@ -1467,6 +1469,21 @@ export default function PurchaseOrdersPage() {
                   </div>
                 </div>
               ) : null}
+
+              <label className="inline-flex cursor-pointer items-start gap-2.5 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+                <input
+                  type="checkbox"
+                  checked={!!form.doorStock}
+                  onChange={(e) => setForm((f) => ({ ...f, doorStock: e.target.checked }))}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span className="text-sm text-slate-800">
+                  <span className="font-semibold">Door stock</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                    When ticked, &ldquo;Door stock&rdquo; appears under Notes on the PO PDF.
+                  </span>
+                </span>
+              </label>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-3">

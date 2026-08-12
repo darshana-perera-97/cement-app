@@ -1,6 +1,5 @@
 const { toNonNegNumber } = require('./stocksStore');
-
-const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
+const { bagsField } = require('./bagProducts');
 
 function compareByDateThenCreated(a, b) {
   const da = String(a.date ?? '').trim();
@@ -9,13 +8,13 @@ function compareByDateThenCreated(a, b) {
   return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
 }
 
-function buildFifoPools(loads) {
-  const pools = Object.fromEntries(BRAND_KEYS.map((k) => [k, []]));
+function buildFifoPools(loads, keys) {
+  const pools = Object.fromEntries(keys.map((k) => [k, []]));
   for (const load of [...loads].sort(compareByDateThenCreated)) {
     const stockId = String(load.stockId ?? '').trim();
     if (!stockId) continue;
-    for (const k of BRAND_KEYS) {
-      const bagCount = toNonNegNumber(load[`${k}Bags`]);
+    for (const k of keys) {
+      const bagCount = toNonNegNumber(load[bagsField(k)]);
       if (bagCount > 0) pools[k].push({ stockId, remaining: bagCount });
     }
   }
@@ -40,11 +39,11 @@ function takeFromPool(pool, need, stockIdFilter = null) {
 }
 
 /** Deplete FIFO pools for bags already on existing credit bills. */
-function consumeExistingBillsFromPools(pools, bills) {
+function consumeExistingBillsFromPools(pools, bills, keys) {
   for (const bill of [...bills].sort(compareByDateThenCreated)) {
     const explicitStockId = String(bill.stockId ?? '').trim();
-    for (const k of BRAND_KEYS) {
-      const need = toNonNegNumber(bill[`${k}Bags`]);
+    for (const k of keys) {
+      const need = toNonNegNumber(bill[bagsField(k)]);
       if (need <= 0) continue;
       const pool = pools[k];
       let chunks = explicitStockId ? takeFromPool(pool, need, explicitStockId) : takeFromPool(pool, need);
@@ -62,13 +61,13 @@ function consumeExistingBillsFromPools(pools, bills) {
  * Infer load Stock ID for a new bill using FIFO (same rules as shop distribution reports).
  * Returns the stock id that supplies the most bags for this sale, or '' if none match.
  */
-function inferStockIdForBillBags(loads, existingBills, bagFields) {
-  const pools = buildFifoPools(loads);
-  consumeExistingBillsFromPools(pools, existingBills);
+function inferStockIdForBillBags(loads, existingBills, bagFields, keys) {
+  const pools = buildFifoPools(loads, keys);
+  consumeExistingBillsFromPools(pools, existingBills, keys);
 
   const counts = {};
-  for (const k of BRAND_KEYS) {
-    const need = toNonNegNumber(bagFields[`${k}Bags`]);
+  for (const k of keys) {
+    const need = toNonNegNumber(bagFields[bagsField(k)]);
     if (need <= 0) continue;
     const chunks = takeFromPool(pools[k], need);
     for (const c of chunks) {

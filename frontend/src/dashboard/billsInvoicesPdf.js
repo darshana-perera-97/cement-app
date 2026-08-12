@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
 
 const MARGIN = 16;
@@ -65,9 +65,10 @@ function invoiceNumberForBill(bill) {
 }
 
 function buildBillLineItems(bill) {
+  const brands = getCachedBrands();
   const items = [];
 
-  for (const brand of BRANDS) {
+  for (const brand of brands) {
     const bags = Number(bill[`${brand.key}Bags`]) || 0;
     if (bags <= 0) continue;
     const unitPrice = Number(bill[`${brand.key}UnitPrice`]) || 0;
@@ -192,6 +193,18 @@ function drawLetterhead(doc, opts, yStart) {
   return y + 8;
 }
 
+function sumInvoiceDiscountForBill(promotions, billId) {
+  const id = String(billId ?? '').trim();
+  if (!id) return 0;
+  let sum = 0;
+  for (const row of Array.isArray(promotions) ? promotions : []) {
+    if (String(row?.type ?? '').trim() !== 'invoice_discount') continue;
+    if (String(row.billId ?? '').trim() !== id) continue;
+    sum += Number(row.discountAmount) || 0;
+  }
+  return Math.round(sum * 100) / 100;
+}
+
 function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups) {
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;
@@ -250,7 +263,9 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
   }
 
   const lineItems = buildBillLineItems(bill);
-  const totalAmount = lineItems.reduce((sum, row) => sum + row.amount, 0);
+  const subtotal = lineItems.reduce((sum, row) => sum + row.amount, 0);
+  const invoiceDiscount = sumInvoiceDiscountForBill(opts.promotions, bill.id);
+  const totalAmount = Math.max(0, Math.round((subtotal - invoiceDiscount) * 100) / 100);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
@@ -266,6 +281,10 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
           formatAmount(row.amount),
         ])
       : [['Credit sale', '—', '—', formatAmount(bill.totalAmount)]];
+
+  if (invoiceDiscount > 0) {
+    tableBody.push(['Promotion discount', '', '', formatAmount(-invoiceDiscount)]);
+  }
 
   autoTable(doc, {
     startY: y,

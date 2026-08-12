@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
 import { hasDashboardAccess } from '../auth';
-import { BRANDS } from './brandTheme';
+import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -23,6 +23,7 @@ import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 const apiBase = getApiBase();
 
 export default function StockPage() {
+  const { brands } = useBagProducts();
   const [rows, setRows] = useState([]);
   const [summaryBrands, setSummaryBrands] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -83,7 +84,7 @@ export default function StockPage() {
   }, [load, loadDaily]);
 
   const totals = useMemo(() => {
-    const t = { tokyo: 0, samudra: 0, atlas: 0, nippon: 0 };
+    const t = Object.fromEntries(brands.map((b) => [b.key, 0]));
     if (summaryBrands?.length) {
       for (const b of summaryBrands) {
         if (b.key in t) t[b.key] = Number(b.bags) || 0;
@@ -91,13 +92,12 @@ export default function StockPage() {
       return t;
     }
     for (const r of rows) {
-      t.tokyo += Number(r.tokyoBags) || 0;
-      t.samudra += Number(r.samudraBags) || 0;
-      t.atlas += Number(r.atlasBags) || 0;
-      t.nippon += Number(r.nipponBags) || 0;
+      for (const b of brands) {
+        t[b.key] += Number(r[b.bagsField]) || 0;
+      }
     }
     return t;
-  }, [rows, summaryBrands]);
+  }, [rows, summaryBrands, brands]);
 
   const dailyRowsDesc = useMemo(() => [...dailyDays].reverse(), [dailyDays]);
 
@@ -105,16 +105,16 @@ export default function StockPage() {
     return dailyRowsDesc.filter((day) => {
       if (!rowMatchesQuery(ledgerSearch, [day.date])) return false;
       if (ledgerFilter === 'with-out') {
-        const hasOut = BRANDS.some((b) => Number((day.brands?.[b.key] || {}).out) > 0);
+        const hasOut = brands.some((b) => Number((day.brands?.[b.key] || {}).out) > 0);
         if (!hasOut) return false;
       }
       if (ledgerFilter === 'with-in') {
-        const hasIn = BRANDS.some((b) => Number((day.brands?.[b.key] || {}).in) > 0);
+        const hasIn = brands.some((b) => Number((day.brands?.[b.key] || {}).in) > 0);
         if (!hasIn) return false;
       }
       return true;
     });
-  }, [dailyRowsDesc, ledgerSearch, ledgerFilter]);
+  }, [dailyRowsDesc, ledgerSearch, ledgerFilter, brands]);
 
   const pagination = useTablePagination(filteredDailyRows.length, [ledgerSearch, ledgerFilter]);
   const pagedDailyRows = useMemo(
@@ -145,7 +145,7 @@ export default function StockPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {BRANDS.map((b) => {
+        {brands.map((b) => {
           const count = totals[b.key];
           return (
             <div
@@ -237,7 +237,7 @@ export default function StockPage() {
           </p>
         ) : (
           pagedDailyRows.map((day) => {
-            const fields = BRANDS.flatMap((b) => {
+            const fields = brands.flatMap((b) => {
               const cell = day.brands?.[b.key] || { start: 0, in: 0, out: 0, end: 0 };
               return [
                 { label: `${b.label} start`, value: cell.start },
@@ -262,7 +262,7 @@ export default function StockPage() {
               <th rowSpan={2} className={`whitespace-nowrap px-3 py-3 align-bottom ${stickyFirstThTransparent}`}>
                 Date
               </th>
-              {BRANDS.map((b) => (
+              {brands.map((b) => (
                 <th
                   key={b.key}
                   colSpan={4}
@@ -273,7 +273,7 @@ export default function StockPage() {
               ))}
             </tr>
             <tr className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-semibold uppercase text-slate-400">
-              {BRANDS.map((b) => (
+              {brands.map((b) => (
                 <Fragment key={b.key}>
                   <th className={`px-1.5 py-2 text-center ${b.ledger.sub}`}>Start</th>
                   <th className={`px-1.5 py-2 text-center ${b.ledger.sub}`}>In</th>
@@ -314,7 +314,7 @@ export default function StockPage() {
                   >
                     {day.date}
                   </td>
-                  {BRANDS.map((b) => {
+                  {brands.map((b) => {
                     const cell = day.brands?.[b.key] || { start: 0, in: 0, out: 0, end: 0 };
                     const rowLine = 'border-b border-slate-100/90';
                     const cellBase = `px-1.5 py-3 text-center tabular-nums transition-colors hover:brightness-[0.98] ${rowLine} ${b.ledger.cell}`;

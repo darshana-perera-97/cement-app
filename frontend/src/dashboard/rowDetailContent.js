@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
+import { canEditDetails } from '../auth';
 import {
-  BRANDS,
   BrandFieldCell,
   BrandSectionShell,
   BrandSections,
@@ -14,7 +14,8 @@ import {
   formatDateTime,
   formatMoney,
 } from './detailModalShared';
-import { getPaymentCheques } from './paymentCheques';
+import { useBagProducts } from './BagProductsContext';
+import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
 import { formatPoChequeWithBank, formatPoChequesList, isPoCashPayment } from './poChequeDisplay';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import { MANAGER_ACCESS_OPTIONS } from './navConfig';
@@ -82,7 +83,7 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'distributor':
       return {
-        title: 'Distributor details',
+        title: 'Supplier details',
         subtitle: [row.contact, row.email].filter(Boolean).join(' · ') || row.name || null,
       };
     case 'lorry':
@@ -262,7 +263,8 @@ function LorryDetailContent({ row }) {
 }
 
 function IncentiveDetailContent({ row }) {
-  const brand = BRANDS.find((b) => b.key === row.brandKey);
+  const { brands } = useBagProducts();
+  const brand = brands.find((b) => b.key === row.brandKey);
 
   return (
     <>
@@ -329,6 +331,7 @@ function IncentiveDetailContent({ row }) {
 }
 
 function LoadDetailContent({ row }) {
+  const { brands } = useBagProducts();
   const stockId = displayText(row.stockId);
 
   return (
@@ -343,6 +346,13 @@ function LoadDetailContent({ row }) {
           value={formatMoney(row.transportCostPerBag)}
           valueClassName="tabular-nums"
         />
+        {Number(row.doorStockTransportCostPerBag) > 0 ? (
+          <SummaryField
+            label="Door stock transport / bag"
+            value={formatMoney(row.doorStockTransportCostPerBag)}
+            valueClassName="tabular-nums"
+          />
+        ) : null}
         <SummaryField
           label="Margin / bag"
           value={formatMoney(row.marginPerBag ?? 70)}
@@ -355,7 +365,7 @@ function LoadDetailContent({ row }) {
         />
       </SummaryGrid>
       <BrandSections title="Cement by brand">
-        {BRANDS.map((b) => {
+        {brands.map((b) => {
           const active = brandHasLoadActivity(row, b.key);
           const bags = Number(row[`${b.key}Bags`]) || 0;
           return (
@@ -386,6 +396,7 @@ function LoadDetailContent({ row }) {
 }
 
 function BillDetailContent({ row }) {
+  const { brands } = useBagProducts();
   return (
     <>
       <SummaryGrid>
@@ -401,7 +412,7 @@ function BillDetailContent({ row }) {
         />
       </SummaryGrid>
       <BrandSections title="Bags sold">
-        {BRANDS.map((b) => {
+        {brands.map((b) => {
           const bags = Number(row[`${b.key}Bags`]) || 0;
           const active = bags > 0;
           return (
@@ -509,12 +520,14 @@ function CustomerDetailContent({ row }) {
           >
             View account
           </Link>
-          <Link
-            to={`/dashboard/customers/${encodeURIComponent(row.id)}?edit=1`}
-            className="inline-flex flex-1 items-center justify-center rounded-xl bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
-          >
-            Edit details
-          </Link>
+          {canEditDetails() ? (
+            <Link
+              to={`/dashboard/customers/${encodeURIComponent(row.id)}?edit=1`}
+              className="inline-flex flex-1 items-center justify-center rounded-xl bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+            >
+              Edit details
+            </Link>
+          ) : null}
         </div>
       ) : null}
     </>
@@ -523,6 +536,8 @@ function CustomerDetailContent({ row }) {
 
 function PaymentDetailContent({ row }) {
   const cash = Math.max(0, Number(row.cashAmount) || 0);
+  const cdm = cdmPortion(row);
+  const onlineTransfer = onlineTransferPortion(row);
   const chequeLines = getPaymentCheques(row);
 
   return (
@@ -532,8 +547,51 @@ function PaymentDetailContent({ row }) {
         <SummaryField label="Receipt #" value={displayText(row.billNumber)} valueClassName="font-mono" />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
         <SummaryField label="Recorded by" value={displayText(row.recordedBy)} />
+        {row.requiresApproval ? (
+          <SummaryField
+            label="Approval"
+            value={
+              String(row.approvalStatus ?? 'pending').trim().toLowerCase() === 'approved'
+                ? 'Approved'
+                : String(row.approvalStatus ?? 'pending').trim().toLowerCase() === 'rejected'
+                  ? 'Rejected'
+                  : 'Pending manager approval'
+            }
+            valueClassName={
+              String(row.approvalStatus ?? 'pending').trim().toLowerCase() === 'approved'
+                ? 'text-emerald-800'
+                : String(row.approvalStatus ?? 'pending').trim().toLowerCase() === 'rejected'
+                  ? 'text-rose-800'
+                  : 'text-amber-800'
+            }
+          />
+        ) : null}
         {cash > 0 ? (
           <SummaryField label="Cash" value={formatMoney(cash)} valueClassName="tabular-nums text-emerald-800" />
+        ) : null}
+        {cdm > 0 ? (
+          <SummaryField
+            label="CDM deposit"
+            value={formatMoney(cdm)}
+            valueClassName="tabular-nums text-sky-800"
+          />
+        ) : null}
+        {row.cdmNumber ? (
+          <SummaryField label="CDM number" value={displayText(row.cdmNumber)} valueClassName="font-mono" />
+        ) : null}
+        {onlineTransfer > 0 ? (
+          <SummaryField
+            label="Online transfer"
+            value={formatMoney(onlineTransfer)}
+            valueClassName="tabular-nums text-sky-800"
+          />
+        ) : null}
+        {row.onlineTransferReference ? (
+          <SummaryField
+            label="Transfer reference"
+            value={displayText(row.onlineTransferReference)}
+            valueClassName="font-mono"
+          />
         ) : null}
         <SummaryField
           label="Amount received"
@@ -605,42 +663,74 @@ function PaymentDetailContent({ row }) {
 }
 
 function PromotionDetailContent({ row }) {
-  const totalBags = BRANDS.reduce((sum, b) => sum + (Number(row[`${b.key}Bags`]) || 0), 0);
+  const { brands } = useBagProducts();
+  const type = String(row?.type ?? '').trim();
+  const promoKind =
+    type === 'invoice_discount' ? 'Invoice discount' : type === 'target_promotion' ? 'Target promotion' : 'Free bag issue';
+  const totalBags = brands.reduce((sum, b) => sum + (Number(row[`${b.key}Bags`]) || 0), 0);
+  const amount = Number(row.discountAmount) || 0;
 
   return (
     <>
       <SummaryGrid>
+        <SummaryField label="Type" value={promoKind} />
         <SummaryField label="Date" value={displayText(row.date)} />
-        <SummaryField label="Bill #" value={row.billNumber ? `#${row.billNumber}` : '—'} valueClassName="font-mono" />
+        <SummaryField
+          label="Bill / Invoice"
+          value={row.invoiceNumber || (row.billNumber ? `#${row.billNumber}` : '—')}
+          valueClassName="font-mono"
+        />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
         <SummaryField label="Recorded by" value={displayText(row.enteredBy || row.addedBy)} />
-        <SummaryField
-          label="Total free bags"
-          value={totalBags}
-          className="col-span-2 bg-indigo-50 ring-indigo-100"
-          valueClassName="tabular-nums font-semibold text-indigo-900"
-        />
+        {amount > 0 ? (
+          <SummaryField
+            label="Amount"
+            value={new Intl.NumberFormat(undefined, { style: 'currency', currency: 'LKR' }).format(amount)}
+            className="col-span-2 bg-emerald-50 ring-emerald-100"
+            valueClassName="tabular-nums font-semibold text-emerald-900"
+          />
+        ) : (
+          <SummaryField
+            label="Total free bags"
+            value={totalBags}
+            className="col-span-2 bg-indigo-50 ring-indigo-100"
+            valueClassName="tabular-nums font-semibold text-indigo-900"
+          />
+        )}
       </SummaryGrid>
       {row.reason ? <NoteBlock label="Reason" value={row.reason} /> : null}
-      <BrandSections title="Free bags by brand">
-        {BRANDS.map((b) => {
-          const bags = Number(row[`${b.key}Bags`]) || 0;
-          const active = brandHasBags(row, b.key);
-          return (
-            <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No free bags for this brand">
-              <dl className="grid grid-cols-1 gap-px bg-slate-100">
-                <BrandFieldCell brand={b} lead label="Free bags" value={bags} valueClassName="tabular-nums font-semibold text-indigo-900" />
-              </dl>
-            </BrandSectionShell>
-          );
-        })}
-      </BrandSections>
+      {type === 'invoice_discount' && row.discountMode ? (
+        <NoteBlock
+          label="Discount"
+          value={
+            row.discountMode === 'per_bag'
+              ? `${row.discountValue} LKR per bag`
+              : `${row.discountValue} LKR for whole invoice`
+          }
+        />
+      ) : null}
+      {type === 'free_bags' || !type ? (
+        <BrandSections title="Free bags by brand">
+          {brands.map((b) => {
+            const bags = Number(row[`${b.key}Bags`]) || 0;
+            const active = brandHasBags(row, b.key);
+            return (
+              <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No free bags for this brand">
+                <dl className="grid grid-cols-1 gap-px bg-slate-100">
+                  <BrandFieldCell brand={b} lead label="Free bags" value={bags} valueClassName="tabular-nums font-semibold text-indigo-900" />
+                </dl>
+              </BrandSectionShell>
+            );
+          })}
+        </BrandSections>
+      ) : null}
     </>
   );
 }
 
 function UnloadRequestDetailContent({ row }) {
-  const totalBags = BRANDS.reduce((sum, b) => sum + (Number(row[`${b.key}Bags`]) || 0), 0);
+  const { brands } = useBagProducts();
+  const totalBags = brands.reduce((sum, b) => sum + (Number(row[`${b.key}Bags`]) || 0), 0);
   const status = displayText(row.status || 'pending');
 
   return (
@@ -660,7 +750,7 @@ function UnloadRequestDetailContent({ row }) {
       </SummaryGrid>
       {row.note ? <NoteBlock label="Driver note" value={row.note} /> : null}
       <BrandSections title="Bags by brand">
-        {BRANDS.map((b) => {
+        {brands.map((b) => {
           const bags = Number(row[`${b.key}Bags`]) || 0;
           const active = brandHasBags(row, b.key);
           return (
@@ -730,6 +820,9 @@ function PurchaseOrderDetailContent({ row }) {
         <SummaryField label="Created by" value={displayText(row.createdBy)} />
         <SummaryField label="Created" value={formatDateTime(row.createdAt)} />
       </SummaryGrid>
+      {row.doorStock || String(row.notes ?? '').trim() ? (
+        <NoteBlock label="Notes" value={String(row.notes ?? '').trim() || 'Door stock'} />
+      ) : null}
       {cheques.length > 0 ? (
         <div className="mt-4 space-y-2">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Payments</p>
@@ -826,9 +919,10 @@ function TransactionDetailContent({ row }) {
 }
 
 function LedgerDayDetailContent({ row }) {
+  const { brands } = useBagProducts();
   return (
     <BrandSections title="Stock movement by brand">
-      {BRANDS.map((b) => {
+      {brands.map((b) => {
         const cell = row.brands?.[b.key] || { start: 0, in: 0, out: 0, end: 0 };
         const active = cell.start > 0 || cell.in > 0 || cell.out > 0 || cell.end > 0;
         return (

@@ -9,6 +9,8 @@ import {
 import {
   buildCustomerOutstandingBills,
 } from './pendingBills';
+import { getPaymentCheques } from './paymentCheques';
+import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
 
 const apiBase = getApiBase();
 
@@ -36,14 +38,45 @@ function newChequeLine(overrides = {}) {
     amount: '',
     chequeDate: todayYmdLocal(),
     chequeNumber: '',
+    chequeBank: '',
+    chequeBankCode: '',
+    chequeBranchCode: '',
     ...overrides,
   };
+}
+
+function lastChequeDefaultsForCustomer(payments, customerId) {
+  const cid = String(customerId ?? '').trim();
+  if (!cid) return null;
+  const sorted = (Array.isArray(payments) ? payments : [])
+    .filter((p) => String(p.customerId ?? '').trim() === cid)
+    .sort((a, b) =>
+      String(b.createdAt || `${b.date}T23:59:59`).localeCompare(
+        String(a.createdAt || `${a.date}T23:59:59`),
+      ),
+    );
+  for (const payment of sorted) {
+    const cheques = getPaymentCheques(payment);
+    if (cheques.length === 0) continue;
+    const last = cheques[cheques.length - 1];
+    return {
+      chequeBank: last.chequeBank || '',
+      chequeBankCode: last.chequeBankCode || '',
+      chequeBranchCode: last.chequeBranchCode || '',
+      chequeDate: last.chequeDate || todayYmdLocal(),
+    };
+  }
+  return null;
 }
 
 const emptyForm = (receiptNumber = '') => ({
   customerId: '',
   billNumber: receiptNumber,
   cashAmount: '',
+  cdmAmount: '',
+  cdmNumber: '',
+  onlineTransferAmount: '',
+  onlineTransferReference: '',
   cheques: [newChequeLine()],
   billAllocations: {},
   date: todayYmdLocal(),
@@ -115,9 +148,13 @@ export default function CollectorSeparateBillSettlementModal({
 
   useEffect(() => {
     if (!open) return;
+    const defaults = prefillCustomerId
+      ? lastChequeDefaultsForCustomer(payments, prefillCustomerId)
+      : null;
     setForm({
       ...emptyForm(suggestNextPaymentReceiptNumber(payments)),
       customerId: prefillCustomerId || '',
+      cheques: [newChequeLine(defaults || {})],
     });
   }, [open, prefillCustomerId, payments]);
 
@@ -140,7 +177,9 @@ export default function CollectorSeparateBillSettlementModal({
   );
 
   const cashTotal = Number(form.cashAmount) || 0;
-  const paymentTotal = Math.round((cashTotal + chequeTotal) * 100) / 100;
+  const cdmTotal = Number(form.cdmAmount) || 0;
+  const onlineTransferTotal = Number(form.onlineTransferAmount) || 0;
+  const paymentTotal = Math.round((cashTotal + chequeTotal + cdmTotal + onlineTransferTotal) * 100) / 100;
 
   const allocatedTotal = useMemo(() => {
     let sum = 0;
@@ -159,7 +198,13 @@ export default function CollectorSeparateBillSettlementModal({
       return;
     }
     if (field === 'customerId') {
-      setForm((f) => ({ ...f, customerId: value, billAllocations: {} }));
+      const defaults = lastChequeDefaultsForCustomer(payments, value);
+      setForm((f) => ({
+        ...f,
+        customerId: value,
+        billAllocations: {},
+        cheques: [newChequeLine(defaults || {})],
+      }));
       return;
     }
     setForm((f) => ({ ...f, [field]: value }));
@@ -177,12 +222,31 @@ export default function CollectorSeparateBillSettlementModal({
   const handleChequeChange = (key, field, value) => {
     setForm((f) => ({
       ...f,
-      cheques: f.cheques.map((c) => (c.key === key ? { ...c, [field]: value } : c)),
+      cheques: f.cheques.map((c) => {
+        if (c.key !== key) return c;
+        const next = { ...c, [field]: value };
+        if (field === 'chequeBank') {
+          const code = bankCodeForName(value);
+          if (code) next.chequeBankCode = code;
+        }
+        return next;
+      }),
     }));
   };
 
   const addChequeLine = () => {
-    setForm((f) => ({ ...f, cheques: [...f.cheques, newChequeLine()] }));
+    setForm((f) => {
+      const template = f.cheques[0];
+      const defaults = template
+        ? {
+            chequeBank: template.chequeBank,
+            chequeBankCode: template.chequeBankCode,
+            chequeBranchCode: template.chequeBranchCode,
+            chequeDate: template.chequeDate,
+          }
+        : {};
+      return { ...f, cheques: [...f.cheques, newChequeLine(defaults)] };
+    });
   };
 
   const removeChequeLine = (key) => {
@@ -212,7 +276,15 @@ export default function CollectorSeparateBillSettlementModal({
       return false;
     }
     if (paymentTotal <= 0) {
-      setSaveError('Enter a cash amount and/or at least one cheque so the total is greater than 0.');
+      setSaveError('Enter a cash, cheque, CDM deposit, and/or online transfer amount so the total is greater than 0.');
+      return false;
+    }
+    if (cdmTotal > 0 && !String(form.cdmNumber).trim()) {
+      setSaveError('Enter a CDM number when CDM deposit amount is greater than 0.');
+      return false;
+    }
+    if (onlineTransferTotal > 0 && !String(form.onlineTransferReference).trim()) {
+      setSaveError('Enter an online transfer reference number when online transfer amount is greater than 0.');
       return false;
     }
     for (let i = 0; i < form.cheques.length; i++) {
@@ -220,7 +292,7 @@ export default function CollectorSeparateBillSettlementModal({
       const amount = Number(line.amount) || 0;
       if (amount <= 0) continue;
       if (!line.chequeDate || !/^\d{4}-\d{2}-\d{2}$/.test(line.chequeDate)) {
-        setSaveError(`Cheque ${i + 1}: enter a valid cheque date.`);
+        setSaveError(`Cheque ${i + 1}: enter a valid conversion date.`);
         return false;
       }
       if (!String(line.chequeNumber).trim()) {
@@ -295,6 +367,9 @@ export default function CollectorSeparateBillSettlementModal({
         amount,
         chequeDate: line.chequeDate,
         chequeNumber: String(line.chequeNumber).trim(),
+        chequeBank: String(line.chequeBank).trim(),
+        chequeBankCode: String(line.chequeBankCode).trim(),
+        chequeBranchCode: String(line.chequeBranchCode).trim(),
       });
     }
 
@@ -308,6 +383,10 @@ export default function CollectorSeparateBillSettlementModal({
           customerId: form.customerId,
           billNumber: receiptNumber,
           cashAmount: cashTotal,
+          cdmAmount: cdmTotal,
+          cdmNumber: String(form.cdmNumber).trim(),
+          onlineTransferAmount: onlineTransferTotal,
+          onlineTransferReference: String(form.onlineTransferReference).trim(),
           cheques: chequeLines,
           billCashAllocations,
           date: form.date,
@@ -445,6 +524,64 @@ export default function CollectorSeparateBillSettlementModal({
                       placeholder="0"
                     />
                   </label>
+                  <fieldset className="rounded-xl bg-sky-50/70 p-3 ring-1 ring-sky-100 sm:p-4">
+                    <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposit</legend>
+                    <p className="mt-1 text-xs text-slate-500">Amount and CDM number as evidence. Requires manager approval.</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-600">
+                        Amount (LKR)
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={form.cdmAmount}
+                          onChange={(e) => handleChange('cdmAmount', e.target.value)}
+                          className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                          placeholder="0"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-600">
+                        CDM number <span className="text-rose-600">*</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={form.cdmNumber}
+                          onChange={(e) => handleChange('cdmNumber', e.target.value)}
+                          className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                          placeholder="e.g. CDM receipt / slip no."
+                        />
+                      </label>
+                    </div>
+                  </fieldset>
+                  <fieldset className="rounded-xl bg-teal-50/70 p-3 ring-1 ring-teal-100 sm:p-4">
+                    <legend className="px-1 text-sm font-semibold text-slate-800">Online transfer</legend>
+                    <p className="mt-1 text-xs text-slate-500">Amount and bank reference as evidence. Requires manager approval.</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block text-sm font-medium text-slate-600">
+                        Amount (LKR)
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={form.onlineTransferAmount}
+                          onChange={(e) => handleChange('onlineTransferAmount', e.target.value)}
+                          className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                          placeholder="0"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium text-slate-600">
+                        Transfer reference # <span className="text-rose-600">*</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={form.onlineTransferReference}
+                          onChange={(e) => handleChange('onlineTransferReference', e.target.value)}
+                          className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                          placeholder="e.g. bank ref / transaction ID"
+                        />
+                      </label>
+                    </div>
+                  </fieldset>
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-slate-800">Cheques</p>
@@ -489,7 +626,7 @@ export default function CollectorSeparateBillSettlementModal({
                             />
                           </label>
                           <label className="block text-sm font-medium text-slate-600">
-                            Cheque date
+                            Conversion date
                             <input
                               type="date"
                               value={line.chequeDate}
@@ -498,17 +635,70 @@ export default function CollectorSeparateBillSettlementModal({
                             />
                           </label>
                         </div>
-                        <label className="mt-3 block text-sm font-medium text-slate-600">
-                          Cheque number
-                          <input
-                            type="text"
-                            autoComplete="off"
-                            value={line.chequeNumber}
-                            onChange={(e) => handleChequeChange(line.key, 'chequeNumber', e.target.value)}
-                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                            placeholder="e.g. 123456"
-                          />
-                        </label>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className="block text-sm font-medium text-slate-600">
+                            Bank
+                            <select
+                              value={line.chequeBank}
+                              onChange={(e) => handleChequeChange(line.key, 'chequeBank', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            >
+                              <option value="">Select bank…</option>
+                              {SRI_LANKA_BANKS.map((b) => (
+                                <option key={`${b.code}-${b.name}`} value={b.name}>
+                                  {b.name} ({b.code})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600">
+                            Bank code
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              autoComplete="off"
+                              maxLength={4}
+                              value={line.chequeBankCode}
+                              onChange={(e) =>
+                                handleChequeChange(line.key, 'chequeBankCode', e.target.value.replace(/\D/g, '').slice(0, 4))
+                              }
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="e.g. 7056"
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className="block text-sm font-medium text-slate-600">
+                            Branch code
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              autoComplete="off"
+                              maxLength={3}
+                              value={line.chequeBranchCode}
+                              onChange={(e) =>
+                                handleChequeChange(
+                                  line.key,
+                                  'chequeBranchCode',
+                                  e.target.value.replace(/\D/g, '').slice(0, 3),
+                                )
+                              }
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="e.g. 080"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600">
+                            Cheque number
+                            <input
+                              type="text"
+                              autoComplete="off"
+                              value={line.chequeNumber}
+                              onChange={(e) => handleChequeChange(line.key, 'chequeNumber', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="e.g. 123456"
+                            />
+                          </label>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -517,9 +707,18 @@ export default function CollectorSeparateBillSettlementModal({
                       Total payment:{' '}
                       <span className="font-semibold tabular-nums text-slate-900">{money(paymentTotal)}</span>
                     </span>
-                    {chequeTotal > 0 ? (
+                    {chequeTotal > 0 || cdmTotal > 0 || onlineTransferTotal > 0 ? (
                       <span className="text-xs text-slate-500 sm:ml-2">
-                        (cash {money(cashTotal)} · cheques {money(chequeTotal)})
+                        (
+                        {[
+                          cashTotal > 0 ? `cash ${money(cashTotal)}` : null,
+                          chequeTotal > 0 ? `cheques ${money(chequeTotal)}` : null,
+                          cdmTotal > 0 ? `CDM ${money(cdmTotal)}` : null,
+                          onlineTransferTotal > 0 ? `online ${money(onlineTransferTotal)}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                        )
                       </span>
                     ) : cashTotal > 0 ? (
                       <span className="text-xs text-slate-500 sm:ml-2">(cash only)</span>
@@ -542,9 +741,14 @@ export default function CollectorSeparateBillSettlementModal({
                     <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Payment total</p>
                     <p className="mt-1 text-2xl font-bold tabular-nums text-indigo-950">{money(paymentTotal)}</p>
                     <p className="mt-1 text-sm text-indigo-800/90">
-                      {cashTotal > 0 ? `Cash ${money(cashTotal)}` : null}
-                      {cashTotal > 0 && chequeTotal > 0 ? ' · ' : null}
-                      {chequeTotal > 0 ? `Cheques ${money(chequeTotal)}` : null}
+                      {[
+                        cashTotal > 0 ? `Cash ${money(cashTotal)}` : null,
+                        chequeTotal > 0 ? `Cheques ${money(chequeTotal)}` : null,
+                        cdmTotal > 0 ? `CDM ${money(cdmTotal)}` : null,
+                        onlineTransferTotal > 0 ? `Online ${money(onlineTransferTotal)}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') || '—'}
                     </p>
                     <p className="mt-2 text-sm text-indigo-700">
                       Shop: <span className="font-semibold">{lockedCustomerLabel}</span>

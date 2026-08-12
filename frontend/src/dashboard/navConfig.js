@@ -17,7 +17,14 @@ export const MANAGER_ACCESS_OPTIONS = [
 
 export const ALL_MANAGER_ACCESS_KEYS = MANAGER_ACCESS_OPTIONS.map((o) => o.key);
 
-export const COLLECTOR_ACCESS_KEYS = ['customers', 'stock', 'pending-cheques', 'overdue-bills', 'payments'];
+export const COLLECTOR_ACCESS_KEYS = [
+  'customers',
+  'stock',
+  'pending-cheques',
+  'overdue-bills',
+  'payments',
+  'reports',
+];
 
 /** Route segment (under /dashboard) → access key */
 export const DASHBOARD_ROUTE_ACCESS = {

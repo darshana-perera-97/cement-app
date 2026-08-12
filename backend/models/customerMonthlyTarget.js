@@ -1,7 +1,5 @@
 const { toNonNegNumber } = require('./stocksStore');
 
-const BILL_BAG_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-
 function normalizeCustomerName(s) {
   return String(s ?? '')
     .trim()
@@ -11,8 +9,10 @@ function normalizeCustomerName(s) {
 
 function totalBagsOnBill(bill) {
   let sum = 0;
-  for (const k of BILL_BAG_KEYS) {
-    sum += toNonNegNumber(bill[`${k}Bags`]);
+  for (const [key, val] of Object.entries(bill || {})) {
+    if (key.endsWith('Bags') && key !== 'totalBags') {
+      sum += toNonNegNumber(val);
+    }
   }
   return sum;
 }

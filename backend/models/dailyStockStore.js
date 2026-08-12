@@ -1,14 +1,7 @@
 const { toNonNegNumber } = require('./stocksStore');
 const { aggregateOutsByDateFromBills } = require('./billsStore');
 const { aggregatePromotionOutsByDate } = require('./promotionsStore');
-
-const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-const BAG_FIELDS = {
-  tokyo: 'tokyoBags',
-  samudra: 'samudraBags',
-  atlas: 'atlasBags',
-  nippon: 'nipponBags',
-};
+const { bagsField, emptyBrandMap } = require('./bagProducts');
 
 function addDaysYmd(ymd, deltaDays) {
   const [y, m, d] = ymd.split('-').map((n) => parseInt(n, 10));
@@ -31,18 +24,14 @@ function maxYmd(a, b) {
   return a >= b ? a : b;
 }
 
-function emptyBrandMap() {
-  return { tokyo: 0, samudra: 0, atlas: 0, nippon: 0 };
-}
-
-function aggregateLoadsByDate(loads) {
+function aggregateLoadsByDate(loads, keys) {
   const map = {};
   for (const row of loads) {
     const d = String(row.date ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    if (!map[d]) map[d] = emptyBrandMap();
-    for (const k of BRAND_KEYS) {
-      map[d][k] += toNonNegNumber(row[BAG_FIELDS[k]]);
+    if (!map[d]) map[d] = emptyBrandMap(keys);
+    for (const k of keys) {
+      map[d][k] += toNonNegNumber(row[bagsField(k)]);
     }
   }
   return map;
@@ -59,12 +48,12 @@ function eachDateInclusive(fromYmd, toYmd) {
   return out;
 }
 
-function mergeOutByDate(billOut, promoOut) {
+function mergeOutByDate(billOut, promoOut, keys) {
   const dates = new Set([...Object.keys(billOut), ...Object.keys(promoOut)]);
   const merged = {};
   for (const d of dates) {
-    merged[d] = emptyBrandMap();
-    for (const k of BRAND_KEYS) {
+    merged[d] = emptyBrandMap(keys);
+    for (const k of keys) {
       merged[d][k] = (billOut[d]?.[k] || 0) + (promoOut[d]?.[k] || 0);
     }
   }
@@ -74,13 +63,14 @@ function mergeOutByDate(billOut, promoOut) {
 /**
  * Build daily ledger: start-of-day, bags in (loads), out (credit bills + promotional free bags that day), end-of-day.
  */
-function buildDailyStockPayload(loads, bills, promotions = []) {
-  const inByDate = aggregateLoadsByDate(loads);
-  const billOut = aggregateOutsByDateFromBills(Array.isArray(bills) ? bills : []);
-  const promoOut = aggregatePromotionOutsByDate(Array.isArray(promotions) ? promotions : []);
-  const outByDate = mergeOutByDate(billOut, promoOut);
+function buildDailyStockPayload(loads, bills, promotions = [], keys = []) {
+  const brandKeys = Array.isArray(keys) && keys.length > 0 ? keys : [];
+  const inByDate = aggregateLoadsByDate(loads, brandKeys);
+  const billOut = aggregateOutsByDateFromBills(Array.isArray(bills) ? bills : [], brandKeys);
+  const promoOut = aggregatePromotionOutsByDate(Array.isArray(promotions) ? promotions : [], brandKeys);
+  const outByDate = mergeOutByDate(billOut, promoOut, brandKeys);
   const allKeys = new Set([...Object.keys(inByDate), ...Object.keys(outByDate)]);
-  if (allKeys.size === 0) {
+  if (allKeys.size === 0 || brandKeys.length === 0) {
     return { generatedAt: new Date().toISOString(), days: [] };
   }
 
@@ -90,14 +80,14 @@ function buildDailyStockPayload(loads, bills, promotions = []) {
   const endDate = maxYmd(maxActivityDate, todayYmdLocal());
 
   const days = [];
-  let prevEnd = emptyBrandMap();
+  let prevEnd = emptyBrandMap(brandKeys);
 
   for (const date of eachDateInclusive(minDate, endDate)) {
-    const inn = inByDate[date] || emptyBrandMap();
-    const outv = outByDate[date] || emptyBrandMap();
+    const inn = inByDate[date] || emptyBrandMap(brandKeys);
+    const outv = outByDate[date] || emptyBrandMap(brandKeys);
 
     const brands = {};
-    for (const k of BRAND_KEYS) {
+    for (const k of brandKeys) {
       const start = prevEnd[k];
       const inBags = inn[k];
       const outBags = outv[k];

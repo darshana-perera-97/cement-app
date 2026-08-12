@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { getApiBase } from '../apiBase';
 import { depositQueueRowKey } from './paymentCheques';
-import { BRANDS } from './brandTheme';
+import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -42,9 +42,14 @@ import {
   buildCashBookLedgerRows,
   summarizeCashBookLedger,
 } from './cashBookLedger';
-import { computeGuaranteeStatus, computeGuaranteeStatusByDistributor } from './guaranteeStatus';
+import {
+  computeGuaranteeStatus,
+  computeGuaranteeStatusByDistributor,
+  formatGuaranteeExpiryHint,
+  GUARANTEE_RENEWAL_WARN_DAYS,
+} from './guaranteeStatus';
 
-/** Bar fills aligned with `BRANDS` — same hues as light theme, higher chroma for readability */
+/** Bar fills aligned with bag products — same hues as light theme, higher chroma for readability */
 const BRAND_BAR_COLORS = {
   tokyo: '#a78bfa',
   samudra: '#38bdf8',
@@ -181,6 +186,37 @@ function GuaranteeUtilizationBar({ pct, overLimit }) {
   );
 }
 
+function formatDisplayDate(ymd) {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return '—';
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function GuaranteeExpiryBadge({ expiryInfo }) {
+  if (!expiryInfo || expiryInfo.status === 'none' || expiryInfo.status === 'ok') return null;
+  const isExpired = expiryInfo.status === 'expired';
+  return (
+    <span
+      className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+        isExpired ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-900'
+      }`}
+    >
+      {isExpired ? 'Expired' : 'Renew soon'}
+    </span>
+  );
+}
+
+function guaranteeAvailableToneClass(value) {
+  const n = Number(value) || 0;
+  if (n < 0) return 'text-rose-700';
+  if (n > 0) return 'text-emerald-800';
+  return 'text-slate-600';
+}
+
 function Card({ title, subtitle, children, className = '', headerExtra = null }) {
   return (
     <div
@@ -310,6 +346,7 @@ export function OverdueBillsTable({ rows, totalLoadedCount, defaultPageSize = 10
 
 export default function AnalyticsPage() {
   const apiRoot = getApiBase() || '';
+  const { brands } = useBagProducts();
   const [cashSummary, setCashSummary] = useState(null);
   const [cashFlow, setCashFlow] = useState([]);
   const [bagSalesByDay, setBagSalesByDay] = useState([]);
@@ -325,6 +362,7 @@ export default function AnalyticsPage() {
   const [chequeDepositErr, setChequeDepositErr] = useState(null);
   const [payments, setPayments] = useState([]);
   const [cashBookEntries, setCashBookEntries] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [bankGuarantees, setBankGuarantees] = useState([]);
   const [bankBalancePayload, setBankBalancePayload] = useState(null);
   const [overdueSearch, setOverdueSearch] = useState('');
@@ -334,7 +372,7 @@ export default function AnalyticsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes] =
+        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes, promoRes] =
           await Promise.all([
             fetch(`${apiRoot}/api/cash-summary`),
             fetch(`${apiRoot}/api/cash-flow?days=7`),
@@ -348,6 +386,7 @@ export default function AnalyticsPage() {
             fetch(`${apiRoot}/api/cash-book-entries`),
             fetch(`${apiRoot}/api/bank-guarantees`),
             fetch(`${apiRoot}/api/bank-account-balances`),
+            fetch(`${apiRoot}/api/promotions`),
           ]);
         if (!cancelled) {
           if (sumRes.ok) setCashSummary(await sumRes.json());
@@ -382,6 +421,12 @@ export default function AnalyticsPage() {
           const paymentsData = payRes.ok ? await payRes.json() : [];
           const paymentsList = Array.isArray(paymentsData) ? paymentsData : [];
           setPayments(paymentsList);
+          if (promoRes.ok) {
+            const promoData = await promoRes.json();
+            setPromotions(Array.isArray(promoData) ? promoData : []);
+          } else {
+            setPromotions([]);
+          }
           setPendingBills(
             buildPendingBillRows(
               Array.isArray(customers) ? customers : [],
@@ -490,10 +535,10 @@ export default function AnalyticsPage() {
   const showOverdueViewAll = overdueBills.length > OVERDUE_VIEW_ALL_THRESHOLD;
 
   const cashierSummary = useMemo(() => {
-    const sourceEntries = buildCashBookSourceEntries(payments, cashBookEntries);
+    const sourceEntries = buildCashBookSourceEntries(payments, cashBookEntries, promotions);
     const ledgerRows = buildCashBookLedgerRows(sourceEntries);
     return summarizeCashBookLedger(ledgerRows);
-  }, [payments, cashBookEntries]);
+  }, [payments, cashBookEntries, promotions]);
 
   const bankSummary = useMemo(() => {
     const byAccountId =
@@ -527,14 +572,14 @@ export default function AnalyticsPage() {
     return { total, count };
   }, [bankBalancePayload]);
 
-  const guaranteeStatus = useMemo(
-    () =>
-      computeGuaranteeStatus(bankGuarantees, payments, {
-        poPendingOutgoing: poPendingMetrics.total,
-        poPendingCount: poPendingMetrics.count,
-      }),
-    [bankGuarantees, payments, poPendingMetrics],
-  );
+  const guaranteeStatus = useMemo(() => {
+    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
+    return computeGuaranteeStatus(bankGuarantees, payments, {
+      poPendingOutgoing: poPendingMetrics.total,
+      poPendingCount: poPendingMetrics.count,
+      asOfDate: asOf,
+    });
+  }, [bankGuarantees, payments, poPendingMetrics, bankBalancePayload]);
 
   const distributorGuaranteeStatuses = useMemo(() => {
     const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
@@ -680,7 +725,7 @@ export default function AnalyticsPage() {
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {BRANDS.map((b) => (
+                  {brands.map((b) => (
                     <Bar
                       key={b.key}
                       dataKey={b.key}
@@ -865,48 +910,96 @@ export default function AnalyticsPage() {
             </div>
           ) : (
             <div className="space-y-3">
+              {guaranteeStatus.hasExpiryWarning ? (
+                <div
+                  className={`rounded-xl px-3 py-2.5 text-sm ring-1 ${
+                    guaranteeStatus.expiredCount > 0
+                      ? 'bg-rose-50 text-rose-900 ring-rose-100'
+                      : 'bg-amber-50 text-amber-900 ring-amber-100'
+                  }`}
+                  role="status"
+                >
+                  <p className="font-semibold">
+                    {guaranteeStatus.expiredCount > 0
+                      ? `${guaranteeStatus.expiredCount} guarantee${guaranteeStatus.expiredCount === 1 ? '' : 's'} expired`
+                      : `${guaranteeStatus.expiringSoonCount} guarantee${guaranteeStatus.expiringSoonCount === 1 ? '' : 's'} due for renewal`}
+                  </p>
+                  <p className="mt-0.5 text-xs opacity-90">
+                    {guaranteeStatus.expiredCount > 0 && guaranteeStatus.expiringSoonCount > guaranteeStatus.expiredCount
+                      ? `Also ${guaranteeStatus.expiringSoonCount - guaranteeStatus.expiredCount} expiring within ${GUARANTEE_RENEWAL_WARN_DAYS} days. `
+                      : ''}
+                    Renew in Cash Book before collateral lapses.
+                  </p>
+                </div>
+              ) : null}
               <div className={mobileCardList}>
                 {distributorGuaranteeStatuses.map((dist) => (
                   <MobileRowCard
                     key={dist.distributorId}
                     title={dist.distributorName}
                     subtitle={
-                      dist.poPendingCount > 0
-                        ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
-                        : 'No pending PO cheques'
+                      dist.nearestExpiry?.status === 'near' || dist.nearestExpiry?.status === 'expired'
+                        ? formatGuaranteeExpiryHint(dist.nearestExpiry)
+                        : dist.poPendingCount > 0
+                          ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
+                          : dist.nearestExpiry?.status === 'ok'
+                            ? `Expires ${formatDisplayDate(dist.nearestExpiry.expireDate)}`
+                            : 'No pending PO cheques'
                     }
                     badge={
-                      dist.overLimit ? (
-                        <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
-                          Over limit
-                        </span>
-                      ) : dist.hasGuarantee ? (
-                        <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-teal-900">
-                          {dist.utilizationPct}%
-                        </span>
-                      ) : (
-                        <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-                          No guarantee
-                        </span>
-                      )
+                      <span className="inline-flex flex-wrap items-center gap-1">
+                        <GuaranteeExpiryBadge expiryInfo={dist.nearestExpiry} />
+                        {dist.overLimit ? (
+                          <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                            Over limit
+                          </span>
+                        ) : dist.hasGuarantee ? (
+                          <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-teal-900">
+                            {dist.utilizationPct}%
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                            No guarantee
+                          </span>
+                        )}
+                      </span>
                     }
                     fields={[
                       { label: 'Guarantee', value: formatLkrCompact(dist.totalGuarantee) },
                       { label: 'PO pending', value: formatLkrCompact(dist.pendingTotal) },
-                      { label: 'Available', value: formatLkrCompact(dist.available) },
+                      {
+                        label: 'Available',
+                        value: (
+                          <span className={guaranteeAvailableToneClass(dist.available)}>
+                            {formatLkrCompact(dist.available)}
+                          </span>
+                        ),
+                      },
+                      ...(dist.nearestExpiry?.status && dist.nearestExpiry.status !== 'none'
+                        ? [
+                            {
+                              label: 'Expiry',
+                              value:
+                                dist.nearestExpiry.status === 'near' || dist.nearestExpiry.status === 'expired'
+                                  ? formatGuaranteeExpiryHint(dist.nearestExpiry)
+                                  : formatDisplayDate(dist.nearestExpiry.expireDate),
+                            },
+                          ]
+                        : []),
                     ]}
                   />
                 ))}
               </div>
 
               <div className={`hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`px-4 py-2.5 ${stickyFirstTh}`}>Distributor</th>
                       <th className="whitespace-nowrap px-3 py-2.5 text-right">Guarantee</th>
                       <th className="whitespace-nowrap px-3 py-2.5 text-right">PO pending</th>
                       <th className="whitespace-nowrap px-3 py-2.5 text-right">Available</th>
+                      <th className="whitespace-nowrap px-3 py-2.5">Expiry</th>
                       <th className="min-w-[8rem] px-3 py-2.5">Utilization</th>
                     </tr>
                   </thead>
@@ -922,11 +1015,14 @@ export default function AnalyticsPage() {
                                 ? 'No pending PO cheques'
                                 : 'No guarantee recorded'}
                           </span>
-                          {dist.overLimit ? (
-                            <span className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-800">
-                              Over limit
-                            </span>
-                          ) : null}
+                          <span className="mt-1 inline-flex flex-wrap gap-1">
+                            <GuaranteeExpiryBadge expiryInfo={dist.nearestExpiry} />
+                            {dist.overLimit ? (
+                              <span className="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-800">
+                                Over limit
+                              </span>
+                            ) : null}
+                          </span>
                         </td>
                         <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
                           {formatLkrCompact(dist.totalGuarantee)}
@@ -934,8 +1030,29 @@ export default function AnalyticsPage() {
                         <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-violet-900">
                           {formatLkrCompact(dist.pendingTotal)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
+                        <td
+                          className={`whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums ${guaranteeAvailableToneClass(dist.available)}`}
+                        >
                           {formatLkrCompact(dist.available)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-xs">
+                          {dist.nearestExpiry?.status && dist.nearestExpiry.status !== 'none' ? (
+                            <span
+                              className={
+                                dist.nearestExpiry.status === 'expired'
+                                  ? 'font-semibold text-rose-700'
+                                  : dist.nearestExpiry.status === 'near'
+                                    ? 'font-semibold text-amber-800'
+                                    : 'text-slate-600'
+                              }
+                            >
+                              {dist.nearestExpiry.status === 'ok'
+                                ? formatDisplayDate(dist.nearestExpiry.expireDate)
+                                : formatGuaranteeExpiryHint(dist.nearestExpiry)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           {dist.hasGuarantee ? (

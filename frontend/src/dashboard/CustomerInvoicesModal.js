@@ -16,6 +16,8 @@ import {
 } from './tableToolbar';
 import { downloadCustomerInvoicesReport } from './customerInvoicesExport';
 import { buildCustomerInvoiceRows } from './pendingBills';
+import { isTaxInvoiceReady } from './customerTaxUtils';
+import { downloadTaxInvoicePdf } from './taxInvoicesPdf';
 
 const apiBase = getApiBase();
 
@@ -74,30 +76,48 @@ function statusBadge(status, isOverdue) {
 export default function CustomerInvoicesModal({ open, customer, onClose }) {
   const [bills, setBills] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [shop, setShop] = useState(null);
+  const [unloads, setUnloads] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [taxDownloadingId, setTaxDownloadingId] = useState(null);
+
+  const taxReady = isTaxInvoiceReady(customer, shop);
 
   const load = useCallback(async () => {
     if (!customer) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const [billsRes, payRes] = await Promise.all([
+      const [billsRes, payRes, shopRes, unloadsRes, promosRes] = await Promise.all([
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/payments`),
+        fetch(`${apiBase}/api/shop`),
+        fetch(`${apiBase}/api/unloads`),
+        fetch(`${apiBase}/api/promotions`),
       ]);
       if (!billsRes.ok) throw new Error('Failed to load bills');
       if (!payRes.ok) throw new Error('Failed to load payments');
       const billsData = await billsRes.json();
       const payData = await payRes.json();
+      const shopData = shopRes.ok ? await shopRes.json() : null;
+      const unloadsData = unloadsRes.ok ? await unloadsRes.json() : [];
+      const promosData = promosRes.ok ? await promosRes.json() : [];
       setBills(Array.isArray(billsData) ? billsData : []);
       setPayments(Array.isArray(payData) ? payData : []);
+      setShop(shopData);
+      setUnloads(Array.isArray(unloadsData) ? unloadsData : []);
+      setPromotions(Array.isArray(promosData) ? promosData : []);
     } catch (e) {
       setLoadError(e.message || 'Could not load invoices');
       setBills([]);
       setPayments([]);
+      setShop(null);
+      setUnloads([]);
+      setPromotions([]);
     } finally {
       setLoading(false);
     }
@@ -139,6 +159,32 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
     return { billed, paid, due, count: filteredRows.length };
   }, [filteredRows]);
 
+  const billById = useMemo(() => {
+    const map = new Map();
+    for (const bill of bills) {
+      const id = String(bill.id ?? '').trim();
+      if (id) map.set(id, bill);
+    }
+    return map;
+  }, [bills]);
+
+  const handleDownloadTaxInvoice = (row) => {
+    const bill = billById.get(String(row.id ?? '').trim());
+    if (!bill || !taxReady) return;
+    setTaxDownloadingId(row.id);
+    try {
+      downloadTaxInvoicePdf(bill, {
+        customer,
+        shop,
+        unloads,
+        promotions,
+        modeOfPayment: row.status === 'settled' ? 'Paid' : 'Credit',
+      });
+    } finally {
+      setTaxDownloadingId(null);
+    }
+  };
+
   if (!open) return null;
 
   const settlementDays = customer?.overdueDays ?? 14;
@@ -170,6 +216,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
           <p className="mt-1 text-sm text-slate-500">
             Credit bills · settle within {settlementDays} day{settlementDays === 1 ? '' : 's'} of bill date.
             Payments apply to opening balance first, then oldest bills.
+            {taxReady ? ' Tax invoice download is available per row.' : null}
           </p>
         </div>
 
@@ -250,6 +297,18 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                         { label: 'Settled date', value: formatDisplayDate(r.settledDate) },
                         { label: 'Days to settle', value: formatDaysToSettle(r) },
                       ]}
+                      actions={
+                        taxReady ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadTaxInvoice(r)}
+                            disabled={taxDownloadingId === r.id}
+                            className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                          >
+                            {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
+                          </button>
+                        ) : null
+                      }
                     />
                   ))}
                 </div>
@@ -265,6 +324,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                         <th className="whitespace-nowrap px-4 py-3 text-right">Paid</th>
                         <th className="whitespace-nowrap px-4 py-3 text-right">Balance</th>
                         <th className="whitespace-nowrap px-4 py-3">Status</th>
+                        {taxReady ? <th className="whitespace-nowrap px-4 py-3">Actions</th> : null}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -290,6 +350,19 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                             {r.outstandingAmount > 0 ? money(r.outstandingAmount) : '—'}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3">{statusBadge(r.status, r.isOverdue)}</td>
+                          {taxReady ? (
+                            <td className="whitespace-nowrap px-4 py-3">
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadTaxInvoice(r)}
+                                disabled={taxDownloadingId === r.id}
+                                className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                                title="Download tax invoice PDF"
+                              >
+                                {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
+                              </button>
+                            </td>
+                          ) : null}
                         </tr>
                       ))}
                     </tbody>

@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -50,10 +50,11 @@ function addPageFooters(doc) {
 }
 
 function buildHead() {
+  const brands = getCachedBrands();
   return [
     [
       'Shop name',
-      ...BRANDS.map((b) => `${b.label} bags`),
+      ...brands.map((b) => `${b.label} bags`),
       'Total bags',
       'Monthly target',
       'Completed',
@@ -62,12 +63,13 @@ function buildHead() {
 }
 
 function buildBody(rows) {
+  const brands = getCachedBrands();
   if (rows.length === 0) {
-    return [['—', ...BRANDS.map(() => '—'), '0', '—', '—']];
+    return [['—', ...brands.map(() => '—'), '0', '—', '—']];
   }
   return rows.map((r) => [
     r.shop || '—',
-    ...BRANDS.map((b) => formatBrandCell(r.byBrand?.[b.key])),
+    ...brands.map((b) => formatBrandCell(r.byBrand?.[b.key])),
     formatBags(r.total),
     r.monthlyTargetBags > 0 ? formatBags(r.monthlyTargetBags) : '—',
     formatPct(r.progressPct),
@@ -75,11 +77,12 @@ function buildBody(rows) {
 }
 
 function buildFoot(rows, totals, overallProgressPct) {
+  const brands = getCachedBrands();
   if (rows.length === 0) return null;
   return [
     [
       `Total (${rows.length} shop${rows.length === 1 ? '' : 's'})`,
-      ...BRANDS.map((b) => formatBags(totals.byBrand?.[b.key] || 0)),
+      ...brands.map((b) => formatBags(totals.byBrand?.[b.key] || 0)),
       formatBags(totals.total),
       totals.monthlyTargetBags > 0 ? formatBags(totals.monthlyTargetBags) : '—',
       formatPct(overallProgressPct),
@@ -128,7 +131,7 @@ export function downloadShopTargetsPdf(data, options = {}) {
   doc.setTextColor(0, 0, 0);
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
-  const brandColCount = BRANDS.length;
+  const brandColCount = getCachedBrands().length;
   const head = buildHead();
   const body = buildBody(rows);
   const foot = buildFoot(rows, totals, overallProgressPct);

@@ -1,5 +1,85 @@
 import { buildChequeTableRows, depositQueueRowKey } from './paymentCheques';
 
+export const GUARANTEE_RENEWAL_WARN_DAYS = 30;
+
+function todayYmdLocal() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function daysBetweenYmd(fromYmd, toYmd) {
+  const from = String(fromYmd ?? '').slice(0, 10);
+  const to = String(toYmd ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
+  const t0 = new Date(
+    parseInt(from.slice(0, 4), 10),
+    parseInt(from.slice(5, 7), 10) - 1,
+    parseInt(from.slice(8, 10), 10),
+  ).getTime();
+  const t1 = new Date(
+    parseInt(to.slice(0, 4), 10),
+    parseInt(to.slice(5, 7), 10) - 1,
+    parseInt(to.slice(8, 10), 10),
+  ).getTime();
+  return Math.round((t1 - t0) / (24 * 60 * 60 * 1000));
+}
+
+/** Expiry status for a single guarantee expire date. */
+export function getGuaranteeExpiryStatus(expireDate, asOfDate = '', { warnDays = GUARANTEE_RENEWAL_WARN_DAYS } = {}) {
+  const exp = String(expireDate ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) {
+    return { status: 'none', expireDate: '', daysUntil: null };
+  }
+  const asOf = String(asOfDate ?? '').slice(0, 10) || todayYmdLocal();
+  const daysUntil = daysBetweenYmd(asOf, exp);
+  if (daysUntil == null) return { status: 'none', expireDate: exp, daysUntil: null };
+  if (daysUntil < 0) return { status: 'expired', expireDate: exp, daysUntil };
+  if (daysUntil <= warnDays) return { status: 'near', expireDate: exp, daysUntil };
+  return { status: 'ok', expireDate: exp, daysUntil };
+}
+
+function summarizeGuaranteeExpiries(guarantees, asOfDate) {
+  let nearest = null;
+  let expiringSoonCount = 0;
+  let expiredCount = 0;
+  let withExpiryCount = 0;
+
+  for (const g of Array.isArray(guarantees) ? guarantees : []) {
+    const info = getGuaranteeExpiryStatus(g.expireDate, asOfDate);
+    if (info.status === 'none') continue;
+    withExpiryCount += 1;
+    if (info.status === 'expired') expiredCount += 1;
+    if (info.status === 'near' || info.status === 'expired') expiringSoonCount += 1;
+    if (!nearest || info.daysUntil < nearest.daysUntil) nearest = info;
+  }
+
+  return {
+    nearestExpiry: nearest,
+    expiringSoonCount,
+    expiredCount,
+    withExpiryCount,
+    hasExpiryWarning: expiringSoonCount > 0,
+  };
+}
+
+export function formatGuaranteeExpiryHint(expiryInfo) {
+  if (!expiryInfo || expiryInfo.status === 'none') return '';
+  const { status, expireDate, daysUntil } = expiryInfo;
+  if (status === 'expired') {
+    const daysAgo = Math.abs(daysUntil);
+    return daysAgo === 0 ? `Expired ${expireDate}` : `Expired ${daysAgo} day${daysAgo === 1 ? '' : 's'} ago (${expireDate})`;
+  }
+  if (status === 'near') {
+    return daysUntil === 0
+      ? `Expires today (${expireDate})`
+      : `Expires in ${daysUntil} day${daysUntil === 1 ? '' : 's'} (${expireDate})`;
+  }
+  return `Expires ${expireDate}`;
+}
+
 /** Pending vs deposited customer cheques for bank guarantee tracking. */
 export function buildGuaranteeChequeMetrics(payments) {
   let pendingTotal = 0;
@@ -38,7 +118,7 @@ export function buildGuaranteeChequeMetrics(payments) {
 export function computeGuaranteeStatus(
   guarantees,
   payments,
-  { poPendingOutgoing = 0, poPendingCount = 0 } = {},
+  { poPendingOutgoing = 0, poPendingCount = 0, asOfDate = '' } = {},
 ) {
   const totalGuarantee = (Array.isArray(guarantees) ? guarantees : []).reduce(
     (sum, g) => sum + Math.max(0, Number(g.amount) || 0),
@@ -46,11 +126,12 @@ export function computeGuaranteeStatus(
   );
   const { pendingTotal: incomingPending, completedTotal, pendingRows } = buildGuaranteeChequeMetrics(payments);
   const pendingTotal = incomingPending + Math.max(0, Number(poPendingOutgoing) || 0);
-  const available = Math.max(0, totalGuarantee - pendingTotal);
+  const available = totalGuarantee - pendingTotal;
   const utilizationPct =
     totalGuarantee > 0 ? Math.min(100, Math.round((pendingTotal / totalGuarantee) * 1000) / 10) : 0;
   const overLimit = totalGuarantee > 0 && pendingTotal > totalGuarantee;
   const pendingChequeCount = pendingRows.length + Math.max(0, Number(poPendingCount) || 0);
+  const expirySummary = summarizeGuaranteeExpiries(guarantees, asOfDate);
 
   return {
     totalGuarantee,
@@ -64,6 +145,7 @@ export function computeGuaranteeStatus(
     pendingRows,
     pendingChequeCount,
     hasGuarantee: totalGuarantee > 0,
+    ...expirySummary,
   };
 }
 
@@ -105,16 +187,18 @@ function buildDistributorGuaranteeStatus({
   guarantees,
   poPendingOutgoing,
   poPendingCount,
+  asOfDate,
 }) {
   const totalGuarantee = (Array.isArray(guarantees) ? guarantees : []).reduce(
     (sum, g) => sum + Math.max(0, Number(g.amount) || 0),
     0,
   );
   const pendingTotal = Math.max(0, Number(poPendingOutgoing) || 0);
-  const available = Math.max(0, totalGuarantee - pendingTotal);
+  const available = totalGuarantee - pendingTotal;
   const utilizationPct =
     totalGuarantee > 0 ? Math.min(100, Math.round((pendingTotal / totalGuarantee) * 1000) / 10) : 0;
   const overLimit = totalGuarantee > 0 && pendingTotal > totalGuarantee;
+  const expirySummary = summarizeGuaranteeExpiries(guarantees, asOfDate);
 
   return {
     distributorId,
@@ -127,6 +211,7 @@ function buildDistributorGuaranteeStatus({
     utilizationPct,
     overLimit,
     hasGuarantee: totalGuarantee > 0,
+    ...expirySummary,
   };
 }
 
@@ -162,6 +247,7 @@ export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheque
         guarantees: distGuarantees,
         poPendingOutgoing: total,
         poPendingCount: count,
+        asOfDate: asOf,
       }),
     );
   }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { clearAuth, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole } from '../auth';
+import { clearAuth, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole, authFetch } from '../auth';
 import { getApiBase } from '../apiBase';
 import { shopNameInitials, useShopName } from '../shopConfig';
 import { DASHBOARD_NAV } from './navConfig';
 import { NavIcon } from './NavIcon';
 import { LoadingSpinner } from './tableToolbar';
+import { BagProductsProvider } from './BagProductsContext';
 
 function formatLkr(n) {
   return new Intl.NumberFormat(undefined, {
@@ -155,12 +156,17 @@ export default function DashboardLayout() {
     state: 'idle',
     connected: false,
   });
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
   const shopName = useShopName();
   const section = getSectionTitle(location.pathname);
   const headerTitle = section === 'Analytics' ? 'Main Dashboard' : section;
   const hideRightPanel = location.pathname.startsWith('/dashboard/bank');
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   const normalizedOverdue =
     sidebarCashSummary == null
@@ -204,7 +210,7 @@ export default function DashboardLayout() {
     let cancelled = false;
     async function loadStock() {
       try {
-        const res = await fetch(`${apiRoot}/api/stocks/summary?distributorProductsOnly=1`);
+        const res = await fetch(`${apiRoot}/api/stocks/summary`);
         if (!cancelled && res.ok) {
           const sum = await res.json();
           setSidebarStockSummary({
@@ -254,6 +260,37 @@ export default function DashboardLayout() {
       window.clearInterval(id);
     };
   }, []);
+
+  const canSeeRequests =
+    isManagerOrAdmin() && (isAdmin() || hasDashboardAccess('requests'));
+
+  useEffect(() => {
+    if (!canSeeRequests) {
+      setPendingRequestCount(0);
+      return undefined;
+    }
+    const apiRoot = getApiBase() || '';
+    let cancelled = false;
+    async function loadPendingCount() {
+      try {
+        const res = await authFetch(`${apiRoot}/api/requests/pending-count`);
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setPendingRequestCount(Math.max(0, Number(data.total) || 0));
+        } else if (!cancelled) {
+          setPendingRequestCount(0);
+        }
+      } catch {
+        if (!cancelled) setPendingRequestCount(0);
+      }
+    }
+    loadPendingCount();
+    const id = window.setInterval(loadPendingCount, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [canSeeRequests, permissionsTick]);
 
   const signOut = () => {
     clearAuth();
@@ -341,6 +378,7 @@ export default function DashboardLayout() {
   );
 
   return (
+    <BagProductsProvider>
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#F4F7FE] text-slate-900">
       {mobileOpen ? (
         <button
@@ -408,7 +446,17 @@ export default function DashboardLayout() {
                       />
                     ) : null}
                     <NavIcon name={item.icon} active={isActive} />
-                    <span className="relative z-10">{item.label}</span>
+                    <span className="relative z-10 flex min-w-0 flex-1 items-center justify-between gap-2">
+                      <span className="truncate">{item.label}</span>
+                      {item.to === '/dashboard/requests' && pendingRequestCount > 0 ? (
+                        <span
+                          className="inline-flex min-h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] font-bold tabular-nums leading-none text-white ring-2 ring-white"
+                          aria-label={`${pendingRequestCount} pending request${pendingRequestCount === 1 ? '' : 's'}`}
+                        >
+                          {pendingRequestCount > 99 ? '99+' : pendingRequestCount}
+                        </span>
+                      ) : null}
+                    </span>
                   </>
                 )}
               </NavLink>
@@ -551,6 +599,7 @@ export default function DashboardLayout() {
         </div>
       </div>
     </div>
+    </BagProductsProvider>
   );
 }
 
@@ -569,7 +618,7 @@ function RightPanel() {
     async function loadPanel() {
       try {
         const [stockRes, cashRes] = await Promise.all([
-          fetch(`${apiRoot}/api/stocks/summary?distributorProductsOnly=1`),
+          fetch(`${apiRoot}/api/stocks/summary`),
           fetch(`${apiRoot}/api/cash-summary`),
         ]);
 

@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { BRANDS } from './brandTheme';
 
 export function displayText(value) {
   const text = value == null ? '' : String(value).trim();
@@ -144,5 +143,3 @@ export function DetailModalShell({
     </div>
   );
 }
-
-export { BRANDS };

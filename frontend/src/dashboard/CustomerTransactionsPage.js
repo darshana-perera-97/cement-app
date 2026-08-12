@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isCollector, isManagerOrAdmin } from '../auth';
+import { authFetch, canEditDetails, getUsername } from '../auth';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -23,6 +23,7 @@ import CustomerProfilePanel from './CustomerProfilePanel';
 import CustomerChequesPanel from './CustomerChequesPanel';
 import CustomerInvoicesModal from './CustomerInvoicesModal';
 import CustomerLedgerModal from './CustomerLedgerModal';
+import CustomerTaxModal from './CustomerTaxModal';
 import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
@@ -201,6 +202,7 @@ export default function CustomerTransactionsPage() {
   const [customerSaveError, setCustomerSaveError] = useState(null);
   const [customerSaving, setCustomerSaving] = useState(false);
   const [invoicesOpen, setInvoicesOpen] = useState(false);
+  const [taxOpen, setTaxOpen] = useState(false);
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
@@ -245,7 +247,7 @@ export default function CustomerTransactionsPage() {
         overdueDays: customerForm.overdueDays,
         updatedBy: username,
       };
-      if (isManagerOrAdmin()) {
+      if (canEditDetails()) {
         payload.monthlyTargetBags = customerForm.monthlyTargetBags;
         payload.collectorUserId = customerForm.collectorUserId.trim();
         payload.overdueNotifyEnabled = Boolean(customerForm.overdueNotifyEnabled);
@@ -315,7 +317,7 @@ export default function CustomerTransactionsPage() {
   }, [load]);
 
   useEffect(() => {
-    if (searchParams.get('edit') !== '1' || !customer || customerEditOpen) return;
+    if (searchParams.get('edit') !== '1' || !customer || customerEditOpen || !canEditDetails()) return;
     setCustomerForm(customerToForm(customer));
     setCustomerSaveError(null);
     setCustomerEditOpen(true);
@@ -368,19 +370,28 @@ export default function CustomerTransactionsPage() {
         <div className="flex shrink-0 flex-wrap gap-2">
           {customer ? (
             <>
-              <button
-                type="button"
-                onClick={openCustomerEdit}
-                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-800"
-              >
-                Edit details
-              </button>
+              {canEditDetails() ? (
+                <button
+                  type="button"
+                  onClick={openCustomerEdit}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-800"
+                >
+                  Edit details
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setInvoicesOpen(true)}
                 className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-800"
               >
                 Invoices
+              </button>
+              <button
+                type="button"
+                onClick={() => setTaxOpen(true)}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800"
+              >
+                Tax
               </button>
               <button
                 type="button"
@@ -424,7 +435,7 @@ export default function CustomerTransactionsPage() {
           formatMoney={money}
           formatDisplayDate={formatDisplayDate}
           defaultOverdueDays={DEFAULT_OVERDUE_DAYS}
-          onEditTarget={isManagerOrAdmin() ? openCustomerEdit : null}
+          onEditTarget={canEditDetails() ? openCustomerEdit : null}
         />
       ) : null}
 
@@ -455,7 +466,7 @@ export default function CustomerTransactionsPage() {
           customerId={customerId}
           payments={payments}
           loading={paymentsLoading}
-          canMarkReturn={isManagerOrAdmin()}
+          canMarkReturn={canEditDetails()}
           onUpdated={load}
         />
       ) : null}
@@ -664,7 +675,7 @@ export default function CustomerTransactionsPage() {
 
       <RowDetailModal open={!!detailTx} row={detailTx} variant="transaction" onClose={() => setDetailTx(null)} />
 
-      {customerEditOpen ? (
+      {customerEditOpen && canEditDetails() ? (
         <div
           className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
           role="dialog"
@@ -785,7 +796,7 @@ export default function CustomerTransactionsPage() {
                   placeholder="0.00"
                 />
               </label>
-              {isManagerOrAdmin() ? (
+              {canEditDetails() ? (
                 <CollectorSelectField
                   id="edit-customer-collector"
                   value={customerForm.collectorUserId}
@@ -795,7 +806,7 @@ export default function CustomerTransactionsPage() {
                   loading={collectorsLoading}
                 />
               ) : null}
-              {isManagerOrAdmin() ? (
+              {canEditDetails() ? (
                 <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                   Monthly target bags
                   <input
@@ -808,11 +819,11 @@ export default function CustomerTransactionsPage() {
                     placeholder="e.g. 500 (leave empty or 0 for no target)"
                   />
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Credit sales bags this calendar month vs this target (manager/admin only).
+                    Credit sales bags this calendar month vs this target (admin only).
                   </span>
                 </label>
               ) : null}
-              {isManagerOrAdmin() ? (
+              {canEditDetails() ? (
                 <div className="sm:col-span-2 space-y-3 rounded-xl bg-orange-50/50 px-3 py-3 ring-1 ring-orange-100">
                   <p className="text-sm font-semibold text-slate-800">Balance reminder schedule</p>
                   <p className="text-xs text-slate-500">
@@ -883,6 +894,14 @@ export default function CustomerTransactionsPage() {
       ) : null}
 
       <CustomerInvoicesModal open={invoicesOpen} customer={customer} onClose={() => setInvoicesOpen(false)} />
+
+      <CustomerTaxModal
+        open={taxOpen}
+        customer={customer}
+        customerId={customerId}
+        onClose={() => setTaxOpen(false)}
+        onSaved={load}
+      />
 
       <CustomerLedgerModal
         open={ledgerOpen}

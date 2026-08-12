@@ -24,6 +24,7 @@ import ShopPage from './dashboard/ShopPage';
 import OverdueBillsPage from './dashboard/OverdueBillsPage';
 import PendingChequesPage from './dashboard/PendingChequesPage';
 import UnloadsPage from './UnloadsPage';
+import { BagProductsProvider } from './dashboard/BagProductsContext';
 
 function ProtectedRoute({ children }) {
   if (!isAuthed()) {
@@ -54,7 +55,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/unloads" element={<UnloadsPage />} />
+      <Route path="/unloads" element={<BagProductsProvider><UnloadsPage /></BagProductsProvider>} />
       <Route
         path="/dashboard"
         element={

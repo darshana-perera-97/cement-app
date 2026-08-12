@@ -2,6 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { toNonNegNumber } = require('./stocksStore');
 const { toNonNegMoney } = require('./customersStore');
+const { bagsField, emptyBrandMap, addBagsOnRow } = require('./bagProducts');
 
 const BILLS_FILE = path.join(__dirname, '..', 'data', 'bills.json');
 
@@ -27,46 +28,36 @@ function lineTotal(bags, unitPrice) {
   return Math.round(b * u * 100) / 100;
 }
 
-const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-
-function emptyBrandMap() {
-  return { tokyo: 0, samudra: 0, atlas: 0, nippon: 0 };
-}
-
 /** Per-brand bag counts already sold on bills tied to this stock ID (loads file is not mutated). */
-function sumBagsOnBillsForStockId(bills, stockId) {
+function sumBagsOnBillsForStockId(bills, stockId, keys) {
   const sid = String(stockId ?? '').trim();
-  const t = emptyBrandMap();
+  const t = emptyBrandMap(keys);
   if (!sid) return t;
   for (const row of bills) {
     if (String(row.stockId ?? '').trim() !== sid) continue;
-    for (const k of BRAND_KEYS) {
-      t[k] += toNonNegNumber(row[`${k}Bags`]);
-    }
+    addBagsOnRow(t, row, keys);
   }
   return t;
 }
 
 /** Total bags sold on all credit bills, per brand (inventory outflow). */
-function sumAllBillBagsByBrand(bills) {
-  const t = emptyBrandMap();
+function sumAllBillBagsByBrand(bills, keys) {
+  const t = emptyBrandMap(keys);
   for (const row of bills) {
-    for (const k of BRAND_KEYS) {
-      t[k] += toNonNegNumber(row[`${k}Bags`]);
-    }
+    addBagsOnRow(t, row, keys);
   }
   return t;
 }
 
 /** Bags sold per bill date → daily “out” totals per brand (credit sales). */
-function aggregateOutsByDateFromBills(bills) {
+function aggregateOutsByDateFromBills(bills, keys) {
   const map = {};
   for (const row of bills) {
     const d = String(row.date ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-    if (!map[d]) map[d] = emptyBrandMap();
-    for (const k of BRAND_KEYS) {
-      map[d][k] += toNonNegNumber(row[`${k}Bags`]);
+    if (!map[d]) map[d] = emptyBrandMap(keys);
+    for (const k of keys) {
+      map[d][k] += toNonNegNumber(row[bagsField(k)]);
     }
   }
   return map;

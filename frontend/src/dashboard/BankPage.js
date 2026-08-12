@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isManagerOrAdmin } from '../auth';
+import { authFetch, canEditDetails, getUsername } from '../auth';
 import { buildChequeTableRows } from './paymentCheques';
 import CashBookExpenseModal from './CashBookExpenseModal';
 import CashBookChequeDepositModal from './CashBookChequeDepositModal';
@@ -446,6 +446,7 @@ function GuaranteeTypeBadge({ guaranteeType }) {
 function CashierPanel({ refreshToken, onBooksChanged }) {
   const [payments, setPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [staff, setStaff] = useState([]);
   const [lorries, setLorries] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -465,9 +466,10 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
     setLoading(true);
     setError(null);
     try {
-      const [payRes, expRes, staffRes, lorryRes, shopRes] = await Promise.all([
+      const [payRes, expRes, promoRes, staffRes, lorryRes, shopRes] = await Promise.all([
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/cash-book-entries`),
+        fetch(`${apiBase}/api/promotions`),
         fetch(`${apiBase}/api/staff`),
         fetch(`${apiBase}/api/lorries`),
         fetch(`${apiBase}/api/shop`),
@@ -481,6 +483,12 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
         setExpenses(Array.isArray(expData) ? expData : []);
       } else {
         setExpenses([]);
+      }
+      if (promoRes.ok) {
+        const promoData = await promoRes.json();
+        setPromotions(Array.isArray(promoData) ? promoData : []);
+      } else {
+        setPromotions([]);
       }
       if (staffRes.ok) {
         const staffData = await staffRes.json();
@@ -516,8 +524,8 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
   }, [load, refreshToken]);
 
   const sourceEntries = useMemo(
-    () => buildCashBookSourceEntries(payments, expenses),
-    [payments, expenses],
+    () => buildCashBookSourceEntries(payments, expenses, promotions),
+    [payments, expenses, promotions],
   );
 
   const ledgerRows = useMemo(
@@ -1369,7 +1377,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                   { label: 'Recorded by', value: r.recordedBy },
                 ]}
                 actions={
-                  isReturnableCustomerChequeRow(r) ? (
+                  canEditDetails() && isReturnableCustomerChequeRow(r) ? (
                     <button
                       type="button"
                       disabled={returnBusyKey != null}
@@ -1498,7 +1506,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
           setReturnErr(null);
         }}
         actions={
-          isReturnableCustomerChequeRow({ detailVariant: detailRow?.variant, detailPayload: detailRow?.payload }) ? (
+          canEditDetails() && isReturnableCustomerChequeRow({ detailVariant: detailRow?.variant, detailPayload: detailRow?.payload }) ? (
             <div className="flex w-full min-w-[12rem] flex-col gap-2">
               {returnErr ? (
                 <p className="text-sm text-red-700" role="alert">
@@ -1514,7 +1522,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                 {returnBusyKey === 'modal' ? 'Saving…' : 'Mark cheque returned'}
               </button>
             </div>
-          ) : isManagerOrAdmin() && detailRow?.txRow?.source === 'po' ? (
+          ) : canEditDetails() && detailRow?.txRow?.source === 'po' ? (
             <div className="flex w-full min-w-[12rem] flex-col gap-2">
               {cancelErr ? (
                 <p className="text-sm text-red-700" role="alert">
@@ -1863,6 +1871,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                 fields={[
                   { label: 'Distributor', value: distributorLabelForRow(g) },
                   { label: 'Amount', value: money(g.amount) },
+                  { label: 'Expiry', value: g.expireDate ? formatDisplayDate(g.expireDate) : '—' },
                   { label: 'Bank account', value: bankAccountLabelForRow(g) },
                   { label: 'Notes', value: g.description || '—' },
                   { label: 'Recorded by', value: g.recordedBy || '—' },
@@ -1888,6 +1897,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
                 <th className="whitespace-nowrap px-4 py-3">Distributor</th>
                 <th className="whitespace-nowrap px-4 py-3">Type</th>
+                <th className="whitespace-nowrap px-4 py-3">Expiry</th>
                 <th className="px-4 py-3">Bank account</th>
                 <th className="px-4 py-3">Notes</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
@@ -1898,13 +1908,13 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     {guarantees.length === 0
                       ? 'No bank guarantees yet.'
                       : 'No guarantees match your filters.'}
@@ -1924,6 +1934,9 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                       {g.guaranteeType === 'other' && g.guaranteeTypeOther ? (
                         <span className="mt-1 block text-xs text-slate-500">{g.guaranteeTypeOther}</span>
                       ) : null}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
+                      {g.expireDate ? formatDisplayDate(g.expireDate) : '—'}
                     </td>
                     <td className="max-w-[10rem] px-4 py-3 text-sm font-medium text-slate-800">
                       {bankAccountLabelForRow(g)}
@@ -1950,7 +1963,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
             {!loading && filteredRows.length > 0 ? (
               <tfoot>
                 <tr className="border-t border-slate-200 bg-slate-50/90 text-sm font-semibold text-slate-900">
-                  <td className="px-4 py-3" colSpan={5}>
+                  <td className="px-4 py-3" colSpan={6}>
                     Total ({filteredRows.length})
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-900">

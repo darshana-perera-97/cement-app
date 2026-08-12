@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
+import { canEditDetails } from '../auth';
 import { notifyShopCollectorSettingsChanged } from './useShopCollectorSettings';
 import { getApiBase } from '../apiBase';
 import { clearShopNameCache } from '../shopConfig';
 import { LoadingSpinner, modalPanelClass, modalPanelClassMd, scrollTableWrap, stickyThead } from './tableToolbar';
 import RowDetailModal from './RowDetailModal';
+import CollectorCommissionSection from './CollectorCommissionSection';
+import { useBagProducts } from './BagProductsContext';
 
 const apiBase = getApiBase();
 
@@ -18,6 +21,7 @@ const emptyShop = () => ({
   dealerCode: '',
   dealerTagline: '',
   deliveryNote: '',
+  supplierTin: '',
   collectorSeparateBillSettlement: false,
 });
 
@@ -40,7 +44,7 @@ const emptyDistributorForm = () => ({
   email: '',
   contact: '',
   locations: [newListLine('', 'loc')],
-  products: [newListLine('', 'prod')],
+  selectedProducts: [],
 });
 
 const emptyLorryForm = () => ({
@@ -68,15 +72,19 @@ function formFromBankAccount(a) {
 
 function formFromDistributor(d) {
   const locations = distributorLocations(d);
-  const products = Array.isArray(d.products) ? d.products.filter((p) => String(p ?? '').trim()) : [];
+  const selectedProducts = Array.isArray(d.products) ? d.products.filter((p) => String(p ?? '').trim()) : [];
   return {
     name: d.name ?? '',
     email: d.email ?? '',
     contact: d.contact ?? '',
     locations: locations.length > 0 ? locations.map((l) => newListLine(String(l), 'loc')) : [newListLine('', 'loc')],
-    products: products.length > 0 ? products.map((p) => newListLine(String(p), 'prod')) : [newListLine('', 'prod')],
+    selectedProducts: selectedProducts.map((p) => String(p).trim()),
   };
 }
+
+const emptyProductForm = () => ({
+  name: '',
+});
 
 const inputClass =
   'mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30';
@@ -91,7 +99,9 @@ function listPayload(lines) {
 }
 
 export default function ShopPage() {
+  const { refresh: refreshBagProducts } = useBagProducts();
   const [shop, setShop] = useState(emptyShop);
+  const [shopProducts, setShopProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -130,8 +140,19 @@ export default function ShopPage() {
   const [bankSaveError, setBankSaveError] = useState(null);
   const [detailBankAccount, setDetailBankAccount] = useState(null);
   const [collectorSeparateBillSettlementDraft, setCollectorSeparateBillSettlementDraft] = useState(false);
+  const [supplierTinDraft, setSupplierTinDraft] = useState('');
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxSaveError, setTaxSaveError] = useState(null);
   const [collectorSettingsSaving, setCollectorSettingsSaving] = useState(false);
   const [collectorSettingsError, setCollectorSettingsError] = useState(null);
+
+  const [productModalOpen, setProductModalOpen] = useState(false);
+  const [productModalMode, setProductModalMode] = useState('add');
+  const [editingProductId, setEditingProductId] = useState(null);
+  const [productForm, setProductForm] = useState(emptyProductForm);
+  const [productSaving, setProductSaving] = useState(false);
+  const [productSaveError, setProductSaveError] = useState(null);
+  const [detailProduct, setDetailProduct] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,6 +164,7 @@ export default function ShopPage() {
         setError(data.error || 'Failed to load shop details');
         setShop(emptyShop());
         setBankAccounts([]);
+        setShopProducts([]);
         return;
       }
       const collectorSeparateBillSettlement = Boolean(data.collectorSeparateBillSettlement);
@@ -157,14 +179,19 @@ export default function ShopPage() {
         dealerCode: data.dealerCode ?? '',
         dealerTagline: data.dealerTagline ?? '',
         deliveryNote: data.deliveryNote ?? '',
+        supplierTin: data.supplierTin ?? '',
         collectorSeparateBillSettlement,
+        collectorCommissionRates: data.collectorCommissionRates ?? {},
       });
       setCollectorSeparateBillSettlementDraft(collectorSeparateBillSettlement);
+      setSupplierTinDraft(data.supplierTin ?? '');
       setBankAccounts(Array.isArray(data.bankAccounts) ? data.bankAccounts : []);
+      setShopProducts(Array.isArray(data.products) ? data.products : []);
     } catch {
       setError('Could not reach the server');
       setShop(emptyShop());
       setBankAccounts([]);
+      setShopProducts([]);
     } finally {
       setLoading(false);
     }
@@ -177,7 +204,7 @@ export default function ShopPage() {
       const res = await fetch(`${apiBase}/api/distributors`);
       const data = await res.json().catch(() => []);
       if (!res.ok) {
-        setDistError((data && data.error) || 'Failed to load distributors');
+        setDistError((data && data.error) || 'Failed to load suppliers');
         setDistributors([]);
         return;
       }
@@ -266,7 +293,9 @@ export default function ShopPage() {
         dealerCode: data.dealerCode ?? '',
         dealerTagline: data.dealerTagline ?? '',
         deliveryNote: data.deliveryNote ?? '',
+        supplierTin: data.supplierTin ?? '',
         collectorSeparateBillSettlement,
+        collectorCommissionRates: data.collectorCommissionRates ?? {},
       });
       setCollectorSeparateBillSettlementDraft(collectorSeparateBillSettlement);
       clearShopNameCache();
@@ -319,13 +348,26 @@ export default function ShopPage() {
     });
   };
 
-  // Keep stable names for product/location row actions (avoids stale HMR breakage).
-  const addProductLine = () => addListLine('products', 'prod');
-  const removeProductLine = (key) => removeListLine('products', key, 'prod');
-  const handleProductChange = (key, value) => handleListChange('products', key, value);
+  // Keep stable names for location row actions (avoids stale HMR breakage).
   const addLocationLine = () => addListLine('locations', 'loc');
   const removeLocationLine = (key) => removeListLine('locations', key, 'loc');
   const handleLocationChange = (key, value) => handleListChange('locations', key, value);
+
+  const toggleDistProduct = (productName) => {
+    const name = String(productName ?? '').trim();
+    if (!name) return;
+    setDistForm((f) => {
+      const selected = f.selectedProducts || [];
+      const key = name.toLowerCase();
+      const has = selected.some((p) => p.toLowerCase() === key);
+      return {
+        ...f,
+        selectedProducts: has
+          ? selected.filter((p) => p.toLowerCase() !== key)
+          : [...selected, name],
+      };
+    });
+  };
 
   const handleDistSubmit = async (e) => {
     e.preventDefault();
@@ -342,7 +384,7 @@ export default function ShopPage() {
       locations,
       email: distForm.email.trim(),
       contact: distForm.contact.trim(),
-      products: listPayload(distForm.products),
+      products: (distForm.selectedProducts || []).map((p) => String(p).trim()).filter(Boolean),
     };
     try {
       const isEdit = distModalMode === 'edit' && editingDistId;
@@ -360,6 +402,7 @@ export default function ShopPage() {
         return;
       }
       await loadDistributors();
+      await refreshBagProducts();
       setDistModalOpen(false);
       setEditingDistId(null);
     } catch {
@@ -511,6 +554,86 @@ export default function ShopPage() {
     }
   };
 
+  const openProductModal = () => {
+    setProductModalMode('add');
+    setEditingProductId(null);
+    setProductForm(emptyProductForm());
+    setProductSaveError(null);
+    setProductModalOpen(true);
+  };
+
+  const openEditProductModal = (product) => {
+    setProductModalMode('edit');
+    setEditingProductId(product.id);
+    setProductForm({ name: product.name ?? '' });
+    setProductSaveError(null);
+    setProductModalOpen(true);
+  };
+
+  const closeProductModal = () => {
+    if (productSaving) return;
+    setProductModalOpen(false);
+    setProductSaveError(null);
+    setEditingProductId(null);
+  };
+
+  const handleProductSubmit = async (e) => {
+    e.preventDefault();
+    setProductSaving(true);
+    setProductSaveError(null);
+    const payload = { name: productForm.name.trim() };
+    if (!payload.name) {
+      setProductSaveError('Enter a product name.');
+      setProductSaving(false);
+      return;
+    }
+    try {
+      const isEdit = productModalMode === 'edit' && editingProductId;
+      const res = await fetch(
+        isEdit
+          ? `${apiBase}/api/shop/products/${encodeURIComponent(editingProductId)}`
+          : `${apiBase}/api/shop/products`,
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setProductSaveError(data.error || 'Save failed');
+        return;
+      }
+      await load();
+      await refreshBagProducts();
+      setProductModalOpen(false);
+      setEditingProductId(null);
+    } catch {
+      setProductSaveError('Could not reach the server');
+    } finally {
+      setProductSaving(false);
+    }
+  };
+
+  const handleDeleteProduct = async (product) => {
+    if (!product?.id) return;
+    if (!window.confirm(`Remove product "${product.name}"? Suppliers using it will keep the name until you edit them.`)) return;
+    try {
+      const res = await fetch(`${apiBase}/api/shop/products/${encodeURIComponent(product.id)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(data.error || 'Could not remove product');
+        return;
+      }
+      await load();
+      await refreshBagProducts();
+    } catch {
+      window.alert('Could not reach the server');
+    }
+  };
+
   const collectorSettingsDirty =
     collectorSeparateBillSettlementDraft !== Boolean(shop.collectorSeparateBillSettlement);
 
@@ -545,6 +668,35 @@ export default function ShopPage() {
     }
   };
 
+  const taxSettingsDirty = supplierTinDraft.trim() !== String(shop.supplierTin ?? '').trim();
+
+  const handleSaveTaxSettings = async () => {
+    setTaxSaving(true);
+    setTaxSaveError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/shop`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...shop,
+          supplierTin: supplierTinDraft.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTaxSaveError(data.error || 'Could not save tax settings');
+        return;
+      }
+      const savedTin = String(data.supplierTin ?? '').trim();
+      setShop((s) => ({ ...s, supplierTin: savedTin }));
+      setSupplierTinDraft(savedTin);
+    } catch {
+      setTaxSaveError('Could not reach the server');
+    } finally {
+      setTaxSaving(false);
+    }
+  };
+
   const addressLines = [shop.addressLine1, shop.addressLine2]
     .map((line) => String(line ?? '').trim())
     .filter(Boolean);
@@ -552,15 +704,19 @@ export default function ShopPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <p className="text-sm text-slate-500">View your shop details. Use Edit to update and save.</p>
-        <button
-          type="button"
-          onClick={openEdit}
-          disabled={loading}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:opacity-60 sm:w-auto"
-        >
-          Edit details
-        </button>
+        <p className="text-sm text-slate-500">
+          {canEditDetails() ? 'View your shop details. Use Edit to update and save.' : 'View your shop details.'}
+        </p>
+        {canEditDetails() ? (
+          <button
+            type="button"
+            onClick={openEdit}
+            disabled={loading}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:opacity-60 sm:w-auto"
+          >
+            Edit details
+          </button>
+        ) : null}
       </div>
 
       {error ? (
@@ -626,6 +782,58 @@ export default function ShopPage() {
           </dl>
         </section>
       )}
+
+      <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+        <h2 className="text-sm font-bold text-slate-900">Tax invoice (supplier)</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Supplier details printed on customer tax invoices. Name, address, and telephone come from
+          shop details above.
+        </p>
+        {taxSaveError ? (
+          <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+            {taxSaveError}
+          </p>
+        ) : null}
+        <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div>
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Supplier name</dt>
+            <dd className="mt-1 text-sm text-slate-800">{displayValue(shop.shopName)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Telephone</dt>
+            <dd className="mt-1 text-sm text-slate-800">{displayValue(shop.contactNumber)}</dd>
+          </div>
+          <div className="sm:col-span-2">
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Address</dt>
+            <dd className="mt-1 text-sm text-slate-800">
+              {addressLines.length > 0 ? addressLines.join(', ') : '—'}
+            </dd>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-medium uppercase tracking-wide text-slate-400" htmlFor="supplier-tin">
+              Supplier&apos;s TIN
+            </label>
+            <input
+              id="supplier-tin"
+              className={inputClass}
+              value={supplierTinDraft}
+              onChange={(e) => setSupplierTinDraft(e.target.value)}
+              disabled={loading || taxSaving}
+              placeholder="Tax identification number"
+            />
+          </div>
+        </dl>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveTaxSettings}
+            disabled={loading || taxSaving || !taxSettingsDirty}
+            className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {taxSaving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </section>
 
       <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
         <h2 className="text-sm font-bold text-slate-900">Collector settings</h2>
@@ -726,13 +934,15 @@ export default function ShopPage() {
                         >
                           View
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditBankAccountModal(a)}
-                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Edit
-                        </button>
+                        {canEditDetails() ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditBankAccountModal(a)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => handleDeleteBankAccount(a)}
@@ -753,15 +963,93 @@ export default function ShopPage() {
       <section className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">Distributors</h2>
-            <p className="mt-1 text-sm text-slate-500">Suppliers you buy from. Use Edit to manage locations and products.</p>
+            <h2 className="text-sm font-bold text-slate-900">Products</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Bag products your shop sells or buys. Suppliers pick from this list when you add or edit them.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={openProductModal}
+            disabled={loading}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60 sm:w-auto"
+          >
+            Add product
+          </button>
+        </div>
+
+        <div className={scrollTableWrap}>
+          <table className="w-full min-w-[420px] border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3">Product name</th>
+                <th className="px-4 py-3 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {loading ? (
+                <tr>
+                  <td colSpan={2} className="px-4 py-10 text-center text-slate-500">
+                    <LoadingSpinner />
+                  </td>
+                </tr>
+              ) : shopProducts.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-4 py-10 text-center text-slate-500">
+                    No products yet. Use &quot;Add product&quot; to create your catalog.
+                  </td>
+                </tr>
+              ) : (
+                shopProducts.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50/80">
+                    <td className="px-4 py-3 font-semibold text-slate-900">{displayValue(p.name)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-center">
+                      <div className="inline-flex flex-wrap items-center justify-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setDetailProduct(p)}
+                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50"
+                        >
+                          View
+                        </button>
+                        {canEditDetails() ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditProductModal(p)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProduct(p)}
+                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">Suppliers</h2>
+            <p className="mt-1 text-sm text-slate-500">Suppliers you buy from. Use Edit to manage locations and assign products from the catalog above.</p>
           </div>
           <button
             type="button"
             onClick={openDistModal}
             className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
           >
-            Add distributor
+            Add supplier
           </button>
         </div>
 
@@ -790,7 +1078,7 @@ export default function ShopPage() {
               ) : distributors.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-4 py-10 text-center text-slate-500">
-                    No distributors yet. Use &quot;Add distributor&quot; to create a record.
+                    No suppliers yet. Use &quot;Add supplier&quot; to create a record.
                   </td>
                 </tr>
               ) : (
@@ -807,13 +1095,15 @@ export default function ShopPage() {
                         >
                           View
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditDistModal(d)}
-                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Edit
-                        </button>
+                        {canEditDetails() ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditDistModal(d)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -885,13 +1175,15 @@ export default function ShopPage() {
                         >
                           View
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditLorryModal(l)}
-                          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Edit
-                        </button>
+                        {canEditDetails() ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditLorryModal(l)}
+                            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1082,10 +1374,10 @@ export default function ShopPage() {
           />
           <div className={modalPanelClass}>
             <h2 id="distributor-modal-title" className="text-lg font-bold text-slate-900">
-              {distModalMode === 'edit' ? 'Edit distributor' : 'Add distributor'}
+              {distModalMode === 'edit' ? 'Edit supplier' : 'Add supplier'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Name, contact, and at least one location are required. Add or remove locations and products anytime.
+              Name, contact, and at least one location are required. Assign products from your catalog below.
             </p>
             <form className="mt-5 space-y-4" onSubmit={handleDistSubmit}>
               {distSaveError ? (
@@ -1177,45 +1469,37 @@ export default function ShopPage() {
               </div>
 
               <div className="space-y-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-slate-800">Products</p>
-                  <button
-                    type="button"
-                    onClick={addProductLine}
-                    disabled={distSaving}
-                    className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 shadow-sm transition hover:bg-indigo-50 disabled:opacity-60"
-                  >
-                    + Add product
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {distForm.products.map((line, index) => (
-                    <div key={line.key} className="flex items-start gap-2">
-                      <label className="block min-w-0 flex-1 text-sm font-medium text-slate-600">
-                        <span className="sr-only">Product {index + 1}</span>
-                        <input
-                          type="text"
-                          value={line.name}
-                          onChange={(e) => handleProductChange(line.key, e.target.value)}
-                          className={inputClass}
-                          placeholder={`Product ${index + 1} (e.g. Tokyo 50kg)`}
-                          disabled={distSaving}
-                        />
-                      </label>
-                      {distForm.products.length > 1 ? (
-                        <button
-                          type="button"
-                          onClick={() => removeProductLine(line.key)}
-                          disabled={distSaving}
-                          className="mt-1 shrink-0 rounded-lg px-2 py-2 text-xs font-medium text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                <p className="text-sm font-semibold text-slate-800">Products</p>
+                {shopProducts.length === 0 ? (
+                  <p className="text-sm text-amber-800">
+                    Add products in the Products section above before assigning them to this supplier.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {shopProducts.map((p) => {
+                      const name = String(p.name ?? '').trim();
+                      const checked = (distForm.selectedProducts || []).some(
+                        (sel) => sel.toLowerCase() === name.toLowerCase(),
+                      );
+                      return (
+                        <label
+                          key={p.id}
+                          className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-white px-3 py-2.5 ring-1 ring-slate-200 transition hover:ring-indigo-200"
                         >
-                          Remove
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-500">Leave blank if you will add products later.</p>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+                            checked={checked}
+                            disabled={distSaving}
+                            onChange={() => toggleDistProduct(name)}
+                          />
+                          <span className="text-sm font-medium text-slate-800">{name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-slate-500">Select which catalog products this supplier provides. Optional — you can assign later.</p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -1233,6 +1517,67 @@ export default function ShopPage() {
                   className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:brightness-[1.03] disabled:opacity-60"
                 >
                   {distSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {productModalOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="product-modal-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={closeProductModal}
+          />
+          <div className={modalPanelClassMd}>
+            <h2 id="product-modal-title" className="text-lg font-bold text-slate-900">
+              {productModalMode === 'edit' ? 'Edit product' : 'Add product'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Products appear in Loads, Bills, Stock, and supplier assignments across the app.
+            </p>
+            <form className="mt-5 space-y-4" onSubmit={handleProductSubmit}>
+              {productSaveError ? (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">
+                  {productSaveError}
+                </p>
+              ) : null}
+              <label className="block text-sm font-medium text-slate-600">
+                Product name
+                <input
+                  type="text"
+                  required
+                  value={productForm.name}
+                  onChange={(e) => setProductForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputClass}
+                  placeholder="e.g. Tokyo 50kg"
+                  disabled={productSaving}
+                  autoComplete="off"
+                />
+              </label>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeProductModal}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  disabled={productSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={productSaving}
+                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:brightness-[1.03] disabled:opacity-60"
+                >
+                  {productSaving ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>
@@ -1414,6 +1759,11 @@ export default function ShopPage() {
       ) : null}
 
       <RowDetailModal
+        open={!!detailProduct}
+        row={detailProduct ? { name: detailProduct.name } : null}
+        onClose={() => setDetailProduct(null)}
+      />
+      <RowDetailModal
         open={!!detailDistributor}
         row={detailDistributor}
         variant="distributor"
@@ -1429,6 +1779,11 @@ export default function ShopPage() {
         open={!!detailBankAccount}
         row={detailBankAccount}
         onClose={() => setDetailBankAccount(null)}
+      />
+
+      <CollectorCommissionSection
+        shop={shop}
+        onShopUpdate={(data) => setShop((s) => ({ ...s, ...data }))}
       />
     </div>
   );

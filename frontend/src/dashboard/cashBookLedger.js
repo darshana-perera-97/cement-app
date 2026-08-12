@@ -133,7 +133,7 @@ export function computeCashBalanceBeforeDate(sourceEntries, beforeYmd) {
 }
 
 /** Raw cashier movements: customer cash in + all cash book outflows (including bank deposits). */
-export function buildCashBookSourceEntries(payments, cashBookEntries) {
+export function buildCashBookSourceEntries(payments, cashBookEntries, promotions = []) {
   const entries = [];
 
   for (const p of Array.isArray(payments) ? payments : []) {
@@ -212,6 +212,35 @@ export function buildCashBookSourceEntries(payments, cashBookEntries) {
       recordedBy: String(e.recordedBy ?? '').trim() || '—',
       detailKind: 'expense',
       detailRow: e,
+    });
+  }
+
+  for (const promo of Array.isArray(promotions) ? promotions : []) {
+    const type = String(promo.type ?? '').trim();
+    if (type !== 'invoice_discount' && type !== 'target_promotion') continue;
+    const amt = Math.max(0, Number(promo.discountAmount) || 0);
+    if (amt <= 0) continue;
+    const date = String(promo.date ?? '').slice(0, 10);
+    const customerName = String(promo.customerName ?? '').trim() || '—';
+    const label = type === 'invoice_discount' ? 'Invoice discount' : 'Target promotion';
+    entries.push({
+      id: `out:promo:${promo.id}`,
+      kind: 'promotion_out',
+      date,
+      sortAt: promo.createdAt || `${date}T12:00:00`,
+      type: label,
+      details: [
+        customerName !== '—' ? customerName : '',
+        type === 'invoice_discount' && promo.invoiceNumber ? `Invoice ${promo.invoiceNumber}` : '',
+        String(promo.reason ?? '').trim(),
+      ]
+        .filter(Boolean)
+        .join(' · ') || '—',
+      debit: null,
+      credit: amt,
+      recordedBy: String(promo.enteredBy ?? '').trim() || '—',
+      detailKind: 'promotion',
+      detailRow: promo,
     });
   }
 

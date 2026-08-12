@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername } from '../auth';
+import { authFetch, canEditDetails, getUsername } from '../auth';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
-import { BRANDS } from './brandTheme';
+import { useBagProducts } from './BagProductsContext';
 import { downloadBillsInvoicesPdf } from './billsInvoicesPdf';
 import {
   BILL_INVOICE_NUMBER_PATTERN,
@@ -40,20 +40,20 @@ function money(n) {
   }).format(Number(n) || 0);
 }
 
-function emptyForm() {
+function emptyForm(brands) {
   const f = {
     date: new Date().toISOString().slice(0, 10),
     customerId: '',
     invoiceNumber: '',
   };
-  for (const b of BRANDS) {
+  for (const b of brands) {
     f[`${b.key}Bags`] = '';
     f[`${b.key}UnitPrice`] = '';
   }
   return f;
 }
 
-function formFromBill(bill, customers) {
+function formFromBill(bill, customers, brands) {
   const name = String(bill.customerName ?? '').trim();
   const match = customers.find((c) => String(c.name ?? '').trim() === name);
   const f = {
@@ -61,7 +61,7 @@ function formFromBill(bill, customers) {
     customerId: match?.id ?? '',
     invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
   };
-  for (const b of BRANDS) {
+  for (const b of brands) {
     const bags = bill[`${b.key}Bags`];
     const price = bill[`${b.key}UnitPrice`];
     f[`${b.key}Bags`] = bags != null && bags !== '' ? String(bags) : '';
@@ -70,7 +70,7 @@ function formFromBill(bill, customers) {
   return f;
 }
 
-function BillSaleFormFields({ form, customers, onChange, isEdit = false }) {
+function BillSaleFormFields({ form, customers, brands, onChange, isEdit = false }) {
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -125,7 +125,7 @@ function BillSaleFormFields({ form, customers, onChange, isEdit = false }) {
       <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
         <div className="mt-3 space-y-3">
-          {BRANDS.map((b) => (
+          {brands.map((b) => (
             <div key={b.key} className="grid grid-cols-1 items-end gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <span className="text-sm font-medium text-slate-800 sm:col-span-2 lg:col-span-1">{b.label}</span>
               <label className="text-xs text-slate-500">
@@ -159,11 +159,12 @@ function BillSaleFormFields({ form, customers, onChange, isEdit = false }) {
 }
 
 export default function BillsPage() {
+  const { brands } = useBagProducts();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(() => emptyForm([]));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [detailBill, setDetailBill] = useState(null);
@@ -176,6 +177,7 @@ export default function BillsPage() {
   const [shopDetails, setShopDetails] = useState({ shopName: DEFAULT_SHOP_NAME });
   const [loads, setLoads] = useState([]);
   const [unloads, setUnloads] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const invoiceNumberTouched = useRef(false);
 
   const loadCustomers = useCallback(async () => {
@@ -216,10 +218,11 @@ export default function BillsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [shopRes, loadsRes, unloadsRes] = await Promise.all([
+        const [shopRes, loadsRes, unloadsRes, promoRes] = await Promise.all([
           fetch(`${apiBase}/api/shop`),
           fetch(`${apiBase}/api/stocks`),
           authFetch(`${apiBase}/api/unload-requests?status=all`),
+          fetch(`${apiBase}/api/promotions`),
         ]);
         if (shopRes.ok) {
           const data = await shopRes.json();
@@ -242,10 +245,17 @@ export default function BillsPage() {
           const data = await unloadsRes.json();
           setUnloads(Array.isArray(data) ? data : []);
         }
+        if (promoRes.ok) {
+          const data = await promoRes.json();
+          setPromotions(Array.isArray(data) ? data : []);
+        } else {
+          setPromotions([]);
+        }
       } catch {
         setShopDetails({ shopName: DEFAULT_SHOP_NAME });
         setLoads([]);
         setUnloads([]);
+        setPromotions([]);
       }
     })();
   }, []);
@@ -264,7 +274,7 @@ export default function BillsPage() {
       list.filter((r) => {
         if (stockFilter && String(r.stockId ?? '').trim() !== stockFilter) return false;
         if (!inDateRange(r.date, dateFrom, dateTo)) return false;
-        const bagParts = BRANDS.map((b) => String(r[`${b.key}Bags`] ?? ''));
+        const bagParts = brands.map((b) => String(r[`${b.key}Bags`] ?? ''));
         return rowMatchesQuery(search, [
           r.date,
           r.stockId,
@@ -275,7 +285,7 @@ export default function BillsPage() {
           ...bagParts,
         ]);
       }),
-    [search, stockFilter, dateFrom, dateTo],
+    [search, stockFilter, dateFrom, dateTo, brands],
   );
 
   const filteredRows = useMemo(() => filterBillRows(rows), [rows, filterBillRows]);
@@ -306,17 +316,18 @@ export default function BillsPage() {
       loads,
       unloads,
       customers,
+      promotions,
       dateFrom,
       dateTo,
     });
-  }, [filteredRows, filterBillRows, shopDetails, loads, unloads, customers, dateFrom, dateTo]);
+  }, [filteredRows, filterBillRows, shopDetails, loads, unloads, customers, promotions, dateFrom, dateTo]);
 
   const openAdd = () => {
     setSaveError(null);
     invoiceNumberTouched.current = false;
     loadCustomers();
     setForm({
-      ...emptyForm(),
+      ...emptyForm(brands),
       invoiceNumber: suggestNextBillInvoiceNumber(rows),
     });
     setAddOpen(true);
@@ -367,7 +378,7 @@ export default function BillsPage() {
       customerName: String(selected.name || '').trim(),
       invoiceNumber: normalizeBillInvoiceNumber(form.invoiceNumber),
     };
-    for (const b of BRANDS) {
+    for (const b of brands) {
       body[`${b.key}Bags`] = form[`${b.key}Bags`];
       body[`${b.key}UnitPrice`] = form[`${b.key}UnitPrice`];
     }
@@ -425,12 +436,12 @@ export default function BillsPage() {
   useEffect(() => {
     if (!editBill) return;
     invoiceNumberTouched.current = true;
-    const next = formFromBill(editBill, customers);
+    const next = formFromBill(editBill, customers, brands);
     if (!next.invoiceNumber) {
       next.invoiceNumber = suggestNextBillInvoiceNumber(rows);
     }
     setForm(next);
-  }, [editBill, customers, rows]);
+  }, [editBill, customers, rows, brands]);
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();
@@ -576,7 +587,7 @@ export default function BillsPage() {
               }
               fields={[
                 { label: 'Invoice #', value: r.invoiceNumber || '—' },
-                ...BRANDS.slice(0, 4).map((b) => ({
+                ...brands.slice(0, 4).map((b) => ({
                   label: b.label,
                   value: String(r[`${b.key}Bags`] ?? 0),
                 })),
@@ -597,7 +608,7 @@ export default function BillsPage() {
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Invoice #</th>
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Stock</th>
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Customer</th>
-              {BRANDS.map((b) => (
+              {brands.map((b) => (
                 <th key={b.key} className={`whitespace-nowrap px-2 py-2 text-center ${b.ledger.head}`}>
                   {b.label}
                   <span className="mt-0.5 block text-[10px] font-normal normal-case opacity-90">Bags</span>
@@ -654,7 +665,7 @@ export default function BillsPage() {
                     <td className={`max-w-[180px] px-3 py-3 font-medium text-slate-900 ${rowLine} bg-slate-50/70`}>
                       <span className="line-clamp-2">{r.customerName}</span>
                     </td>
-                    {BRANDS.map((b) => (
+                    {brands.map((b) => (
                       <td
                         key={b.key}
                         className={`px-2 py-3 text-center tabular-nums ${rowLine} ${b.ledger.cellLead} transition-colors hover:brightness-[0.98]`}
@@ -703,7 +714,7 @@ export default function BillsPage() {
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <BillSaleFormFields form={form} customers={customers} onChange={handleFormChange} />
+              <BillSaleFormFields form={form} customers={customers} brands={brands} onChange={handleFormChange} />
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -742,7 +753,7 @@ export default function BillsPage() {
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <BillSaleFormFields form={form} customers={customers} onChange={handleFormChange} isEdit />
+              <BillSaleFormFields form={form} customers={customers} brands={brands} onChange={handleFormChange} isEdit />
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -770,13 +781,15 @@ export default function BillsPage() {
         variant="bill"
         onClose={() => setDetailBill(null)}
         actions={
-          <button
-            type="button"
-            onClick={openBillEditFromDetail}
-            className="mt-4 w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
-          >
-            Edit bill
-          </button>
+          canEditDetails() ? (
+            <button
+              type="button"
+              onClick={openBillEditFromDetail}
+              className="mt-4 w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+            >
+              Edit bill
+            </button>
+          ) : null
         }
       />
     </div>

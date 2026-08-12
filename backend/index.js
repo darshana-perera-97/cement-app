@@ -32,6 +32,7 @@ const {
   paymentCreditToCustomer,
   paymentGrossCredit,
   computeBillPaymentAllocation,
+  effectiveBillTotal,
 } = require('./models/customerBalance');
 const {
   readOverdueDates,
@@ -50,7 +51,7 @@ const {
 } = require('./models/notificationSettingsStore');
 const { startOverdueReminderScheduler } = require('./models/overdueReminderService');
 const { readCompanyData, writeCompanyData } = require('./models/companyDataStore');
-const { readShopData, writeShopData, addBankAccount, updateBankAccount, deleteBankAccount } = require('./models/shopDataStore');
+const { readShopData, writeShopData, normalizeShopData, addBankAccount, updateBankAccount, deleteBankAccount, addProduct, updateProduct, deleteProduct, updateDoorStockTransportSettings } = require('./models/shopDataStore');
 const {
   readDistributors,
   writeDistributors,
@@ -81,8 +82,8 @@ const {
   notifyChequeReturnWhatsApp,
 } = require('./models/whatsappService');
 
-function enrichCustomerBalance(customer, bills, payments, overdueDates = {}) {
-  const { amountToPay, overpaymentAmount } = computeCustomerBalance(customer, bills, payments);
+function enrichCustomerBalance(customer, bills, payments, overdueDates = {}, promotions = []) {
+  const { amountToPay, overpaymentAmount } = computeCustomerBalance(customer, bills, payments, promotions);
   return {
     ...customer,
     remainingAmount: amountToPay,
@@ -143,6 +144,15 @@ const {
   markChequeReturnedOnPayment,
 } = require('./models/paymentCheques');
 const {
+  parseOtherPaymentMethodsFromBody,
+  attachOtherPaymentMethodsToRow,
+  attachApprovalMetaToRow,
+  cdmPortion,
+  onlineTransferPortion,
+  isPaymentApprovalPending,
+  isPaymentCreditActive,
+} = require('./models/paymentOtherMethods');
+const {
   readPayments,
   writePayments,
   todayYmdLocal: paymentDateDefaultYmd,
@@ -202,8 +212,27 @@ function customerAssignedToCollector(customer, collectorUserId) {
   return String(customer.collectorUserId ?? '').trim() === String(collectorUserId ?? '').trim();
 }
 
-const { readPromotions, writePromotions, sumAllPromotionBagsByBrand } = require('./models/promotionsStore');
+const {
+  readPromotions,
+  writePromotions,
+  sumAllPromotionBagsByBrand,
+  PROMOTION_TYPES,
+  promotionType,
+  isFreeBagPromotion,
+  promotionCreditAmount,
+  computeInvoiceDiscountAmount,
+} = require('./models/promotionsStore');
 const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./models/unloadsStore');
+const {
+  getBagProducts,
+  getBagProductKeys,
+  parseLoadBrandFields,
+  loadTotalCost,
+  validateLoadBrandRefs,
+  sumBagFields,
+  brandLabelsMap,
+  bagsField,
+} = require('./models/bagProducts');
 const {
   readPurchaseOrders,
   writePurchaseOrders,
@@ -287,16 +316,34 @@ app.put('/api/shop', async (req, res) => {
       dealerCode: body.dealerCode,
       dealerTagline: body.dealerTagline,
       deliveryNote: body.deliveryNote,
+      supplierTin: body.supplierTin != null ? body.supplierTin : current.supplierTin,
       collectorSeparateBillSettlement:
         body.collectorSeparateBillSettlement != null
           ? Boolean(body.collectorSeparateBillSettlement)
           : current.collectorSeparateBillSettlement,
+      collectorCommissionRates:
+        body.collectorCommissionRates != null
+          ? normalizeShopData({ collectorCommissionRates: body.collectorCommissionRates })
+              .collectorCommissionRates
+          : current.collectorCommissionRates,
       bankAccounts: current.bankAccounts,
+      products: current.products,
+      doorStockTransportSettings: current.doorStockTransportSettings,
     });
     res.json(next);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save shop details' });
+  }
+});
+
+app.put('/api/shop/door-stock-transport-settings', async (req, res) => {
+  try {
+    const settings = await updateDoorStockTransportSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save door stock transport settings' });
   }
 });
 
@@ -336,6 +383,45 @@ app.delete('/api/shop/bank-accounts/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to delete bank account' });
+  }
+});
+
+app.post('/api/shop/products', async (req, res) => {
+  try {
+    const result = await addProduct(req.body || {});
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.status(201).json(result.product);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to add product' });
+  }
+});
+
+app.patch('/api/shop/products/:id', async (req, res) => {
+  try {
+    const result = await updateProduct(req.params.id, req.body || {});
+    if (result.error) {
+      const status = result.error === 'Product not found' ? 404 : 400;
+      return res.status(status).json({ error: result.error });
+    }
+    res.json(result.product);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+app.delete('/api/shop/products/:id', async (req, res) => {
+  try {
+    const result = await deleteProduct(req.params.id);
+    if (result.error) {
+      const status = result.error === 'Product not found' ? 404 : 400;
+      return res.status(status).json({ error: result.error });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to delete product' });
   }
 });
 
@@ -539,19 +625,31 @@ app.patch('/api/distributors/:id', async (req, res) => {
   }
 });
 
+/** Bag products from Shop → Products catalog (falls back to supplier lists if empty). */
+app.get('/api/bag-products', async (req, res) => {
+  try {
+    const products = await getBagProducts();
+    res.json({ products });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load bag products' });
+  }
+});
+
 /** Aggregates for dashboard "Your card": receivables, stock spend, payments in */
 app.get('/api/cash-summary', async (req, res) => {
   try {
-    const [customers, bills, payments, stocks, overdueDates] = await Promise.all([
+    const [customers, bills, payments, stocks, overdueDates, promotions] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readStocks(),
       readOverdueDates(),
+      readPromotions(),
     ]);
     let pendingFromCustomers = 0;
     for (const c of customers) {
-      pendingFromCustomers += computeRemainingAmount(c, bills, payments);
+      pendingFromCustomers += computeRemainingAmount(c, bills, payments, promotions);
     }
     let cashToBuyStock = 0;
     for (const s of stocks) {
@@ -562,7 +660,7 @@ app.get('/api/cash-summary', async (req, res) => {
       cashReceivedFromCustomers += paymentCreditToCustomer(p);
     }
     const round2 = (n) => Math.round(Number(n) * 100) / 100;
-    const overdueRows = collectOverdueBillRows(customers, bills, payments, overdueDates);
+    const overdueRows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions);
     const maxDaysOverdue = overdueRows.length
       ? Math.max(...overdueRows.map((r) => r.daysOverdue))
       : 0;
@@ -709,13 +807,25 @@ function paymentSettlementSummary(p) {
   const credit = paymentCreditToCustomer(p);
   if (credit <= 0) return null;
   const cash = toNonNegMoney(p?.cashAmount);
+  const cdm = cdmPortion(p);
+  const onlineTransfer = onlineTransferPortion(p);
   const chequeLines = getPaymentCheques(p);
   const chq = sumChequeAmounts(chequeLines);
-  if (cash <= 0 && chq <= 0) {
+  if (cash <= 0 && chq <= 0 && cdm <= 0 && onlineTransfer <= 0) {
     return `Settled LKR ${credit}`;
   }
   const parts = [];
   if (cash > 0) parts.push(`cash LKR ${cash}`);
+  if (cdm > 0) {
+    let s = `CDM LKR ${cdm}`;
+    if (p.cdmNumber) s += ` #${p.cdmNumber}`;
+    parts.push(s);
+  }
+  if (onlineTransfer > 0) {
+    let s = `online transfer LKR ${onlineTransfer}`;
+    if (p.onlineTransferReference) s += ` ref ${p.onlineTransferReference}`;
+    parts.push(s);
+  }
   for (const line of chequeLines) {
     let s = `cheque LKR ${line.amount}`;
     if (line.chequeNumber) s += ` #${line.chequeNumber}`;
@@ -745,29 +855,31 @@ function addDaysToYmd(ymd, days) {
   return `${y}-${mo}-${dd}`;
 }
 
-const BILL_BAG_BRANDS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-
-const BILL_BRAND_LABEL = {
-  tokyo: 'Tokyo',
-  samudra: 'Samudra',
-  atlas: 'Atlas',
-  nippon: 'Nippon',
-};
-
-/**
- * Bill line quantities must not exceed available bags pool-wide:
- * (sum of all load arrivals) − (all credit bills) − (promotional outs).
- * Matches live stock; loads.json rows are not mutated when bills are saved.
- */
-function validateBillAgainstPooledStock(loads, existingBills, promotions, billBagFields, pendingUnloads = [], excludeRequestId = null) {
-  const loaded = sumLoadBagsByBrand(loads);
-  const soldSoFar = sumAllBillBagsByBrand(existingBills);
-  const promoOut = sumAllPromotionBagsByBrand(promotions);
+async function validateBillAgainstPooledStock(
+  loads,
+  existingBills,
+  promotions,
+  billBagFields,
+  pendingUnloads = [],
+  excludeRequestId = null,
+  products = [],
+  excludePromotionId = null,
+  issueNoun = 'bill',
+) {
+  const keys = products.map((p) => p.key);
+  const labels = brandLabelsMap(products);
+  const loaded = sumLoadBagsByBrand(loads, keys);
+  const soldSoFar = sumAllBillBagsByBrand(existingBills, keys);
+  const promoRows = excludePromotionId
+    ? promotions.filter((p) => p.id !== excludePromotionId)
+    : promotions;
+  const promoOut = sumAllPromotionBagsByBrand(promoRows, keys);
   const pendingRows = Array.isArray(pendingUnloads) ? pendingUnloads : [];
   const pending = sumPendingUnloadBagsByBrand(
     excludeRequestId ? pendingRows.filter((r) => r.id !== excludeRequestId) : pendingRows,
+    keys,
   );
-  for (const k of BILL_BAG_BRANDS) {
+  for (const k of keys) {
     const available = Math.max(
       0,
       toNonNegNumber(loaded[k]) -
@@ -775,47 +887,69 @@ function validateBillAgainstPooledStock(loads, existingBills, promotions, billBa
         toNonNegNumber(promoOut[k]) -
         toNonNegNumber(pending[k]),
     );
-    const need = toNonNegNumber(billBagFields[`${k}Bags`]);
+    const need = toNonNegNumber(billBagFields[bagsField(k)]);
     if (need > available) {
       return {
         ok: false,
-        error: `Not enough ${BILL_BRAND_LABEL[k]} bags in stock: ${available} available, this bill needs ${need}.`,
+        error: `Not enough ${labels[k] || k} bags in stock: ${available} available, this ${issueNoun} needs ${need}.`,
       };
     }
   }
   return { ok: true };
 }
 
-function parseBillBagFields(body) {
-  const tokyoBags = toNonNegNumber(body.tokyoBags);
-  const samudraBags = toNonNegNumber(body.samudraBags);
-  const atlasBags = toNonNegNumber(body.atlasBags);
-  const nipponBags = toNonNegNumber(body.nipponBags);
-  const tokyoUnitPrice = toNonNegMoney(body.tokyoUnitPrice);
-  const samudraUnitPrice = toNonNegMoney(body.samudraUnitPrice);
-  const atlasUnitPrice = toNonNegMoney(body.atlasUnitPrice);
-  const nipponUnitPrice = toNonNegMoney(body.nipponUnitPrice);
-  const tokyoLine = lineTotal(tokyoBags, tokyoUnitPrice);
-  const samudraLine = lineTotal(samudraBags, samudraUnitPrice);
-  const atlasLine = lineTotal(atlasBags, atlasUnitPrice);
-  const nipponLine = lineTotal(nipponBags, nipponUnitPrice);
-  const totalAmount =
-    Math.round((tokyoLine + samudraLine + atlasLine + nipponLine) * 100) / 100;
-  return {
-    tokyoBags,
-    samudraBags,
-    atlasBags,
-    nipponBags,
-    tokyoUnitPrice,
-    samudraUnitPrice,
-    atlasUnitPrice,
-    nipponUnitPrice,
-    tokyoLine,
-    samudraLine,
-    atlasLine,
-    nipponLine,
-    totalAmount,
+async function parseBillBagFields(body) {
+  const products = await getBagProducts();
+  const fields = {};
+  let totalAmount = 0;
+  for (const p of products) {
+    const bags = toNonNegNumber(body[p.bagsField]);
+    const unitPrice = toNonNegMoney(body[p.unitPriceField]);
+    fields[p.bagsField] = bags;
+    fields[p.unitPriceField] = unitPrice;
+    const line = lineTotal(bags, unitPrice);
+    fields[`${p.key}Line`] = line;
+    totalAmount += line;
+  }
+  fields.totalAmount = Math.round(totalAmount * 100) / 100;
+  return { fields, products };
+}
+
+async function parseProductBagFields(body) {
+  const products = await getBagProducts();
+  const fields = {};
+  for (const p of products) {
+    fields[p.bagsField] = toNonNegNumber(body[p.bagsField]);
+  }
+  return { fields, products };
+}
+
+async function buildLoadRowFromBody(body, meta = {}) {
+  const products = await getBagProducts();
+  const trimStr = (v) => String(v ?? '').trim();
+  const cutOffNumberOrUndef = (v) => {
+    const s = String(v ?? '').trim();
+    if (!s) return undefined;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) return undefined;
+    return toNonNegNumber(n);
   };
+  const brandFields = parseLoadBrandFields(body, products, { trimStr, cutOffNumberOrUndef });
+  const row = {
+    ...meta,
+    ...brandFields,
+    transportCostPerBag: toNonNegNumber(body.transportCostPerBag),
+    doorStockTransportCostPerBag: toNonNegNumber(body.doorStockTransportCostPerBag),
+    marginPerBag:
+      body.marginPerBag === '' || body.marginPerBag == null ? 70 : toNonNegNumber(body.marginPerBag),
+  };
+  row.totalAmount = loadTotalCost(brandFields, products);
+  const missingRefs = validateLoadBrandRefs(
+    row,
+    products,
+    meta.date || String(body.date ?? '').trim(),
+  );
+  return { row, products, missingRefs };
 }
 
 function normalizeBillInvoiceNumber(value) {
@@ -895,11 +1029,11 @@ function ensureBillInvoiceNumbers(bills) {
 async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameKeys) {
   const keys = new Set(nameKeys.map((n) => normalizeCustomerName(n)).filter(Boolean));
   if (keys.size === 0) return;
-  const customers = await readCustomers();
+  const [customers, promotions] = await Promise.all([readCustomers(), readPromotions()]);
   let dirty = false;
   for (const c of customers) {
     if (keys.has(normalizeCustomerName(c.name))) {
-      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList);
+      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions);
       dirty = true;
     }
   }
@@ -909,11 +1043,11 @@ async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameK
 async function refreshCustomerBalancesForCustomerIds(bills, paymentsList, ...customerIds) {
   const ids = new Set(customerIds.map((id) => String(id ?? '').trim()).filter(Boolean));
   if (ids.size === 0) return;
-  const customers = await readCustomers();
+  const [customers, promotions] = await Promise.all([readCustomers(), readPromotions()]);
   let dirty = false;
   for (const c of customers) {
     if (ids.has(c.id)) {
-      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList);
+      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions);
       dirty = true;
     }
   }
@@ -964,7 +1098,7 @@ function billDetailsLine(bill) {
  * then bills in chronological order (same idea as balances).
  * @param {{ overdueOnly?: boolean }} [options]
  */
-function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, options = {}) {
+function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, options = {}, promotions = []) {
   const { overdueOnly = false } = options;
   const todayYmd = ymdTodayLocal();
   const rows = [];
@@ -980,10 +1114,10 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 
   for (const cust of customers) {
     const settlementDays = getOverdueDaysForCustomer(overdueDates, cust.id);
-    const { paidByBillId, custBills } = computeBillPaymentAllocation(cust, bills, payments);
+    const { paidByBillId, custBills } = computeBillPaymentAllocation(cust, bills, payments, promotions);
 
     for (const bill of custBills) {
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = effectiveBillTotal(bill, promotions);
       const id = String(bill.id ?? '').trim();
       const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
       const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -1057,8 +1191,8 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 }
 
 /** Overdue credit bills (same rules as `/api/overdue-bills`). */
-function collectOverdueBillRows(customers, bills, payments, overdueDates = {}) {
-  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: true }).sort(
+function collectOverdueBillRows(customers, bills, payments, overdueDates = {}, promotions = []) {
+  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: true }, promotions).sort(
     (a, b) => {
       if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
       return b.outstandingAmount - a.outstandingAmount;
@@ -1067,8 +1201,8 @@ function collectOverdueBillRows(customers, bills, payments, overdueDates = {}) {
 }
 
 /** All unpaid credit bills (pending), including those not yet overdue. */
-function collectPendingBillRows(customers, bills, payments, overdueDates = {}) {
-  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: false });
+function collectPendingBillRows(customers, bills, payments, overdueDates = {}, promotions = []) {
+  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: false }, promotions);
 }
 
 /** Longest days past due → UI priority tier (green → red). */
@@ -1281,23 +1415,23 @@ app.delete('/api/bank-guarantees/:id', async (req, res) => {
   }
 });
 
-/** Daily bag totals from credit bills (Tokyo / Samudra / Atlas / Nippon) */
+/** Daily bag totals from credit bills (distributor-configured products) */
 app.get('/api/bag-sales-by-day', async (req, res) => {
   try {
     const n = Math.min(90, Math.max(1, parseInt(String(req.query.days), 10) || 7));
     const dayKeys = lastNDaysYmdLocal(n);
     const daySet = new Set(dayKeys);
+    const products = await getBagProducts();
     const bills = await readBills();
     const byDay = Object.fromEntries(
-      dayKeys.map((d) => [d, { tokyo: 0, samudra: 0, atlas: 0, nippon: 0 }]),
+      dayKeys.map((d) => [d, Object.fromEntries(products.map((p) => [p.key, 0]))]),
     );
     for (const b of bills) {
       const d = String(b.date ?? '').slice(0, 10);
       if (!daySet.has(d)) continue;
-      byDay[d].tokyo += toNonNegNumber(b.tokyoBags);
-      byDay[d].samudra += toNonNegNumber(b.samudraBags);
-      byDay[d].atlas += toNonNegNumber(b.atlasBags);
-      byDay[d].nippon += toNonNegNumber(b.nipponBags);
+      for (const p of products) {
+        byDay[d][p.key] += toNonNegNumber(b[p.bagsField]);
+      }
     }
     const series = dayKeys.map((date) => ({
       date,
@@ -1363,13 +1497,14 @@ app.get('/api/recent-transfers', async (req, res) => {
 app.get('/api/overdue-bills', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
-    const [customers, bills, payments, overdueDates] = await Promise.all([
+    const [customers, bills, payments, overdueDates, promotions] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readOverdueDates(),
+      readPromotions(),
     ]);
-    let rows = collectOverdueBillRows(customers, bills, payments, overdueDates);
+    let rows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions);
     rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
     res.json(rows);
   } catch (e) {
@@ -1384,13 +1519,14 @@ app.get('/api/overdue-bills', async (req, res) => {
  */
 app.get('/api/pending-bills', async (req, res) => {
   try {
-    const [customers, bills, payments, overdueDates] = await Promise.all([
+    const [customers, bills, payments, overdueDates, promotions] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readOverdueDates(),
+      readPromotions(),
     ]);
-    res.json(collectPendingBillRows(customers, bills, payments, overdueDates));
+    res.json(collectPendingBillRows(customers, bills, payments, overdueDates, promotions));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load pending bills' });
@@ -1547,8 +1683,6 @@ async function requireManagerOrAdmin(req, res) {
   return auth;
 }
 
-const UNLOAD_BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-
 app.get('/api/unloads', async (req, res) => {
   const auth = await requireDriverOrAdmin(req, res);
   if (!auth) return;
@@ -1608,7 +1742,7 @@ async function sendUnloadCustomerNotifications(customer, unloadRecord) {
   }
 }
 
-function lastBillUnitPricesForCustomer(bills, customerName) {
+function lastBillUnitPricesForCustomer(bills, customerName, products) {
   const nk = normalizeCustomerName(customerName);
   if (!nk) return null;
   const matches = bills.filter((b) => normalizeCustomerName(b.customerName) === nk);
@@ -1620,15 +1754,11 @@ function lastBillUnitPricesForCustomer(bills, customerName) {
     return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
   });
   const bill = matches[0];
-  return {
-    billId: bill.id,
-    date: bill.date,
-    customerName: bill.customerName,
-    tokyoUnitPrice: bill.tokyoUnitPrice,
-    samudraUnitPrice: bill.samudraUnitPrice,
-    atlasUnitPrice: bill.atlasUnitPrice,
-    nipponUnitPrice: bill.nipponUnitPrice,
-  };
+  const prices = { billId: bill.id, date: bill.date, customerName: bill.customerName };
+  for (const p of products) {
+    prices[p.unitPriceField] = bill[p.unitPriceField];
+  }
+  return prices;
 }
 
 app.get('/api/bills/last-unit-prices', async (req, res) => {
@@ -1645,7 +1775,8 @@ app.get('/api/bills/last-unit-prices', async (req, res) => {
       return res.status(404).json({ error: 'Customer not found' });
     }
     const bills = await readBills();
-    const last = lastBillUnitPricesForCustomer(bills, cust.name);
+    const products = await getBagProducts();
+    const last = lastBillUnitPricesForCustomer(bills, cust.name, products);
     if (!last) {
       return res.json({ found: false, customerId: cust.id, customerName: cust.name });
     }
@@ -1677,18 +1808,9 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
       return res.status(400).json({ error: 'This request is no longer pending' });
     }
 
-    const billBody = {
-      tokyoBags: requestRow.tokyoBags,
-      samudraBags: requestRow.samudraBags,
-      atlasBags: requestRow.atlasBags,
-      nipponBags: requestRow.nipponBags,
-      tokyoUnitPrice: body.tokyoUnitPrice,
-      samudraUnitPrice: body.samudraUnitPrice,
-      atlasUnitPrice: body.atlasUnitPrice,
-      nipponUnitPrice: body.nipponUnitPrice,
-    };
-    const fields = parseBillBagFields(billBody);
-    const bagSum = fields.tokyoBags + fields.samudraBags + fields.atlasBags + fields.nipponBags;
+    const billBody = { ...requestRow, ...body };
+    const { fields, products } = await parseBillBagFields(billBody);
+    const bagSum = sumBagFields(fields, products);
     if (bagSum <= 0) {
       return res.status(400).json({ error: 'Request has no bags' });
     }
@@ -1699,30 +1821,22 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
     const stocks = await readStocks();
     const bills = await readBills();
     const promotions = await readPromotions();
-    const check = validateBillAgainstPooledStock(
+    const check = await validateBillAgainstPooledStock(
       stocks,
       bills,
       promotions,
-      {
-        tokyoBags: fields.tokyoBags,
-        samudraBags: fields.samudraBags,
-        atlasBags: fields.atlasBags,
-        nipponBags: fields.nipponBags,
-      },
+      fields,
       unloads,
       id,
+      products,
     );
     if (!check.ok) {
       return res.status(400).json({ error: check.error });
     }
 
     const customerName = String(requestRow.customerName ?? '').trim();
-    const stockId = inferStockIdForBillBags(stocks, bills, {
-      tokyoBags: fields.tokyoBags,
-      samudraBags: fields.samudraBags,
-      atlasBags: fields.atlasBags,
-      nipponBags: fields.nipponBags,
-    });
+    const keys = products.map((p) => p.key);
+    const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
     const billRow = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       date: String(requestRow.date ?? '').trim(),
@@ -1816,6 +1930,151 @@ app.post('/api/unload-requests/:id/reject', async (req, res) => {
   }
 });
 
+/** Manager/admin: pending payment approvals (CDM deposit / online transfer). */
+app.get('/api/payment-requests', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const statusFilter = String(req.query.status ?? 'pending').trim().toLowerCase();
+    let rows = await readPayments();
+    rows = rows.filter((p) => !!p.requiresApproval);
+    if (statusFilter !== 'all') {
+      rows = rows.filter((p) => {
+        const s = String(p.approvalStatus ?? 'pending').trim().toLowerCase();
+        if (statusFilter === 'pending') return s !== 'approved' && s !== 'rejected';
+        return s === statusFilter;
+      });
+    }
+    const sorted = [...rows].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read payment requests' });
+  }
+});
+
+/** Manager/admin: pending request counts for sidebar badge. */
+app.get('/api/requests/pending-count', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const unloads = await readUnloads();
+    const unloadRequests = unloads.filter((r) => normalizeStatus(r.status) === 'pending').length;
+    const payments = await readPayments();
+    const paymentRequests = payments.filter((p) => isPaymentApprovalPending(p)).length;
+    res.json({
+      total: unloadRequests + paymentRequests,
+      unloadRequests,
+      paymentRequests,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read pending request count' });
+  }
+});
+
+app.post('/api/payment-requests/:id/approve', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const approvedBy = String(body.approvedBy ?? auth.username ?? '').trim();
+    if (!approvedBy) {
+      return res.status(400).json({ error: 'approvedBy is required' });
+    }
+    const payments = await readPayments();
+    const idx = payments.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Payment request not found' });
+    }
+    const existing = payments[idx];
+    if (!existing.requiresApproval) {
+      return res.status(400).json({ error: 'This payment does not require approval' });
+    }
+    if (!isPaymentApprovalPending(existing)) {
+      return res.status(400).json({ error: 'This payment request is no longer pending' });
+    }
+    const row = {
+      ...existing,
+      approvalStatus: 'approved',
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+    };
+    delete row.rejectedBy;
+    delete row.rejectedAt;
+    delete row.rejectReason;
+    payments[idx] = row;
+    await writePayments(payments);
+    const customers = await readCustomers();
+    const cust = customers.find((c) => c.id === row.customerId);
+    const billsList = await readBills();
+    const promotions = await readPromotions();
+    if (cust) {
+      cust.remainingAmount = computeRemainingAmount(cust, billsList, payments, promotions);
+      await writeCustomers(customers);
+      if (cust.email) {
+        notifyPaymentEmail(cust, row, cust.remainingAmount).catch((err) =>
+          console.error('payment email notification', err),
+        );
+      }
+      if (cust.contactNumber) {
+        notifyPaymentWhatsApp(cust, row, cust.remainingAmount).catch((err) =>
+          console.error('payment whatsapp notification', err),
+        );
+      }
+    }
+    res.json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to approve payment request' });
+  }
+});
+
+app.post('/api/payment-requests/:id/reject', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const rejectedBy = String(body.rejectedBy ?? auth.username ?? '').trim();
+    const payments = await readPayments();
+    const idx = payments.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Payment request not found' });
+    }
+    const existing = payments[idx];
+    if (!existing.requiresApproval) {
+      return res.status(400).json({ error: 'This payment does not require approval' });
+    }
+    if (!isPaymentApprovalPending(existing)) {
+      return res.status(400).json({ error: 'This payment request is no longer pending' });
+    }
+    payments[idx] = {
+      ...existing,
+      approvalStatus: 'rejected',
+      rejectedBy,
+      rejectedAt: new Date().toISOString(),
+      rejectReason: String(body.reason ?? '').trim(),
+    };
+    await writePayments(payments);
+    const customers = await readCustomers();
+    const cust = customers.find((c) => c.id === existing.customerId);
+    const billsList = await readBills();
+    const promotions = await readPromotions();
+    if (cust) {
+      cust.remainingAmount = computeRemainingAmount(cust, billsList, payments, promotions);
+      await writeCustomers(customers);
+    }
+    res.json(payments[idx]);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to reject payment request' });
+  }
+});
+
 app.post('/api/unloads', async (req, res) => {
   const auth = await requireDriverOrAdmin(req, res);
   if (!auth) return;
@@ -1833,13 +2092,10 @@ app.post('/api/unloads', async (req, res) => {
       date = paymentDateDefaultYmd();
     }
 
-    const tokyoBags = toNonNegNumber(body.tokyoBags);
-    const samudraBags = toNonNegNumber(body.samudraBags);
-    const atlasBags = toNonNegNumber(body.atlasBags);
-    const nipponBags = toNonNegNumber(body.nipponBags);
-    const bagSum = tokyoBags + samudraBags + atlasBags + nipponBags;
+    const { fields, products } = await parseProductBagFields(body);
+    const bagSum = sumBagFields(fields, products);
     if (bagSum <= 0) {
-      return res.status(400).json({ error: 'Enter at least one bag to unload (any brand).' });
+      return res.status(400).json({ error: 'Enter at least one bag to unload (any product).' });
     }
 
     const customers = await readCustomers();
@@ -1849,25 +2105,25 @@ app.post('/api/unloads', async (req, res) => {
     }
 
     const summary = await getLiveStockSummary();
+    const keys = products.map((p) => p.key);
     const unloadsExisting = await readUnloads();
-    const pending = sumPendingUnloadBagsByBrand(unloadsExisting);
+    const pending = sumPendingUnloadBagsByBrand(unloadsExisting, keys);
     const liveByBrand = {};
     for (const b of summary.brands || []) {
       const live = Math.max(0, Math.floor(Number(b.bags) || 0));
       liveByBrand[b.key] = Math.max(0, live - (pending[b.key] ?? 0));
     }
-    const requested = { tokyo: tokyoBags, samudra: samudraBags, atlas: atlasBags, nippon: nipponBags };
-    const labels = { tokyo: 'Tokyo', samudra: 'Samudra', atlas: 'Atlas', nippon: 'Nippon' };
+    const labels = brandLabelsMap(products);
     const stockErrors = [];
-    for (const k of UNLOAD_BRAND_KEYS) {
-      const available = liveByBrand[k] ?? 0;
-      const need = requested[k];
+    for (const p of products) {
+      const available = liveByBrand[p.key] ?? 0;
+      const need = fields[p.bagsField];
       if (need <= 0) continue;
       if (available <= 0) {
-        stockErrors.push(`${labels[k]} is out of stock.`);
+        stockErrors.push(`${p.label} is out of stock.`);
       } else if (need > available) {
         stockErrors.push(
-          `${labels[k]}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock (requested ${need.toLocaleString()}).`,
+          `${p.label}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock (requested ${need.toLocaleString()}).`,
         );
       }
     }
@@ -1881,10 +2137,7 @@ app.post('/api/unloads', async (req, res) => {
       date,
       customerId: cust.id,
       customerName: cust.name,
-      tokyoBags,
-      samudraBags,
-      atlasBags,
-      nipponBags,
+      ...fields,
       recordedBy: auth.username,
       driverName: auth.driverName || auth.name || auth.username,
       note,
@@ -1998,14 +2251,15 @@ app.get('/api/customers', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
     const customers = await readCustomers();
-    const [bills, payments, overdueDates, users] = await Promise.all([
+    const [bills, payments, overdueDates, users, promotions] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
       readUsers(),
+      readPromotions(),
     ]);
     let enriched = customers.map((c) =>
-      enrichCustomerWithCollector(enrichCustomerBalance(c, bills, payments, overdueDates), users),
+      enrichCustomerWithCollector(enrichCustomerBalance(c, bills, payments, overdueDates, promotions), users),
     );
     const staffUser = await resolveStaffUser(auth);
     if (isCollectorStaff(staffUser)) {
@@ -2038,11 +2292,12 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
     }
     const nameKey = normalizeCustomerName(cust.name);
 
-    const [bills, payments, overdueDates, users] = await Promise.all([
+    const [bills, payments, overdueDates, users, promotions] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
       readUsers(),
+      readPromotions(),
     ]);
     const transactions = [];
 
@@ -2123,6 +2378,38 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
       }
     }
 
+    for (const promo of promotions) {
+      if (promo.customerId !== cust.id) continue;
+      const credit = promotionCreditAmount(promo);
+      if (credit <= 0) continue;
+      const pType = promotionType(promo);
+      let typeLabel = 'Promotion';
+      if (pType === PROMOTION_TYPES.INVOICE_DISCOUNT) {
+        typeLabel = 'Invoice discount';
+      } else if (pType === PROMOTION_TYPES.TARGET_PROMOTION) {
+        typeLabel = 'Target promotion';
+      }
+      const details = [
+        pType === PROMOTION_TYPES.INVOICE_DISCOUNT && promo.invoiceNumber
+          ? `Invoice ${promo.invoiceNumber}`
+          : null,
+        promo.reason,
+        promo.enteredBy ? `by ${promo.enteredBy}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || '—';
+      transactions.push({
+        kind: 'promotion',
+        id: promo.id,
+        date: promo.date,
+        sortAt: promo.createdAt || `${promo.date}T12:00:00`,
+        type: typeLabel,
+        details,
+        amount: credit,
+        direction: 'credit',
+      });
+    }
+
     transactions.sort((a, b) => {
       const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
       if (dateCmp !== 0) return dateCmp;
@@ -2131,7 +2418,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
 
     res.json({
       customer: enrichCustomerWithCollector(
-        enrichCustomerBalance(cust, bills, payments, overdueDates),
+        enrichCustomerBalance(cust, bills, payments, overdueDates, promotions),
         users,
       ),
       transactions,
@@ -2232,6 +2519,13 @@ app.patch('/api/customers/:id', async (req, res) => {
     const hasOverdueNotifyTime = body.overdueNotifyTime !== undefined;
     const hasMonthlyTargetBags = body.monthlyTargetBags !== undefined;
     const hasCollectorUserId = body.collectorUserId !== undefined;
+    const hasTaxInvoicesEnabled = body.taxInvoicesEnabled !== undefined;
+    const hasPurchaserTin = body.purchaserTin !== undefined;
+    const hasPurchaserTaxName = body.purchaserTaxName !== undefined;
+    const hasPurchaserTaxAddress = body.purchaserTaxAddress !== undefined;
+    const hasPurchaserTaxPhone = body.purchaserTaxPhone !== undefined;
+    const hasPlaceOfSupply = body.placeOfSupply !== undefined;
+    const hasTaxAdditionalInfo = body.taxAdditionalInfo !== undefined;
     if (
       !hasName &&
       !hasLocation &&
@@ -2244,12 +2538,19 @@ app.patch('/api/customers/:id', async (req, res) => {
       !hasOverdueNotifyWeekday &&
       !hasOverdueNotifyTime &&
       !hasMonthlyTargetBags &&
-      !hasCollectorUserId
+      !hasCollectorUserId &&
+      !hasTaxInvoicesEnabled &&
+      !hasPurchaserTin &&
+      !hasPurchaserTaxName &&
+      !hasPurchaserTaxAddress &&
+      !hasPurchaserTaxPhone &&
+      !hasPlaceOfSupply &&
+      !hasTaxAdditionalInfo
     ) {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    if (hasMonthlyTargetBags || hasCollectorUserId || hasOverdueNotifyEnabled || hasOverdueNotifyWeekday || hasOverdueNotifyTime) {
+    if (hasMonthlyTargetBags || hasCollectorUserId || hasOverdueNotifyEnabled || hasOverdueNotifyWeekday || hasOverdueNotifyTime || hasTaxInvoicesEnabled || hasPurchaserTin || hasPurchaserTaxName || hasPurchaserTaxAddress || hasPurchaserTaxPhone || hasPlaceOfSupply || hasTaxAdditionalInfo) {
       const auth = await requireManagerOrAdmin(req, res);
       if (!auth) return;
     }
@@ -2377,6 +2678,62 @@ app.patch('/api/customers/:id', async (req, res) => {
       }
     }
 
+    if (hasTaxInvoicesEnabled) {
+      if (body.taxInvoicesEnabled === true) {
+        cust.taxInvoicesEnabled = true;
+      } else {
+        delete cust.taxInvoicesEnabled;
+      }
+    }
+    if (hasPurchaserTin) {
+      const tin = String(body.purchaserTin ?? '').trim();
+      if (tin) {
+        cust.purchaserTin = tin;
+      } else {
+        delete cust.purchaserTin;
+      }
+    }
+    if (hasPurchaserTaxName) {
+      const name = String(body.purchaserTaxName ?? '').trim();
+      if (name) {
+        cust.purchaserTaxName = name;
+      } else {
+        delete cust.purchaserTaxName;
+      }
+    }
+    if (hasPurchaserTaxAddress) {
+      const addr = String(body.purchaserTaxAddress ?? '').trim();
+      if (addr) {
+        cust.purchaserTaxAddress = addr;
+      } else {
+        delete cust.purchaserTaxAddress;
+      }
+    }
+    if (hasPurchaserTaxPhone) {
+      const phone = String(body.purchaserTaxPhone ?? '').trim();
+      if (phone) {
+        cust.purchaserTaxPhone = phone;
+      } else {
+        delete cust.purchaserTaxPhone;
+      }
+    }
+    if (hasPlaceOfSupply) {
+      const place = String(body.placeOfSupply ?? '').trim();
+      if (place) {
+        cust.placeOfSupply = place;
+      } else {
+        delete cust.placeOfSupply;
+      }
+    }
+    if (hasTaxAdditionalInfo) {
+      const info = String(body.taxAdditionalInfo ?? '').trim();
+      if (info) {
+        cust.taxAdditionalInfo = info;
+      } else {
+        delete cust.taxAdditionalInfo;
+      }
+    }
+
     cust.updatedAt = new Date().toISOString();
     cust.updatedBy = updatedBy;
 
@@ -2413,13 +2770,14 @@ app.patch('/api/customers/:id', async (req, res) => {
     if (billsDirty) await writeBills(bills);
     if (paymentsDirty) await writePayments(payments);
 
-    cust.remainingAmount = computeRemainingAmount(cust, bills, payments);
+    const promotions = await readPromotions();
+    cust.remainingAmount = computeRemainingAmount(cust, bills, payments, promotions);
     customers[idx] = cust;
     await writeCustomers(customers);
 
     const users = await readUsers();
     res.json(
-      enrichCustomerWithCollector(enrichCustomerBalance(cust, bills, payments, overdueDates), users),
+      enrichCustomerWithCollector(enrichCustomerBalance(cust, bills, payments, overdueDates, promotions), users),
     );
   } catch (e) {
     console.error(e);
@@ -2462,12 +2820,20 @@ app.post('/api/payments', async (req, res) => {
     let chequeAmount = sumChequeAmounts(
       parsedCheques.cheques.map((c) => ({ amount: c.amount })),
     );
-    if (cashAmount === 0 && chequeAmount === 0 && body.amount != null) {
+    const parsedOther = parseOtherPaymentMethodsFromBody(body);
+    if (parsedOther.error) {
+      return res.status(400).json({ error: parsedOther.error });
+    }
+    if (cashAmount === 0 && chequeAmount === 0 && parsedOther.cdmAmount === 0 && parsedOther.onlineTransferAmount === 0 && body.amount != null) {
       cashAmount = toNonNegMoney(body.amount);
     }
-    const amount = Math.round((cashAmount + chequeAmount) * 100) / 100;
+    const amount = Math.round(
+      (cashAmount + chequeAmount + parsedOther.cdmAmount + parsedOther.onlineTransferAmount) * 100,
+    ) / 100;
     if (amount <= 0) {
-      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
+      return res.status(400).json({
+        error: 'Enter a cash, cheque, CDM deposit, and/or online transfer amount so the total is greater than 0.',
+      });
     }
 
     let date = String(body.date ?? '').trim();
@@ -2525,9 +2891,13 @@ app.post('/api/payments', async (req, res) => {
         return res.status(400).json({ error: 'Total payment must equal the sum of per-bill amounts.' });
       }
     }
-    const finalAmount = Math.round((finalCashAmount + finalChequeAmount) * 100) / 100;
+    const finalAmount = Math.round(
+      (finalCashAmount + finalChequeAmount + parsedOther.cdmAmount + parsedOther.onlineTransferAmount) * 100,
+    ) / 100;
     if (finalAmount <= 0) {
-      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
+      return res.status(400).json({
+        error: 'Enter a cash, cheque, CDM deposit, and/or online transfer amount so the total is greater than 0.',
+      });
     }
 
     const storedCheques = buildChequesForStorage(parsedCheques.cheques);
@@ -2547,6 +2917,8 @@ app.post('/api/payments', async (req, res) => {
       row.cheques = storedCheques;
     }
     applyLegacyChequeFields(row, storedCheques);
+    attachOtherPaymentMethodsToRow(row, parsedOther);
+    attachApprovalMetaToRow(row, parsedOther);
     if (parsedBillCash.allocations.length > 0) {
       attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
     } else {
@@ -2554,15 +2926,17 @@ app.post('/api/payments', async (req, res) => {
     }
 
     payments.push(row);
-    cust.remainingAmount = computeRemainingAmount(cust, billsList, payments);
+    const promotions = await readPromotions();
+    cust.remainingAmount = computeRemainingAmount(cust, billsList, payments, promotions);
     await writeCustomers(customers);
     await writePayments(payments);
-    if (cust.email) {
+    const pendingApproval = isPaymentApprovalPending(row);
+    if (!pendingApproval && cust.email) {
       notifyPaymentEmail(cust, row, cust.remainingAmount).catch((err) =>
         console.error('payment email notification', err),
       );
     }
-    if (cust.contactNumber) {
+    if (!pendingApproval && cust.contactNumber) {
       notifyPaymentWhatsApp(cust, row, cust.remainingAmount).catch((err) =>
         console.error('payment whatsapp notification', err),
       );
@@ -2598,12 +2972,20 @@ app.patch('/api/payments/:id', async (req, res) => {
     let chequeAmount = sumChequeAmounts(
       parsedCheques.cheques.map((c) => ({ amount: c.amount })),
     );
-    if (cashAmount === 0 && chequeAmount === 0 && body.amount != null) {
+    const parsedOther = parseOtherPaymentMethodsFromBody(body);
+    if (parsedOther.error) {
+      return res.status(400).json({ error: parsedOther.error });
+    }
+    if (cashAmount === 0 && chequeAmount === 0 && parsedOther.cdmAmount === 0 && parsedOther.onlineTransferAmount === 0 && body.amount != null) {
       cashAmount = toNonNegMoney(body.amount);
     }
-    const amount = Math.round((cashAmount + chequeAmount) * 100) / 100;
+    const amount = Math.round(
+      (cashAmount + chequeAmount + parsedOther.cdmAmount + parsedOther.onlineTransferAmount) * 100,
+    ) / 100;
     if (amount <= 0) {
-      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
+      return res.status(400).json({
+        error: 'Enter a cash, cheque, CDM deposit, and/or online transfer amount so the total is greater than 0.',
+      });
     }
 
     let date = String(body.date ?? '').trim();
@@ -2661,9 +3043,13 @@ app.patch('/api/payments/:id', async (req, res) => {
         return res.status(400).json({ error: 'Total payment must equal the sum of per-bill amounts.' });
       }
     }
-    const finalAmount = Math.round((finalCashAmount + finalChequeAmount) * 100) / 100;
+    const finalAmount = Math.round(
+      (finalCashAmount + finalChequeAmount + parsedOther.cdmAmount + parsedOther.onlineTransferAmount) * 100,
+    ) / 100;
     if (finalAmount <= 0) {
-      return res.status(400).json({ error: 'Enter a cash amount and/or cheque amount so the total is greater than 0.' });
+      return res.status(400).json({
+        error: 'Enter a cash, cheque, CDM deposit, and/or online transfer amount so the total is greater than 0.',
+      });
     }
 
     const existing = payments[idx];
@@ -2691,6 +3077,8 @@ app.patch('/api/payments/:id', async (req, res) => {
       delete row.cheques;
     }
     applyLegacyChequeFields(row, storedCheques);
+    attachOtherPaymentMethodsToRow(row, parsedOther);
+    attachApprovalMetaToRow(row, parsedOther, existing);
     if (parsedBillCash.allocations.length > 0) {
       attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
     } else {
@@ -2844,9 +3232,10 @@ app.patch('/api/payments/:id/cheque-returned', async (req, res) => {
 
     const customers = await readCustomers();
     const bills = await readBills();
+    const promotions = await readPromotions();
     const cust = customers.find((c) => c.id === result.payment.customerId);
     if (cust) {
-      cust.remainingAmount = computeRemainingAmount(cust, bills, payments);
+      cust.remainingAmount = computeRemainingAmount(cust, bills, payments, promotions);
       const custIdx = customers.findIndex((c) => c.id === cust.id);
       if (custIdx >= 0) {
         customers[custIdx] = { ...customers[custIdx], remainingAmount: cust.remainingAmount };
@@ -2985,7 +3374,157 @@ app.post('/api/cheque-deposits', async (req, res) => {
   }
 });
 
-/** Free-bag promotions: stored in promotions.json; reduces live stock / daily ledger “out” (no customer balance or cash). */
+/** Promotions: free bags (stock), invoice discount, or target promotion (ledger + cashier). */
+function parsePromotionType(body) {
+  const t = String(body?.type ?? '').trim();
+  if (t === PROMOTION_TYPES.INVOICE_DISCOUNT || t === PROMOTION_TYPES.TARGET_PROMOTION) return t;
+  return PROMOTION_TYPES.FREE_BAGS;
+}
+
+async function validatePromotionCustomer(body) {
+  const customerId = String(body.customerId ?? '').trim();
+  if (!customerId) {
+    return { ok: false, error: 'customerId is required' };
+  }
+  let date = String(body.date ?? '').trim();
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, error: 'date must be YYYY-MM-DD' };
+  }
+  const reason = String(body.reason ?? '').trim();
+  if (!reason) {
+    return { ok: false, error: 'reason is required' };
+  }
+  const customers = await readCustomers();
+  const cust = customers.find((c) => c.id === customerId);
+  if (!cust) {
+    return { ok: false, error: 'Customer not found' };
+  }
+  return { ok: true, customerId, date, reason, cust };
+}
+
+async function buildFreeBagPromotionRow(body, meta = {}) {
+  let billNumber = '';
+  if (body.billNumber != null && String(body.billNumber).trim() !== '') {
+    const norm = normalizePaymentBillNumber(body.billNumber);
+    if (!norm) {
+      return { ok: false, error: 'billNumber must be 1–3 digits when provided' };
+    }
+    billNumber = norm;
+  }
+  const { fields, products } = await parseProductBagFields(body);
+  const bagSum = sumBagFields(fields, products);
+  if (bagSum <= 0) {
+    return { ok: false, error: 'Enter at least one free bag (any product).' };
+  }
+  const stocks = await readStocks();
+  const bills = await readBills();
+  const promos = await readPromotions();
+  const pendingUnloads = await readUnloads();
+  const check = await validateBillAgainstPooledStock(
+    stocks,
+    bills,
+    promos,
+    fields,
+    pendingUnloads,
+    null,
+    products,
+    meta.excludePromotionId || null,
+    'promotion',
+  );
+  if (!check.ok) {
+    return { ok: false, error: check.error };
+  }
+  return {
+    ok: true,
+    row: {
+      type: PROMOTION_TYPES.FREE_BAGS,
+      billNumber,
+      ...fields,
+    },
+    cust: meta.cust,
+  };
+}
+
+async function buildInvoiceDiscountPromotionRow(body, meta = {}) {
+  const billId = String(body.billId ?? '').trim();
+  if (!billId) {
+    return { ok: false, error: 'Select an invoice (bill) for the discount.' };
+  }
+  const discountMode = String(body.discountMode ?? '').trim();
+  if (discountMode !== 'per_bag' && discountMode !== 'whole_invoice') {
+    return { ok: false, error: 'discountMode must be per_bag or whole_invoice' };
+  }
+  const discountValue = toNonNegMoney(body.discountValue);
+  if (discountValue <= 0) {
+    return { ok: false, error: 'Enter a discount amount greater than zero.' };
+  }
+  const bills = await readBills();
+  const bill = bills.find((b) => b.id === billId);
+  if (!bill) {
+    return { ok: false, error: 'Selected invoice not found' };
+  }
+  if (normalizeCustomerName(bill.customerName) !== normalizeCustomerName(meta.cust.name)) {
+    return { ok: false, error: 'Selected invoice does not belong to this customer.' };
+  }
+  const products = await getBagProducts();
+  const discountAmount = computeInvoiceDiscountAmount(bill, discountMode, discountValue, products);
+  if (discountAmount <= 0) {
+    return { ok: false, error: 'Discount amount must be greater than zero.' };
+  }
+  return {
+    ok: true,
+    row: {
+      type: PROMOTION_TYPES.INVOICE_DISCOUNT,
+      billId,
+      invoiceNumber: normalizeBillInvoiceNumber(bill.invoiceNumber) || '',
+      discountMode,
+      discountValue,
+      discountAmount,
+    },
+  };
+}
+
+async function buildTargetPromotionRow(body) {
+  const discountAmount = toNonNegMoney(body.discountAmount ?? body.amount);
+  if (discountAmount <= 0) {
+    return { ok: false, error: 'Enter a promotion amount greater than zero.' };
+  }
+  return {
+    ok: true,
+    row: {
+      type: PROMOTION_TYPES.TARGET_PROMOTION,
+      discountAmount,
+    },
+  };
+}
+
+async function buildPromotionPayload(body, meta = {}) {
+  const base = await validatePromotionCustomer(body);
+  if (!base.ok) return base;
+  const type = parsePromotionType(body);
+  let built;
+  if (type === PROMOTION_TYPES.INVOICE_DISCOUNT) {
+    built = await buildInvoiceDiscountPromotionRow(body, { ...meta, cust: base.cust });
+  } else if (type === PROMOTION_TYPES.TARGET_PROMOTION) {
+    built = await buildTargetPromotionRow(body);
+  } else {
+    built = await buildFreeBagPromotionRow(body, { ...meta, cust: base.cust });
+  }
+  if (!built.ok) return built;
+  return {
+    ok: true,
+    type,
+    cust: base.cust,
+    row: {
+      date: base.date,
+      customerId: base.cust.id,
+      customerName: base.cust.name,
+      reason: base.reason,
+      ...built.row,
+    },
+  };
+}
+
 app.get('/api/promotions', async (req, res) => {
   try {
     const rows = await readPromotions();
@@ -3009,56 +3548,15 @@ app.post('/api/promotions', async (req, res) => {
     if (!enteredBy) {
       return res.status(400).json({ error: 'enteredBy (username) is required' });
     }
-    const customerId = String(body.customerId ?? '').trim();
-    if (!customerId) {
-      return res.status(400).json({ error: 'customerId is required' });
-    }
 
-    let date = String(body.date ?? '').trim();
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
-    }
-
-    const reason = String(body.reason ?? '').trim();
-    if (!reason) {
-      return res.status(400).json({ error: 'reason is required' });
-    }
-
-    let billNumber = '';
-    if (body.billNumber != null && String(body.billNumber).trim() !== '') {
-      const norm = normalizePaymentBillNumber(body.billNumber);
-      if (!norm) {
-        return res.status(400).json({ error: 'billNumber must be 1–3 digits when provided' });
-      }
-      billNumber = norm;
-    }
-
-    const tokyoBags = toNonNegNumber(body.tokyoBags);
-    const samudraBags = toNonNegNumber(body.samudraBags);
-    const atlasBags = toNonNegNumber(body.atlasBags);
-    const nipponBags = toNonNegNumber(body.nipponBags);
-    const bagSum = tokyoBags + samudraBags + atlasBags + nipponBags;
-    if (bagSum <= 0) {
-      return res.status(400).json({ error: 'Enter at least one free bag (any brand).' });
-    }
-
-    const customers = await readCustomers();
-    const cust = customers.find((c) => c.id === customerId);
-    if (!cust) {
-      return res.status(400).json({ error: 'Customer not found' });
+    const built = await buildPromotionPayload(body);
+    if (!built.ok) {
+      return res.status(400).json({ error: built.error });
     }
 
     const row = {
       id: `promo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-      date,
-      customerId: cust.id,
-      customerName: cust.name,
-      billNumber,
-      reason,
-      tokyoBags,
-      samudraBags,
-      atlasBags,
-      nipponBags,
+      ...built.row,
       enteredBy,
       createdAt: new Date().toISOString(),
     };
@@ -3066,21 +3564,34 @@ app.post('/api/promotions', async (req, res) => {
     const promos = await readPromotions();
     promos.push(row);
     await writePromotions(promos);
-    try {
-      await refreshLiveStockFromSources();
-    } catch (err) {
-      console.error('liveStock refresh after promotion', err);
+
+    if (isFreeBagPromotion(row)) {
+      try {
+        await refreshLiveStockFromSources();
+      } catch (err) {
+        console.error('liveStock refresh after promotion', err);
+      }
     }
-    if (cust.email) {
-      notifyPromotionEmail(cust, row).catch((err) =>
-        console.error('promotion email notification', err),
-      );
+
+    if (promotionCreditAmount(row) > 0) {
+      const [bills, payments] = await Promise.all([readBills(), readPayments()]);
+      await refreshCustomerBalancesForCustomerIds(bills, payments, row.customerId);
     }
-    if (cust.contactNumber) {
-      notifyPromotionWhatsApp(cust, row).catch((err) =>
-        console.error('promotion whatsapp notification', err),
-      );
+
+    const cust = built.cust;
+    if (isFreeBagPromotion(row)) {
+      if (cust.email) {
+        notifyPromotionEmail(cust, row).catch((err) =>
+          console.error('promotion email notification', err),
+        );
+      }
+      if (cust.contactNumber) {
+        notifyPromotionWhatsApp(cust, row).catch((err) =>
+          console.error('promotion whatsapp notification', err),
+        );
+      }
     }
+
     res.status(201).json(row);
   } catch (e) {
     console.error(e);
@@ -3099,44 +3610,6 @@ app.patch('/api/promotions/:id', async (req, res) => {
     if (!updatedBy) {
       return res.status(400).json({ error: 'updatedBy (username) is required' });
     }
-    const customerId = String(body.customerId ?? '').trim();
-    if (!customerId) {
-      return res.status(400).json({ error: 'customerId is required' });
-    }
-
-    let date = String(body.date ?? '').trim();
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
-    }
-
-    const reason = String(body.reason ?? '').trim();
-    if (!reason) {
-      return res.status(400).json({ error: 'reason is required' });
-    }
-
-    let billNumber = '';
-    if (body.billNumber != null && String(body.billNumber).trim() !== '') {
-      const norm = normalizePaymentBillNumber(body.billNumber);
-      if (!norm) {
-        return res.status(400).json({ error: 'billNumber must be 1–3 digits when provided' });
-      }
-      billNumber = norm;
-    }
-
-    const tokyoBags = toNonNegNumber(body.tokyoBags);
-    const samudraBags = toNonNegNumber(body.samudraBags);
-    const atlasBags = toNonNegNumber(body.atlasBags);
-    const nipponBags = toNonNegNumber(body.nipponBags);
-    const bagSum = tokyoBags + samudraBags + atlasBags + nipponBags;
-    if (bagSum <= 0) {
-      return res.status(400).json({ error: 'Enter at least one free bag (any brand).' });
-    }
-
-    const customers = await readCustomers();
-    const cust = customers.find((c) => c.id === customerId);
-    if (!cust) {
-      return res.status(400).json({ error: 'Customer not found' });
-    }
 
     const promos = await readPromotions();
     const idx = promos.findIndex((p) => p.id === id);
@@ -3145,28 +3618,39 @@ app.patch('/api/promotions/:id', async (req, res) => {
     }
 
     const existing = promos[idx];
+    const type = parsePromotionType({ type: body.type ?? existing.type });
+    body.type = type;
+
+    const built = await buildPromotionPayload(body, { excludePromotionId: id });
+    if (!built.ok) {
+      return res.status(400).json({ error: built.error });
+    }
+
     const row = {
       ...existing,
-      date,
-      customerId: cust.id,
-      customerName: cust.name,
-      billNumber,
-      reason,
-      tokyoBags,
-      samudraBags,
-      atlasBags,
-      nipponBags,
+      ...built.row,
+      type,
       updatedBy,
       updatedAt: new Date().toISOString(),
     };
 
     promos[idx] = row;
     await writePromotions(promos);
-    try {
-      await refreshLiveStockFromSources();
-    } catch (err) {
-      console.error('liveStock refresh after promotion update', err);
+
+    if (isFreeBagPromotion(row) || isFreeBagPromotion(existing)) {
+      try {
+        await refreshLiveStockFromSources();
+      } catch (err) {
+        console.error('liveStock refresh after promotion update', err);
+      }
     }
+
+    const balanceCustomerIds = new Set([existing.customerId, row.customerId].filter(Boolean));
+    if (balanceCustomerIds.size > 0) {
+      const [bills, payments] = await Promise.all([readBills(), readPayments()]);
+      await refreshCustomerBalancesForCustomerIds(bills, payments, ...balanceCustomerIds);
+    }
+
     res.json(row);
   } catch (e) {
     console.error(e);
@@ -3185,13 +3669,23 @@ app.delete('/api/promotions/:id', async (req, res) => {
     if (idx < 0) {
       return res.status(404).json({ error: 'Promotion not found' });
     }
+    const removed = promos[idx];
     promos.splice(idx, 1);
     await writePromotions(promos);
-    try {
-      await refreshLiveStockFromSources();
-    } catch (err) {
-      console.error('liveStock refresh after promotion delete', err);
+
+    if (isFreeBagPromotion(removed)) {
+      try {
+        await refreshLiveStockFromSources();
+      } catch (err) {
+        console.error('liveStock refresh after promotion delete', err);
+      }
     }
+
+    if (promotionCreditAmount(removed) > 0 && removed.customerId) {
+      const [bills, payments] = await Promise.all([readBills(), readPayments()]);
+      await refreshCustomerBalancesForCustomerIds(bills, payments, removed.customerId);
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -3264,16 +3758,18 @@ app.get('/api/activity', async (req, res) => {
 
 app.get('/api/bills', async (req, res) => {
   try {
+    const auth = getAuthFromRequest(req);
     const bills = await readBills();
     if (ensureBillInvoiceNumbers(bills)) {
       await writeBills(bills);
     }
-    const sorted = [...bills].sort((a, b) => {
+    let sorted = [...bills].sort((a, b) => {
       const da = String(a.date || '');
       const db = String(b.date || '');
       if (da !== db) return db.localeCompare(da);
       return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     });
+    sorted = await filterRowsForCollector(sorted, auth, (row) => row.customerName);
     res.json(sorted);
   } catch (e) {
     console.error(e);
@@ -3298,7 +3794,7 @@ app.post('/api/bills', async (req, res) => {
       return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     }
 
-    const fields = parseBillBagFields(body);
+    const { fields, products } = await parseBillBagFields(body);
     const parsedInvoice = parseBillInvoiceNumber(body);
     if (parsedInvoice.error) {
       return res.status(400).json({ error: parsedInvoice.error });
@@ -3309,14 +3805,8 @@ app.post('/api/bills', async (req, res) => {
     if (billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber)) {
       return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
     }
-    const stockId =
-      stockIdFromBody ||
-      inferStockIdForBillBags(stocks, bills, {
-        tokyoBags: fields.tokyoBags,
-        samudraBags: fields.samudraBags,
-        atlasBags: fields.atlasBags,
-        nipponBags: fields.nipponBags,
-      });
+    const keys = products.map((p) => p.key);
+    const stockId = stockIdFromBody || inferStockIdForBillBags(stocks, bills, fields, keys);
 
     const row = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -3331,17 +3821,14 @@ app.post('/api/bills', async (req, res) => {
 
     const promotions = await readPromotions();
     const pendingUnloads = await readUnloads();
-    const check = validateBillAgainstPooledStock(
+    const check = await validateBillAgainstPooledStock(
       stocks,
       bills,
       promotions,
-      {
-        tokyoBags: fields.tokyoBags,
-        samudraBags: fields.samudraBags,
-        atlasBags: fields.atlasBags,
-        nipponBags: fields.nipponBags,
-      },
+      fields,
       pendingUnloads,
+      null,
+      products,
     );
     if (!check.ok) {
       return res.status(400).json({ error: check.error });
@@ -3409,7 +3896,7 @@ app.patch('/api/bills/:id', async (req, res) => {
     }
 
     const existing = bills[idx];
-    const fields = parseBillBagFields(body);
+    const { fields, products } = await parseBillBagFields(body);
     const parsedInvoice = parseBillInvoiceNumber(body);
     if (parsedInvoice.error) {
       return res.status(400).json({ error: parsedInvoice.error });
@@ -3421,17 +3908,14 @@ app.patch('/api/bills/:id', async (req, res) => {
     const promotions = await readPromotions();
     const pendingUnloads = await readUnloads();
     const otherBills = bills.filter((b) => b.id !== id);
-    const check = validateBillAgainstPooledStock(
+    const check = await validateBillAgainstPooledStock(
       stocks,
       otherBills,
       promotions,
-      {
-        tokyoBags: fields.tokyoBags,
-        samudraBags: fields.samudraBags,
-        atlasBags: fields.atlasBags,
-        nipponBags: fields.nipponBags,
-      },
+      fields,
       pendingUnloads,
+      null,
+      products,
     );
     if (!check.ok) {
       return res.status(400).json({ error: check.error });
@@ -3492,11 +3976,10 @@ app.get('/api/daily-stock', async (req, res) => {
 
 app.get('/api/stocks/summary', async (req, res) => {
   try {
-    const distributorProductsOnly =
-      req.query.distributorProductsOnly === '1' || req.query.distributorProductsOnly === 'true';
-    const payload = await getLiveStockSummary({ distributorProductsOnly });
+    const payload = await getLiveStockSummary();
+    const keys = (payload.brands || []).map((b) => b.key);
     const unloads = await readUnloads();
-    const pending = sumPendingUnloadBagsByBrand(unloads);
+    const pending = sumPendingUnloadBagsByBrand(unloads, keys);
     const brands = (payload.brands || []).map((b) => {
       const bags = Math.max(0, Math.floor(Number(b.bags) || 0));
       const reserved = Math.max(0, Math.floor(Number(pending[b.key]) || 0));
@@ -3518,7 +4001,8 @@ app.get('/api/stocks/summary', async (req, res) => {
 app.get('/api/stocks/last-cut-off-prices', async (req, res) => {
   try {
     const stocks = await readStocks();
-    res.json({ prices: lastCutOffPricesByBrand(stocks) });
+    const keys = await getBagProductKeys();
+    res.json({ prices: lastCutOffPricesByBrand(stocks, keys) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load last cut-off prices' });
@@ -3540,77 +4024,18 @@ app.post('/api/stocks', async (req, res) => {
       return res.status(400).json({ error: 'date, stockId, and vehicleNumber are required' });
     }
 
-    const trimStr = (v) => String(v ?? '').trim();
-    const cutOffNumberOrUndef = (v) => {
-      const s = String(v ?? '').trim();
-      if (!s) return undefined;
-      const n = Number(s);
-      if (!Number.isFinite(n) || n < 0) return undefined;
-      return toNonNegNumber(n);
-    };
-    const row = {
+    const { row, missingRefs } = await buildLoadRowFromBody(body, {
       id: `load-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       date,
       stockId,
       vehicleNumber,
       purchaseOrderIds: normalizePurchaseOrderIds(body.purchaseOrderIds),
-      tokyoBags: toNonNegNumber(body.tokyoBags),
-      tokyoCost: toNonNegNumber(body.tokyoCost),
-      tokyoCutOffPrice: cutOffNumberOrUndef(body.tokyoCutOffPrice),
-      tokyoInvoice: trimStr(body.tokyoInvoice),
-      tokyoCheque: trimStr(body.tokyoCheque),
-      tokyoConvertingDate: trimStr(body.tokyoConvertingDate).slice(0, 10),
-      samudraBags: toNonNegNumber(body.samudraBags),
-      samudraCost: toNonNegNumber(body.samudraCost),
-      samudraCutOffPrice: cutOffNumberOrUndef(body.samudraCutOffPrice),
-      samudraInvoice: trimStr(body.samudraInvoice),
-      samudraCheque: trimStr(body.samudraCheque),
-      samudraConvertingDate: trimStr(body.samudraConvertingDate).slice(0, 10),
-      atlasBags: toNonNegNumber(body.atlasBags),
-      atlasCost: toNonNegNumber(body.atlasCost),
-      atlasCutOffPrice: cutOffNumberOrUndef(body.atlasCutOffPrice),
-      atlasInvoice: trimStr(body.atlasInvoice),
-      atlasCheque: trimStr(body.atlasCheque),
-      atlasConvertingDate: trimStr(body.atlasConvertingDate).slice(0, 10),
-      nipponBags: toNonNegNumber(body.nipponBags),
-      nipponCost: toNonNegNumber(body.nipponCost),
-      nipponCutOffPrice: cutOffNumberOrUndef(body.nipponCutOffPrice),
-      nipponInvoice: trimStr(body.nipponInvoice),
-      nipponCheque: trimStr(body.nipponCheque),
-      nipponConvertingDate: trimStr(body.nipponConvertingDate).slice(0, 10),
-      transportCostPerBag: toNonNegNumber(body.transportCostPerBag),
-      marginPerBag:
-        body.marginPerBag === '' || body.marginPerBag == null
-          ? 70
-          : toNonNegNumber(body.marginPerBag),
       addedBy,
       createdAt: new Date().toISOString(),
-    };
-
-    row.totalAmount =
-      row.tokyoCost + row.samudraCost + row.atlasCost + row.nipponCost;
-
-    const stockBrandsRequireRefs = [
-      ['tokyo', 'Tokyo'],
-      ['samudra', 'Samudra'],
-      ['atlas', 'Atlas'],
-      ['nippon', 'Nippon'],
-    ];
-    const missingRefs = [];
-    const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
-    for (const [key, label] of stockBrandsRequireRefs) {
-      if (toNonNegNumber(row[`${key}Bags`]) >= 1) {
-        if (!row[`${key}Invoice`]) missingRefs.push(`${label} invoice number`);
-        if (!row[`${key}Cheque`]) missingRefs.push(`${label} cheque number`);
-        const convertingDate = row[`${key}ConvertingDate`];
-        if (!convertingDate || !YMD_RE.test(convertingDate)) {
-          row[`${key}ConvertingDate`] = date;
-        }
-      }
-    }
+    });
     if (missingRefs.length > 0) {
       return res.status(400).json({
-        error: `When bags are 1 or more for a brand, invoice and cheque are required. Missing: ${missingRefs.join(', ')}.`,
+        error: `When bags are 1 or more for a product, invoice and cheque are required. Missing: ${missingRefs.join(', ')}.`,
       });
     }
 
@@ -3655,15 +4080,7 @@ app.patch('/api/stocks/:id', async (req, res) => {
     }
     const existing = stocks[idx];
 
-    const trimStr = (v) => String(v ?? '').trim();
-    const cutOffNumberOrUndef = (v) => {
-      const s = String(v ?? '').trim();
-      if (!s) return undefined;
-      const n = Number(s);
-      if (!Number.isFinite(n) || n < 0) return undefined;
-      return toNonNegNumber(n);
-    };
-    const row = {
+    const { row, missingRefs } = await buildLoadRowFromBody(body, {
       ...existing,
       date,
       stockId,
@@ -3671,63 +4088,12 @@ app.patch('/api/stocks/:id', async (req, res) => {
       purchaseOrderIds: normalizePurchaseOrderIds(
         body.purchaseOrderIds !== undefined ? body.purchaseOrderIds : existing.purchaseOrderIds,
       ),
-      tokyoBags: toNonNegNumber(body.tokyoBags),
-      tokyoCost: toNonNegNumber(body.tokyoCost),
-      tokyoCutOffPrice: cutOffNumberOrUndef(body.tokyoCutOffPrice),
-      tokyoInvoice: trimStr(body.tokyoInvoice),
-      tokyoCheque: trimStr(body.tokyoCheque),
-      tokyoConvertingDate: trimStr(body.tokyoConvertingDate).slice(0, 10),
-      samudraBags: toNonNegNumber(body.samudraBags),
-      samudraCost: toNonNegNumber(body.samudraCost),
-      samudraCutOffPrice: cutOffNumberOrUndef(body.samudraCutOffPrice),
-      samudraInvoice: trimStr(body.samudraInvoice),
-      samudraCheque: trimStr(body.samudraCheque),
-      samudraConvertingDate: trimStr(body.samudraConvertingDate).slice(0, 10),
-      atlasBags: toNonNegNumber(body.atlasBags),
-      atlasCost: toNonNegNumber(body.atlasCost),
-      atlasCutOffPrice: cutOffNumberOrUndef(body.atlasCutOffPrice),
-      atlasInvoice: trimStr(body.atlasInvoice),
-      atlasCheque: trimStr(body.atlasCheque),
-      atlasConvertingDate: trimStr(body.atlasConvertingDate).slice(0, 10),
-      nipponBags: toNonNegNumber(body.nipponBags),
-      nipponCost: toNonNegNumber(body.nipponCost),
-      nipponCutOffPrice: cutOffNumberOrUndef(body.nipponCutOffPrice),
-      nipponInvoice: trimStr(body.nipponInvoice),
-      nipponCheque: trimStr(body.nipponCheque),
-      nipponConvertingDate: trimStr(body.nipponConvertingDate).slice(0, 10),
-      transportCostPerBag: toNonNegNumber(body.transportCostPerBag),
-      marginPerBag:
-        body.marginPerBag === '' || body.marginPerBag == null
-          ? 70
-          : toNonNegNumber(body.marginPerBag),
       updatedBy,
       updatedAt: new Date().toISOString(),
-    };
-
-    row.totalAmount =
-      row.tokyoCost + row.samudraCost + row.atlasCost + row.nipponCost;
-
-    const stockBrandsRequireRefs = [
-      ['tokyo', 'Tokyo'],
-      ['samudra', 'Samudra'],
-      ['atlas', 'Atlas'],
-      ['nippon', 'Nippon'],
-    ];
-    const missingRefs = [];
-    const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
-    for (const [key, label] of stockBrandsRequireRefs) {
-      if (toNonNegNumber(row[`${key}Bags`]) >= 1) {
-        if (!row[`${key}Invoice`]) missingRefs.push(`${label} invoice number`);
-        if (!row[`${key}Cheque`]) missingRefs.push(`${label} cheque number`);
-        const convertingDate = row[`${key}ConvertingDate`];
-        if (!convertingDate || !YMD_RE.test(convertingDate)) {
-          row[`${key}ConvertingDate`] = date;
-        }
-      }
-    }
+    });
     if (missingRefs.length > 0) {
       return res.status(400).json({
-        error: `When bags are 1 or more for a brand, invoice and cheque are required. Missing: ${missingRefs.join(', ')}.`,
+        error: `When bags are 1 or more for a product, invoice and cheque are required. Missing: ${missingRefs.join(', ')}.`,
       });
     }
 
@@ -4054,6 +4420,7 @@ app.post('/api/purchase-orders', async (req, res) => {
     const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
 
     const chequePerProduct = Boolean(body.chequePerProduct);
+    const doorStock = Boolean(body.doorStock);
     let sharedCheques = [];
     if (!chequePerProduct) {
       const validatedShared = validatePoCheques(body.cheques, bankAccountById, 'Payment');
@@ -4158,6 +4525,7 @@ app.post('/api/purchase-orders', async (req, res) => {
         vehicleNumber,
         driverName,
         ...(driverId ? { driverId } : {}),
+        ...(doorStock ? { doorStock: true, notes: 'Door stock' } : {}),
         createdBy,
         createdAt,
       });

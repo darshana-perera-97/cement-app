@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -72,12 +72,12 @@ function drawSectionTitle(doc, title, subtitle, startY) {
 }
 
 function drawSummaryTable(doc, remaining, inOut, brandKey, startY) {
-  const visibleBrands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
-  const brandHead = visibleBrands.map((b) => b.label);
+  const brands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
+  const brandHead = brands.map((b) => b.label);
 
   const head = [['Metric', ...brandHead, 'Total bags', 'Amount']];
-  const brandStart = visibleBrands.map((b) => formatBags(remaining.byBrandStart?.[b.key] || 0));
-  const brandEnd = visibleBrands.map((b) => formatBags(remaining.byBrandEnd?.[b.key] || 0));
+  const brandStart = brands.map((b) => formatBags(remaining.byBrandStart?.[b.key] || 0));
+  const brandEnd = brands.map((b) => formatBags(remaining.byBrandEnd?.[b.key] || 0));
 
   const body = [
     [
@@ -94,20 +94,20 @@ function drawSummaryTable(doc, remaining, inOut, brandKey, startY) {
     ],
     [
       'All bags in',
-      ...visibleBrands.map(() => '—'),
+      ...brands.map(() => '—'),
       formatBags(inOut.bagsIn),
       moneyCell(inOut.bagsInAmount),
     ],
     [
       'All bags distributed',
-      ...visibleBrands.map(() => '—'),
+      ...brands.map(() => '—'),
       formatBags(inOut.bagsOut),
       moneyCell(inOut.bagsOutAmount),
     ],
   ];
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
-  const brandW = Math.min(22, (pageW - 90) / Math.max(visibleBrands.length, 1));
+  const brandW = Math.min(22, (pageW - 90) / Math.max(brands.length, 1));
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -117,9 +117,9 @@ function drawSummaryTable(doc, remaining, inOut, brandKey, startY) {
     tableWidth: pageW,
     columnStyles: {
       0: { cellWidth: 48 },
-      ...Object.fromEntries(visibleBrands.map((_, i) => [i + 1, { halign: 'right', cellWidth: brandW }])),
-      [1 + visibleBrands.length]: { halign: 'right', cellWidth: 22 },
-      [2 + visibleBrands.length]: { halign: 'right', cellWidth: 32 },
+      ...Object.fromEntries(brands.map((_, i) => [i + 1, { halign: 'right', cellWidth: brandW }])),
+      [1 + brands.length]: { halign: 'right', cellWidth: 22 },
+      [2 + brands.length]: { halign: 'right', cellWidth: 32 },
     },
   });
 }

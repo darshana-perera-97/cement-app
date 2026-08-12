@@ -18,6 +18,9 @@ function normalizeStoredCheque(c, legacyPayment) {
     amount,
     chequeDate,
     chequeNumber,
+    chequeBank: String(c?.chequeBank ?? '').trim(),
+    chequeBankCode: String(c?.chequeBankCode ?? '').trim(),
+    chequeBranchCode: String(c?.chequeBranchCode ?? '').trim(),
     chequeDeposited: deposited,
     chequeDepositedAt: String(c?.chequeDepositedAt ?? '').trim(),
     chequeDepositedBy: String(c?.chequeDepositedBy ?? '').trim(),
@@ -245,6 +248,9 @@ function parseChequesFromBody(body) {
         amount,
         chequeDate,
         chequeNumber,
+        chequeBank: String(raw.chequeBank ?? '').trim(),
+        chequeBankCode: String(raw.chequeBankCode ?? '').trim(),
+        chequeBranchCode: String(raw.chequeBranchCode ?? '').trim(),
       });
     }
     return { cheques: parsed };
@@ -260,19 +266,43 @@ function parseChequesFromBody(body) {
   if (!chequeNumber) {
     return { cheques: [], error: 'Cheque number is required when cheque amount is greater than 0.' };
   }
-  return { cheques: [{ amount, chequeDate, chequeNumber }] };
+  return {
+    cheques: [
+      {
+        amount,
+        chequeDate,
+        chequeNumber,
+        chequeBank: String(body?.chequeBank ?? '').trim(),
+        chequeBankCode: String(body?.chequeBankCode ?? '').trim(),
+        chequeBranchCode: String(body?.chequeBranchCode ?? '').trim(),
+      },
+    ],
+  };
+}
+
+function copyChequeBankFields(target, source) {
+  const bank = String(source?.chequeBank ?? '').trim();
+  const bankCode = String(source?.chequeBankCode ?? '').trim();
+  const branchCode = String(source?.chequeBranchCode ?? '').trim();
+  if (bank) target.chequeBank = bank;
+  if (bankCode) target.chequeBankCode = bankCode;
+  if (branchCode) target.chequeBranchCode = branchCode;
 }
 
 function buildChequesForStorage(parsedCheques) {
-  return parsedCheques.map((c) => ({
-    id: newChequeId(),
-    amount: c.amount,
-    chequeDate: c.chequeDate,
-    chequeNumber: c.chequeNumber,
-    chequeDeposited: false,
-    chequeDepositedAt: '',
-    chequeDepositedBy: '',
-  }));
+  return parsedCheques.map((c) => {
+    const line = {
+      id: newChequeId(),
+      amount: c.amount,
+      chequeDate: c.chequeDate,
+      chequeNumber: c.chequeNumber,
+      chequeDeposited: false,
+      chequeDepositedAt: '',
+      chequeDepositedBy: '',
+    };
+    copyChequeBankFields(line, c);
+    return line;
+  });
 }
 
 /**
@@ -297,6 +327,9 @@ function buildChequesForUpdate(parsedCheques, existingPayment) {
         amount: prev.amount,
         chequeDate: prev.chequeDate,
         chequeNumber: prev.chequeNumber,
+        chequeBank: prev.chequeBank,
+        chequeBankCode: prev.chequeBankCode,
+        chequeBranchCode: prev.chequeBranchCode,
         chequeDeposited: !!prev.chequeDeposited,
         chequeDepositedAt: prev.chequeDepositedAt,
         chequeDepositedBy: prev.chequeDepositedBy,
@@ -312,7 +345,7 @@ function buildChequesForUpdate(parsedCheques, existingPayment) {
       byId.delete(prev.id);
       continue;
     }
-    stored.push({
+    const line = {
       id: prev?.id || newChequeId(),
       amount: parsed.amount,
       chequeDate: parsed.chequeDate,
@@ -320,7 +353,9 @@ function buildChequesForUpdate(parsedCheques, existingPayment) {
       chequeDeposited: false,
       chequeDepositedAt: '',
       chequeDepositedBy: '',
-    });
+    };
+    copyChequeBankFields(line, parsed);
+    stored.push(line);
     if (prev?.id) byId.delete(prev.id);
   }
 

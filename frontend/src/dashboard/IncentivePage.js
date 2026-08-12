@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { canEditDetails } from '../auth';
 import { getApiBase } from '../apiBase';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
+import { useBagProducts } from './BagProductsContext';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
   buildLoadBasedBasicIncentiveRows,
@@ -10,6 +12,17 @@ import {
   downloadStockWiseIncentiveExcel,
   downloadStockWiseIncentivePdf,
 } from './incentiveBasicExport';
+import {
+  downloadDoorStockTransportExcel,
+  downloadDoorStockTransportPdf,
+} from './doorStockTransportExport';
+import DoorStockTransportSettingsModal, {
+  EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
+} from './DoorStockTransportSettingsModal';
+import {
+  normalizeDoorStockTransportSettings,
+  resolveBrandDoorStockSettings,
+} from './doorStockTransportSettings';
 import { downloadIncentiveCompanyReport, resolveLocation } from './incentiveCompanyExport';
 import {
   buildShopGroupedDistributionRows,
@@ -45,6 +58,12 @@ const EMPTY_INCENTIVE_FILTERS = {
   shop: '',
   brand: '',
   stockId: '',
+};
+
+const EMPTY_DOOR_STOCK_FILTERS = {
+  dateFrom: '',
+  dateTo: '',
+  brand: '',
 };
 
 function countActiveIncentiveFilters(filters, { includeShop = true } = {}) {
@@ -125,6 +144,7 @@ function DistributionFilterModal({
   draft,
   setDraft,
   shopOptions,
+  brands,
   showShopFilter = true,
   onApply,
   onClear,
@@ -213,7 +233,7 @@ function DistributionFilterModal({
                 className={filterControl}
               >
                 <option value="">All bag types</option>
-                {BRANDS.map((b) => (
+                {brands.map((b) => (
                   <option key={b.key} value={b.key}>
                     {b.label}
                   </option>
@@ -280,6 +300,90 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+function productToBrandKey(product, brands) {
+  const p = String(product || '').toLowerCase();
+  if (!p) return null;
+  for (const b of brands) {
+    if (p.includes(b.key) || p.includes(b.label.toLowerCase())) return b.key;
+  }
+  return null;
+}
+
+function resolveDoorStockLocations(brandKey, settings, poFromFallback) {
+  const brandCfg = resolveBrandDoorStockSettings(settings, brandKey);
+  const from =
+    String(brandCfg.from ?? '').trim() || String(poFromFallback ?? '').trim() || '—';
+  const to = String(brandCfg.to ?? '').trim() || '—';
+  return { from, to, locationFromTo: formatLocationFromTo(from, to) };
+}
+
+function formatLocationFromTo(from, to) {
+  const f = String(from ?? '').trim() || '—';
+  const t = String(to ?? '').trim() || '—';
+  return `${f} | ${t}`;
+}
+
+/** One row per door-stock stock load × brand (bags > 0). */
+function buildDoorStockRows(loads, purchaseOrders, doorStockSettings, brands) {
+  const settings = doorStockSettings || EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS;
+  const poById = new Map(
+    (Array.isArray(purchaseOrders) ? purchaseOrders : []).map((po) => [String(po.id), po]),
+  );
+  const rows = [];
+
+  for (const load of Array.isArray(loads) ? loads : []) {
+    const poIds = (Array.isArray(load.purchaseOrderIds) ? load.purchaseOrderIds : [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    const doorStockPos = poIds.map((id) => poById.get(id)).filter((po) => po?.doorStock);
+    if (doorStockPos.length === 0) continue;
+
+    const invoiceDate = String(load.date ?? '').slice(0, 10);
+    const vehicleNumber = String(load.vehicleNumber ?? '').trim() || '—';
+    const tpRate = round2(Number(load.doorStockTransportCostPerBag) || 0);
+
+    for (const b of brands) {
+      const quantity = Number(load[`${b.key}Bags`]) || 0;
+      if (quantity <= 0) continue;
+
+      const matchingPo = doorStockPos.find(
+        (po) => productToBrandKey(po.product, brands) === b.key,
+      );
+      const poFrom = String(
+        matchingPo?.distributionLocation ?? doorStockPos[0]?.distributionLocation ?? '',
+      ).trim();
+      const { from, to, locationFromTo } = resolveDoorStockLocations(b.key, settings, poFrom);
+      const invoiceNumber = String(load[`${b.key}Invoice`] ?? '').trim() || '—';
+
+      rows.push({
+        rowKey: `door-${load.id || load.stockId}-${b.key}`,
+        invoiceDate,
+        invoiceNumber,
+        vehicleNumber,
+        brandKey: b.key,
+        brandLabel: b.label,
+        quantity,
+        tpRate,
+        locationFrom: from,
+        locationTo: to,
+        locationFromTo,
+        amount: round2(tpRate * quantity),
+        stockId: String(load.stockId ?? '').trim() || '—',
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    const byDate = b.invoiceDate.localeCompare(a.invoiceDate);
+    if (byDate !== 0) return byDate;
+    const byStock = a.stockId.localeCompare(b.stockId);
+    if (byStock !== 0) return byStock;
+    return a.brandLabel.localeCompare(b.brandLabel);
+  });
+
+  return rows;
+}
+
 function priceDiffPerBag(left, right) {
   if (
     left == null ||
@@ -312,7 +416,18 @@ function cutOffIncentivePerBag(perBagPrice, transportPerBag, marginPerBag, cutOf
 }
 
 function loadHasIncentivePricing(load) {
-  return 'transportCostPerBag' in load || 'marginPerBag' in load;
+  return (
+    'transportCostPerBag' in load ||
+    'doorStockTransportCostPerBag' in load ||
+    'marginPerBag' in load
+  );
+}
+
+function loadTransportPerBag(load, hasLoadPricing) {
+  if (!hasLoadPricing) return null;
+  const regular = round2(Number(load.transportCostPerBag) || 0);
+  const doorStock = round2(Number(load.doorStockTransportCostPerBag) || 0);
+  return round2(regular + doorStock);
 }
 
 /** One row per stock load × brand (bags > 0). */
@@ -322,7 +437,7 @@ function buildIncentiveRows(loads) {
     const stockId = String(load.stockId ?? '').trim() || '—';
     const loadDate = String(load.date ?? '').slice(0, 10);
     const hasLoadPricing = loadHasIncentivePricing(load);
-    const transportPerBagStored = hasLoadPricing ? round2(Number(load.transportCostPerBag) || 0) : null;
+    const transportPerBagStored = loadTransportPerBag(load, hasLoadPricing);
     const marginPerBagRaw = load.marginPerBag;
     const marginPerBagForLoad = round2(
       marginPerBagRaw === '' || marginPerBagRaw == null
@@ -330,7 +445,7 @@ function buildIncentiveRows(loads) {
         : Number(marginPerBagRaw) || DEFAULT_MARGIN_PER_BAG,
     );
 
-    for (const b of BRANDS) {
+    for (const b of getCachedBrands()) {
       const bags = Number(load[`${b.key}Bags`]) || 0;
       if (bags <= 0) continue;
 
@@ -408,7 +523,7 @@ function buildLoadBrandPricingLookup(loads) {
     if (!stockId) continue;
 
     const hasLoadPricing = loadHasIncentivePricing(load);
-    const transportPerBag = round2(hasLoadPricing ? Number(load.transportCostPerBag) || 0 : 0);
+    const transportPerBag = loadTransportPerBag(load, hasLoadPricing) ?? 0;
     const marginPerBagRaw = load.marginPerBag;
     const marginPerBag = round2(
       marginPerBagRaw === '' || marginPerBagRaw == null
@@ -416,7 +531,7 @@ function buildLoadBrandPricingLookup(loads) {
         : Number(marginPerBagRaw) || DEFAULT_MARGIN_PER_BAG,
     );
 
-    for (const b of BRANDS) {
+    for (const b of getCachedBrands()) {
       const bags = Number(load[`${b.key}Bags`]) || 0;
       if (bags <= 0) continue;
       const totalCost = Number(load[`${b.key}Cost`]) || 0;
@@ -444,11 +559,11 @@ function buildLoadBrandPricingLookup(loads) {
 
 /** Per-brand FIFO pools from stock loads (oldest load first). */
 function buildLoadPools(loads) {
-  const pools = Object.fromEntries(BRANDS.map((b) => [b.key, []]));
+  const pools = Object.fromEntries(getCachedBrands().map((b) => [b.key, []]));
   for (const load of [...loads].sort(compareLoadOrder)) {
     const stockId = String(load.stockId ?? '').trim();
     if (!stockId) continue;
-    for (const b of BRANDS) {
+    for (const b of getCachedBrands()) {
       const bags = Number(load[`${b.key}Bags`]) || 0;
       if (bags > 0) pools[b.key].push({ stockId, remaining: bags });
     }
@@ -485,7 +600,7 @@ function buildDistributionRows(loads, bills) {
     const shop = String(bill.customerName ?? '').trim() || '—';
     const explicitStockId = String(bill.stockId ?? '').trim();
 
-    for (const b of BRANDS) {
+    for (const b of getCachedBrands()) {
       let need = Number(bill[`${b.key}Bags`]) || 0;
       if (need <= 0) continue;
 
@@ -556,9 +671,21 @@ function buildDistributionRows(loads, bills) {
 }
 
 export default function IncentivePage() {
+  const { brands } = useBagProducts();
   const [loads, setLoads] = useState([]);
   const [bills, setBills] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [promotions, setPromotions] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [doorStockTransportSettings, setDoorStockTransportSettings] = useState(
+    EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
+  );
+  const normalizedDoorStockSettings = useMemo(
+    () => normalizeDoorStockTransportSettings(doorStockTransportSettings, brands),
+    [doorStockTransportSettings, brands],
+  );
+  const [doorStockFilters, setDoorStockFilters] = useState(EMPTY_DOOR_STOCK_FILTERS);
+  const [doorStockSettingsOpen, setDoorStockSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -576,27 +703,43 @@ export default function IncentivePage() {
     setLoading(true);
     setError(null);
     try {
-      const [loadsRes, billsRes, customersRes] = await Promise.all([
+      const [loadsRes, billsRes, customersRes, promoRes, poRes, shopRes] = await Promise.all([
         fetch(`${apiBase}/api/stocks`),
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/customers`),
+        fetch(`${apiBase}/api/promotions`),
+        fetch(`${apiBase}/api/purchase-orders`),
+        fetch(`${apiBase}/api/shop`),
       ]);
       if (!loadsRes.ok) throw new Error('Failed to load stock data');
       if (!billsRes.ok) throw new Error('Failed to load bill data');
       if (!customersRes.ok) throw new Error('Failed to load customer data');
-      const [loadsData, billsData, customersData] = await Promise.all([
+      const [loadsData, billsData, customersData, promoData, poData, shopData] = await Promise.all([
         loadsRes.json(),
         billsRes.json(),
         customersRes.json(),
+        promoRes.ok ? promoRes.json() : Promise.resolve([]),
+        poRes.ok ? poRes.json() : Promise.resolve([]),
+        shopRes.ok ? shopRes.json() : Promise.resolve({}),
       ]);
       setLoads(Array.isArray(loadsData) ? loadsData : []);
       setBills(Array.isArray(billsData) ? billsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
+      setPromotions(Array.isArray(promoData) ? promoData : []);
+      setPurchaseOrders(Array.isArray(poData) ? poData : []);
+      setDoorStockTransportSettings({
+        ...EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
+        ...(shopData?.doorStockTransportSettings && typeof shopData.doorStockTransportSettings === 'object'
+          ? shopData.doorStockTransportSettings
+          : {}),
+      });
     } catch (e) {
       setError(e.message || 'Could not load data');
       setLoads([]);
       setBills([]);
       setCustomers([]);
+      setPurchaseOrders([]);
+      setDoorStockTransportSettings(EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS);
     } finally {
       setLoading(false);
     }
@@ -710,6 +853,92 @@ export default function IncentivePage() {
     [basicIncentiveRows],
   );
 
+  const invoiceDiscountRows = useMemo(() => {
+    return promotions
+      .filter((p) => String(p.type ?? '').trim() === 'invoice_discount')
+      .map((p) => ({
+        id: p.id,
+        date: p.date,
+        customerName: p.customerName || '—',
+        invoiceNumber: p.invoiceNumber || '—',
+        discountMode: p.discountMode === 'per_bag' ? 'Per bag' : 'Whole invoice',
+        discountValue: Number(p.discountValue) || 0,
+        discountAmount: Number(p.discountAmount) || 0,
+        reason: p.reason || '—',
+        enteredBy: p.enteredBy || '—',
+      }))
+      .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
+  }, [promotions]);
+
+  const filteredInvoiceDiscountRows = useMemo(() => {
+    return invoiceDiscountRows.filter((r) => {
+      if (!inDateRange(r.date, dateFrom, dateTo)) return false;
+      return rowMatchesQuery(search, [
+        r.date,
+        r.customerName,
+        r.invoiceNumber,
+        r.discountMode,
+        String(r.discountValue),
+        String(r.discountAmount),
+        r.reason,
+        r.enteredBy,
+      ]);
+    });
+  }, [invoiceDiscountRows, dateFrom, dateTo, search]);
+
+  const invoiceDiscountPagination = useTablePagination(filteredInvoiceDiscountRows.length, [
+    search,
+    dateFrom,
+    dateTo,
+  ]);
+  const pagedInvoiceDiscountRows = useMemo(
+    () =>
+      filteredInvoiceDiscountRows.slice(
+        invoiceDiscountPagination.offset,
+        invoiceDiscountPagination.offset + invoiceDiscountPagination.pageSize,
+      ),
+    [filteredInvoiceDiscountRows, invoiceDiscountPagination.offset, invoiceDiscountPagination.pageSize],
+  );
+
+  const invoiceDiscountTotal = useMemo(
+    () => filteredInvoiceDiscountRows.reduce((s, r) => s + (Number(r.discountAmount) || 0), 0),
+    [filteredInvoiceDiscountRows],
+  );
+
+  const doorStockRows = useMemo(
+    () => buildDoorStockRows(loads, purchaseOrders, normalizedDoorStockSettings, brands),
+    [loads, purchaseOrders, normalizedDoorStockSettings, brands],
+  );
+
+  const filteredDoorStockRows = useMemo(() => {
+    const { dateFrom: dsFrom, dateTo: dsTo, brand: dsBrand } = doorStockFilters;
+    return doorStockRows.filter((r) => {
+      if (!inDateRange(r.invoiceDate, dsFrom, dsTo)) return false;
+      if (dsBrand && r.brandKey !== dsBrand) return false;
+      return true;
+    });
+  }, [doorStockRows, doorStockFilters]);
+
+  const doorStockPagination = useTablePagination(filteredDoorStockRows.length, [doorStockFilters]);
+  const pagedDoorStockRows = useMemo(
+    () =>
+      filteredDoorStockRows.slice(
+        doorStockPagination.offset,
+        doorStockPagination.offset + doorStockPagination.pageSize,
+      ),
+    [filteredDoorStockRows, doorStockPagination.offset, doorStockPagination.pageSize],
+  );
+
+  const doorStockTotals = useMemo(() => {
+    let quantity = 0;
+    let amount = 0;
+    for (const r of filteredDoorStockRows) {
+      quantity += Number(r.quantity) || 0;
+      amount += Number(r.amount) || 0;
+    }
+    return { quantity, amount: round2(amount) };
+  }, [filteredDoorStockRows]);
+
   const basicIncentiveTotals = useMemo(() => {
     let bags = 0;
     let totalIncentive = 0;
@@ -789,7 +1018,31 @@ export default function IncentivePage() {
     };
   }, [filteredSpecialPriceDistributionRows]);
 
-  const brandByKey = useMemo(() => Object.fromEntries(BRANDS.map((b) => [b.key, b])), []);
+  const brandByKey = useMemo(() => Object.fromEntries(brands.map((b) => [b.key, b])), [brands]);
+
+  const doorStockExportOptions = useMemo(
+    () => ({
+      dateFrom: doorStockFilters.dateFrom,
+      dateTo: doorStockFilters.dateTo,
+      brandKey: doorStockFilters.brand || '',
+      brandLabel: doorStockFilters.brand
+        ? brandByKey[doorStockFilters.brand]?.label ?? doorStockFilters.brand
+        : '',
+    }),
+    [doorStockFilters, brandByKey],
+  );
+
+  const handleDownloadDoorStockPdf = useCallback(() => {
+    downloadDoorStockTransportPdf(filteredDoorStockRows, normalizedDoorStockSettings, doorStockExportOptions);
+  }, [filteredDoorStockRows, normalizedDoorStockSettings, doorStockExportOptions]);
+
+  const handleDownloadDoorStockExcel = useCallback(() => {
+    downloadDoorStockTransportExcel(
+      filteredDoorStockRows,
+      normalizedDoorStockSettings,
+      doorStockExportOptions,
+    );
+  }, [filteredDoorStockRows, normalizedDoorStockSettings, doorStockExportOptions]);
 
   const handleDownloadPdf = useCallback(() => {
     downloadIncentivePdf(filteredRows, filteredDistributionRows, { dateFrom, dateTo, search });
@@ -1585,6 +1838,336 @@ export default function IncentivePage() {
         />
       ) : null}
 
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Invoice Discount Promotions</h2>
+          {!loading ? (
+            <p className="mt-1 text-sm text-slate-500">
+              Showing {filteredInvoiceDiscountRows.length} discount
+              {filteredInvoiceDiscountRows.length === 1 ? '' : 's'}
+              {filteredInvoiceDiscountRows.length > 0
+                ? ` · Total ${money(invoiceDiscountTotal)} deducted from customer ledger and cashier`
+                : ''}
+              .
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      <div className={mobileCardList}>
+        {loading ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            <LoadingSpinner />
+          </p>
+        ) : filteredInvoiceDiscountRows.length === 0 ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            No invoice discount promotions yet. Record them on the Promotions page.
+          </p>
+        ) : (
+          pagedInvoiceDiscountRows.map((r) => (
+            <MobileRowCard
+              key={r.id}
+              title={r.customerName}
+              subtitle={r.date}
+              fields={[
+                { label: 'Invoice', value: r.invoiceNumber },
+                { label: 'Type', value: r.discountMode },
+                { label: 'Discount', value: money(r.discountAmount) },
+                { label: 'Reason', value: r.reason },
+              ]}
+            />
+          ))
+        )}
+      </div>
+
+      <div className={`hidden sm:block ${scrollTableWrap}`}>
+        <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+          <thead className={stickyThead}>
+            <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+              <th className="px-4 py-3">Customer</th>
+              <th className="whitespace-nowrap px-4 py-3 font-mono">Invoice</th>
+              <th className="whitespace-nowrap px-4 py-3">Discount type</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Value</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Total discount</th>
+              <th className="px-4 py-3">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 text-slate-800">
+            {loading ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <LoadingSpinner />
+                </td>
+              </tr>
+            ) : filteredInvoiceDiscountRows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  No invoice discount promotions yet. Record them on the Promotions page.
+                </td>
+              </tr>
+            ) : (
+              pagedInvoiceDiscountRows.map((r) => (
+                <tr key={r.id} className="hover:bg-slate-50/80">
+                  <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{r.date}</td>
+                  <td className="px-4 py-3 font-medium text-slate-900">{r.customerName}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.invoiceNumber}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.discountMode}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.discountValue)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold text-emerald-800">
+                    {money(r.discountAmount)}
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">{r.reason}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {!loading && filteredInvoiceDiscountRows.length > 0 ? (
+        <TablePaginationBar
+          page={invoiceDiscountPagination.page}
+          totalPages={invoiceDiscountPagination.totalPages}
+          pageSize={invoiceDiscountPagination.pageSize}
+          totalCount={filteredInvoiceDiscountRows.length}
+          onPageChange={invoiceDiscountPagination.setPage}
+          onPageSizeChange={invoiceDiscountPagination.setPageSize}
+        />
+      ) : null}
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Door Stock Transport</h2>
+          {!loading ? (
+            <p className="mt-1 text-sm text-slate-500">
+              Showing {filteredDoorStockRows.length} door stock line
+              {filteredDoorStockRows.length === 1 ? '' : 's'}
+              {filteredDoorStockRows.length > 0
+                ? ` · Total transport ${money(doorStockTotals.amount)}`
+                : ''}
+              .
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {canEditDetails() ? (
+            <button
+              type="button"
+              onClick={() => setDoorStockSettingsOpen(true)}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-slate-50"
+            >
+              Settings
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={loading || filteredDoorStockRows.length === 0}
+            onClick={handleDownloadDoorStockPdf}
+            className={downloadPdfButtonClass}
+          >
+            Download PDF
+          </button>
+          <button
+            type="button"
+            disabled={loading || filteredDoorStockRows.length === 0}
+            onClick={handleDownloadDoorStockExcel}
+            className={downloadPdfButtonClass}
+          >
+            Download Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-white p-4 shadow-md ring-1 ring-slate-100">
+        <label className={filterLabelNarrow}>
+          From date
+          <input
+            type="date"
+            value={doorStockFilters.dateFrom}
+            onChange={(e) => setDoorStockFilters((f) => ({ ...f, dateFrom: e.target.value }))}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          To date
+          <input
+            type="date"
+            value={doorStockFilters.dateTo}
+            onChange={(e) => setDoorStockFilters((f) => ({ ...f, dateTo: e.target.value }))}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabel}>
+          Bag type
+          <select
+            value={doorStockFilters.brand}
+            onChange={(e) => setDoorStockFilters((f) => ({ ...f, brand: e.target.value }))}
+            className={filterControl}
+          >
+            <option value="">All bag types</option>
+            {brands.map((b) => (
+              <option key={b.key} value={b.key}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(doorStockFilters.dateFrom || doorStockFilters.dateTo || doorStockFilters.brand) && (
+          <button
+            type="button"
+            onClick={() => setDoorStockFilters(EMPTY_DOOR_STOCK_FILTERS)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className={mobileCardList}>
+        {loading ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            <LoadingSpinner />
+          </p>
+        ) : filteredDoorStockRows.length === 0 ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            {doorStockRows.length === 0
+              ? 'No door stock loads yet. Mark a PO as door stock and record the load on the Loads page.'
+              : 'No door stock rows match your date or bag type filters.'}
+          </p>
+        ) : (
+          pagedDoorStockRows.map((r) => {
+            const brand = brandByKey[r.brandKey];
+            return (
+              <MobileRowCard
+                key={r.rowKey}
+                title={r.invoiceNumber}
+                subtitle={r.invoiceDate}
+                fields={[
+                  { label: 'Vehicle', value: r.vehicleNumber },
+                  {
+                    label: 'Bag type',
+                    value: (
+                      <span
+                        className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ${brand?.iconBg || 'bg-slate-100 text-slate-700'}`}
+                      >
+                        {r.brandLabel}
+                      </span>
+                    ),
+                  },
+                  { label: 'Quantity', value: r.quantity.toLocaleString() },
+                  { label: 'T/P rate', value: moneyOrDashStyled(r.tpRate) },
+                  { label: 'From', value: r.locationFrom },
+                  { label: 'To', value: r.locationTo },
+                  { label: 'Amount', value: moneyOrDashStyled(r.amount) },
+                ]}
+              />
+            );
+          })
+        )}
+      </div>
+
+      <div className={`hidden sm:block ${scrollTableWrap}`}>
+        <table className="w-full min-w-[1200px] border-separate border-spacing-0 text-left text-sm">
+          <thead className={stickyThead}>
+            <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Invoice date</th>
+              <th className="whitespace-nowrap px-4 py-3 font-mono">Invoice number</th>
+              <th className="whitespace-nowrap px-4 py-3">Vehicle number</th>
+              <th className="whitespace-nowrap px-4 py-3">Bag type</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Quantity</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">T/P rate</th>
+              <th className="whitespace-nowrap px-4 py-3">From</th>
+              <th className="whitespace-nowrap px-4 py-3">To</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 text-slate-800">
+            {loading ? (
+              <tr>
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                  <LoadingSpinner />
+                </td>
+              </tr>
+            ) : filteredDoorStockRows.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                  {doorStockRows.length === 0
+                    ? 'No door stock loads yet. Mark a PO as door stock and record the load on the Loads page.'
+                    : 'No door stock rows match your date or bag type filters.'}
+                </td>
+              </tr>
+            ) : (
+              pagedDoorStockRows.map((r) => {
+                const brand = brandByKey[r.brandKey];
+                return (
+                  <tr key={r.rowKey} className="hover:bg-slate-50/80">
+                    <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>
+                      {r.invoiceDate}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.invoiceNumber}</td>
+                    <td className="whitespace-nowrap px-4 py-3 tabular-nums">{r.vehicleNumber}</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span
+                        className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${brand?.iconBg || 'bg-slate-100 text-slate-700'}`}
+                      >
+                        {r.brandLabel}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      {r.quantity.toLocaleString()}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      {moneyOrDashStyled(r.tpRate)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">{r.locationFrom}</td>
+                    <td className="px-4 py-3 text-slate-700">{r.locationTo}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold">
+                      {moneyOrDashStyled(r.amount)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+          {!loading && filteredDoorStockRows.length > 0 ? (
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                <td colSpan={4} className={`px-4 py-3 ${stickyFirstTdMuted}`}>
+                  Total (filtered)
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  {doorStockTotals.quantity.toLocaleString()}
+                </td>
+                <td className="px-4 py-3" />
+                <td className="px-4 py-3" />
+                <td className="px-4 py-3" />
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  {money(doorStockTotals.amount)}
+                </td>
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+      {!loading && filteredDoorStockRows.length > 0 ? (
+        <TablePaginationBar
+          page={doorStockPagination.page}
+          totalPages={doorStockPagination.totalPages}
+          pageSize={doorStockPagination.pageSize}
+          totalCount={filteredDoorStockRows.length}
+          onPageChange={doorStockPagination.setPage}
+          onPageSizeChange={doorStockPagination.setPageSize}
+        />
+      ) : null}
+
+      <DoorStockTransportSettingsModal
+        open={doorStockSettingsOpen}
+        brands={brands}
+        settings={doorStockTransportSettings}
+        onClose={() => setDoorStockSettingsOpen(false)}
+        onSaved={(next) => setDoorStockTransportSettings(next)}
+      />
+
       <RowDetailModal
         open={!!detailRow}
         row={detailRow}
@@ -1593,6 +2176,7 @@ export default function IncentivePage() {
       />
 
       <DistributionFilterModal
+        brands={brands}
         open={incentiveFilterOpen}
         title="Filter Incentive Calculator"
         description="Narrow rows by load date, bag type, stock ID, invoice, or free-text search."
@@ -1607,6 +2191,7 @@ export default function IncentivePage() {
       />
 
       <DistributionFilterModal
+        brands={brands}
         open={specialPriceFilterOpen}
         title="Filter Special Price Calculator"
         description="Narrow rows by date, shop, bag type, stock ID, or free-text search."

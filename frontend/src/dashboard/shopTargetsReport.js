@@ -1,4 +1,4 @@
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 import { inDateRange } from './tableToolbar';
 
 function normalizeCustomerName(s) {
@@ -31,13 +31,14 @@ function monthRangeFromValue(monthValue) {
 }
 
 function emptyBrandBagMap() {
-  return Object.fromEntries(BRANDS.map((b) => [b.key, 0]));
+  return Object.fromEntries(getCachedBrands().map((b) => [b.key, 0]));
 }
 
 /**
  * One row per shop: brand bag totals for the month, monthly target, and completion %.
  */
 export function buildShopTargetsRows(bills, customers, monthValue) {
+  const brands = getCachedBrands();
   const { from, to } = monthRangeFromValue(monthValue);
   const map = new Map();
 
@@ -70,7 +71,7 @@ export function buildShopTargetsRows(bills, customers, monthValue) {
       });
     }
     const row = map.get(nk);
-    for (const brand of BRANDS) {
+    for (const brand of brands) {
       const bags = Number(bill[brand.bagsField]) || 0;
       if (bags <= 0) continue;
       row.byBrand[brand.key] += bags;
@@ -80,7 +81,7 @@ export function buildShopTargetsRows(bills, customers, monthValue) {
 
   for (const row of map.values()) {
     row.total = Math.round(row.total);
-    for (const b of BRANDS) row.byBrand[b.key] = Math.round(row.byBrand[b.key]);
+    for (const b of brands) row.byBrand[b.key] = Math.round(row.byBrand[b.key]);
     if (row.monthlyTargetBags > 0) {
       row.progressPct = Math.round((row.total / row.monthlyTargetBags) * 1000) / 10;
     }
@@ -96,7 +97,7 @@ export function buildShopTargetsRows(bills, customers, monthValue) {
     monthlyTargetBags: 0,
   };
   for (const r of rows) {
-    for (const b of BRANDS) totals.byBrand[b.key] += r.byBrand[b.key];
+    for (const b of brands) totals.byBrand[b.key] += r.byBrand[b.key];
     totals.total += r.total;
     totals.monthlyTargetBags += r.monthlyTargetBags;
   }

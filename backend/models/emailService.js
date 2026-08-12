@@ -2,6 +2,7 @@ const nodemailer = require('nodemailer');
 const { readEmailConfig } = require('./emailConfigsStore');
 const { readNotificationSettings, isNotificationTypeEnabled } = require('./notificationSettingsStore');
 const { readCompanyData } = require('./companyDataStore');
+const { getBagProducts } = require('./bagProducts');
 const { appendSentEmail } = require('./sentEmailsStore');
 const { buildBillEmail, buildPaymentEmail, buildPromotionEmail, buildUnloadEmail, buildOverdueBalanceEmail } = require('./emailTemplates');
 
@@ -22,10 +23,11 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount, refe
   const email = String(customer?.email ?? '').trim();
   if (!email) return null;
 
-  const [config, company, notificationSettings] = await Promise.all([
+  const [config, company, notificationSettings, bagProducts] = await Promise.all([
     readEmailConfig(),
     readCompanyData(),
     readNotificationSettings(),
+    getBagProducts(),
   ]);
   if (!config.enabled) return null;
   if (!isNotificationTypeEnabled(notificationSettings, type)) return null;
@@ -49,7 +51,14 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount, refe
   let built;
   switch (type) {
     case 'bill':
-      built = buildBillEmail({ customer, bill: record, remainingAmount, company, hideFinancialDetails });
+      built = buildBillEmail({
+        customer,
+        bill: record,
+        remainingAmount,
+        company,
+        hideFinancialDetails,
+        products: bagProducts,
+      });
       break;
     case 'payment':
       built = buildPaymentEmail({ customer, payment: record, remainingAmount, company });
@@ -58,7 +67,7 @@ async function sendCustomerEmail({ type, customer, record, remainingAmount, refe
       built = buildPromotionEmail({ customer, promotion: record, company });
       break;
     case 'unload':
-      built = buildUnloadEmail({ customer, unload: record, company });
+      built = buildUnloadEmail({ customer, unload: record, company, products: bagProducts });
       break;
     case 'overdue_balance': {
       const payload = record && typeof record === 'object' ? record : {};

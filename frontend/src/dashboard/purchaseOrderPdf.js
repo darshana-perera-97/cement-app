@@ -333,6 +333,20 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     margin: { left: MARGIN, right: MARGIN },
     tableWidth: contentWidth * 0.55,
   });
+  y = (doc.lastAutoTable?.finalY || y) + 10;
+
+  const notesText = String(po.notes ?? '').trim() || (po.doorStock ? 'Door stock' : '');
+  if (notesText) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    underlineText(doc, 'NOTES', MARGIN, y);
+    y += 6;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const noteLines = doc.splitTextToSize(notesText, contentWidth);
+    doc.text(noteLines, MARGIN, y);
+  }
+
   const safePo = String(po.poNumber || po.id || 'PO').replace(/[^\w.-]+/g, '_');
   doc.save(`${safePo}.pdf`);
 }

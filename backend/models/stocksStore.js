@@ -39,13 +39,12 @@ function toNonNegNumber(v) {
   return n;
 }
 
-const BAG_BRANDS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-
 /** Sum arrival quantities on all load rows (original bags; not reduced when bills are saved). */
-function sumLoadBagsByBrand(loads) {
-  const t = { tokyo: 0, samudra: 0, atlas: 0, nippon: 0 };
+function sumLoadBagsByBrand(loads, keys) {
+  const t = {};
+  for (const k of keys) t[k] = 0;
   for (const row of loads) {
-    for (const k of BAG_BRANDS) {
+    for (const k of keys) {
       t[k] += toNonNegNumber(row[`${k}Bags`]);
     }
   }
@@ -54,9 +53,8 @@ function sumLoadBagsByBrand(loads) {
 
 /**
  * Latest non-zero cut-off price per brand from loads (newest date, then createdAt).
- * @returns {{ tokyo?: number, samudra?: number, atlas?: number, nippon?: number }}
  */
-function lastCutOffPricesByBrand(loads) {
+function lastCutOffPricesByBrand(loads, keys) {
   const sorted = [...(Array.isArray(loads) ? loads : [])].sort((a, b) => {
     const da = String(a.date || '');
     const db = String(b.date || '');
@@ -64,7 +62,7 @@ function lastCutOffPricesByBrand(loads) {
     return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
   });
   const out = {};
-  for (const key of BAG_BRANDS) {
+  for (const key of keys) {
     for (const row of sorted) {
       const n = Number(row[`${key}CutOffPrice`]);
       if (Number.isFinite(n) && n > 0) {
@@ -96,6 +94,5 @@ module.exports = {
   sumLoadBagsByBrand,
   lastCutOffPricesByBrand,
   normalizePurchaseOrderIds,
-  BAG_BRANDS,
   LOADS_FILE,
 };

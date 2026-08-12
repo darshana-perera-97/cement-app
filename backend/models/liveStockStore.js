@@ -4,36 +4,9 @@ const { readStocks, sumLoadBagsByBrand } = require('./stocksStore');
 const { readBills, sumAllBillBagsByBrand } = require('./billsStore');
 const { readPromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
 const { buildDailyStockPayload } = require('./dailyStockStore');
-const { readDistributors } = require('./distributorsStore');
+const { getBagProducts, getBagProductKeys } = require('./bagProducts');
 
 const LIVE_FILE = path.join(__dirname, '..', 'data', 'liveStock.json');
-
-const BRAND_KEYS = ['tokyo', 'samudra', 'atlas', 'nippon'];
-const BRAND_LABELS = { tokyo: 'Tokyo', samudra: 'Samudra', atlas: 'Atlas', nippon: 'Nippon' };
-
-/** Map distributor product name (e.g. "Tokyo 50KG") → brand key. */
-function productToBrandKey(product) {
-  const p = String(product || '').toLowerCase();
-  if (!p) return null;
-  for (const key of BRAND_KEYS) {
-    if (p.includes(key) || p.includes(BRAND_LABELS[key].toLowerCase())) return key;
-  }
-  return null;
-}
-
-/** Brand keys referenced in at least one distributor's products list. */
-async function getBrandKeysFromDistributorProducts() {
-  const distributors = await readDistributors();
-  const keys = new Set();
-  for (const d of distributors) {
-    const products = Array.isArray(d.products) ? d.products : [];
-    for (const product of products) {
-      const key = productToBrandKey(product);
-      if (key) keys.add(key);
-    }
-  }
-  return BRAND_KEYS.filter((k) => keys.has(k));
-}
 
 async function readLiveStock() {
   try {
@@ -56,17 +29,18 @@ async function writeLiveStock(data) {
  * Call after any change to loads, credit bills, or promotional free bags.
  */
 async function refreshLiveStockFromSources() {
+  const keys = await getBagProductKeys();
   const loads = await readStocks();
   const bills = await readBills();
   const promotions = await readPromotions();
-  const loaded = sumLoadBagsByBrand(loads);
-  const sold = sumAllBillBagsByBrand(bills);
-  const promoOut = sumAllPromotionBagsByBrand(promotions);
+  const loaded = sumLoadBagsByBrand(loads, keys);
+  const sold = sumAllBillBagsByBrand(bills, keys);
+  const promoOut = sumAllPromotionBagsByBrand(promotions, keys);
   const bags = {};
-  for (const k of BRAND_KEYS) {
+  for (const k of keys) {
     bags[k] = Math.max(0, loaded[k] - sold[k] - promoOut[k]);
   }
-  const ledgerPayload = buildDailyStockPayload(loads, bills, promotions);
+  const ledgerPayload = buildDailyStockPayload(loads, bills, promotions, keys);
   const doc = {
     updatedAt: new Date().toISOString(),
     bags,
@@ -86,14 +60,11 @@ async function getLiveStockSummary(options = {}) {
     await refreshLiveStockFromSources();
     live = await readLiveStock();
   }
-  const brandKeys =
-    options.distributorProductsOnly === true
-      ? await getBrandKeysFromDistributorProducts()
-      : BRAND_KEYS;
-  const brands = brandKeys.map((key) => ({
-    key,
-    label: BRAND_LABELS[key],
-    bags: Math.max(0, Math.floor(Number(live.bags[key]) || 0)),
+  const products = await getBagProducts();
+  const brands = products.map((p) => ({
+    key: p.key,
+    label: p.label,
+    bags: Math.max(0, Math.floor(Number(live.bags[p.key]) || 0)),
   }));
   return { liveAt: live.updatedAt || new Date().toISOString(), brands };
 }
@@ -117,7 +88,5 @@ module.exports = {
   refreshLiveStockFromSources,
   getLiveStockSummary,
   getLiveDailyLedgerPayload,
-  productToBrandKey,
-  getBrandKeysFromDistributorProducts,
   LIVE_FILE,
 };

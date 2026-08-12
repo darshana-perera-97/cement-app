@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -72,8 +72,9 @@ function drawSectionTitle(doc, title, subtitle, startY) {
 }
 
 function drawLoadsSummary(doc, loadsReport, startY) {
+  const brands = getCachedBrands();
   const head = [['Bag type', 'Bags']];
-  const body = BRANDS.map((b) => [b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
+  const body = brands.map((b) => [b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
   body.push(['Total bags', formatBags(loadsReport.total)]);
   body.push(['Loads', String(loadsReport.loadCount)]);
   body.push(['Total purchase amount', moneyCell(loadsReport.totalAmount)]);
@@ -89,7 +90,7 @@ function drawLoadsSummary(doc, loadsReport, startY) {
       1: { halign: 'right', cellWidth: 45 },
     },
     didParseCell(data) {
-      if (data.section === 'body' && data.row.index >= BRANDS.length) {
+      if (data.section === 'body' && data.row.index >= brands.length) {
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.fillColor = [241, 245, 249];
       }
@@ -98,15 +99,16 @@ function drawLoadsSummary(doc, loadsReport, startY) {
 }
 
 function drawLoadDetailTable(doc, loadRows, startY) {
-  const head = [['Date', 'Stock ID', 'Vehicle', ...BRANDS.map((b) => b.label), 'Total amount']];
+  const brands = getCachedBrands();
+  const head = [['Date', 'Stock ID', 'Vehicle', ...brands.map((b) => b.label), 'Total amount']];
   const body =
     loadRows.length === 0
-      ? [['—', '—', '—', ...BRANDS.map(() => '0'), moneyCell(0)]]
+      ? [['—', '—', '—', ...brands.map(() => '0'), moneyCell(0)]]
       : loadRows.map((r) => [
           r.date,
           r.stockId || '—',
           r.vehicleNumber || '—',
-          ...BRANDS.map((b) => formatBags(r[`${b.key}Bags`] || 0)),
+          ...brands.map((b) => formatBags(r[`${b.key}Bags`] || 0)),
           moneyCell(r.totalAmount),
         ]);
 
@@ -118,7 +120,7 @@ function drawLoadDetailTable(doc, loadRows, startY) {
             'Grand total',
             '',
             '',
-            ...BRANDS.map((b) =>
+            ...brands.map((b) =>
               formatBags(loadRows.reduce((s, r) => s + (Number(r[`${b.key}Bags`]) || 0), 0)),
             ),
             moneyCell(loadRows.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0)),
@@ -126,7 +128,7 @@ function drawLoadDetailTable(doc, loadRows, startY) {
         ];
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
-  const brandW = Math.min(16, (pageW - 70) / BRANDS.length);
+  const brandW = Math.min(16, (pageW - 70) / brands.length);
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -139,8 +141,8 @@ function drawLoadDetailTable(doc, loadRows, startY) {
       0: { cellWidth: 22 },
       1: { cellWidth: 22 },
       2: { cellWidth: 20 },
-      ...Object.fromEntries(BRANDS.map((_, i) => [i + 3, { halign: 'right', cellWidth: brandW }])),
-      [3 + BRANDS.length]: { halign: 'right', cellWidth: 28 },
+      ...Object.fromEntries(brands.map((_, i) => [i + 3, { halign: 'right', cellWidth: brandW }])),
+      [3 + brands.length]: { halign: 'right', cellWidth: 28 },
     },
   });
 }

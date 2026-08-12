@@ -142,6 +142,11 @@ export function isCollector() {
   return getStaffRole() === 'Collector';
 }
 
+/** Admin-only: edit existing records in detail popups and edit modals. */
+export function canEditDetails() {
+  return isAdmin();
+}
+
 export function getToken() {
   return sessionStorage.getItem(TOKEN_KEY) || '';
 }

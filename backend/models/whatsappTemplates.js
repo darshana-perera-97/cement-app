@@ -1,3 +1,5 @@
+const { activeBagProductsOnRecord, totalBagsFromRecord } = require('./bagProducts');
+
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
   samudra: 'Samudra',
@@ -18,24 +20,21 @@ function formatDate(ymd) {
   return dt.toLocaleDateString('en-LK', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function billBagLines(record, hideFinancialDetails = false) {
+function billBagLines(record, hideFinancialDetails = false, products = []) {
   const lines = [];
-  for (const key of Object.keys(BRAND_LABELS)) {
-    const bags = Number(record[`${key}Bags`]) || 0;
-    if (bags > 0) {
-      let line = `• ${BRAND_LABELS[key]}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
-      if (!hideFinancialDetails) {
-        const unitPrice = Number(record[`${key}UnitPrice`]);
-        const lineTotal = Number(record[`${key}Line`]);
-        if (Number.isFinite(unitPrice) && unitPrice > 0) {
-          line += ` @ ${formatMoney(unitPrice)}`;
-        }
-        if (Number.isFinite(lineTotal) && lineTotal > 0) {
-          line += ` · ${formatMoney(lineTotal)}`;
-        }
+  for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
+    let line = `• ${product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
+    if (!hideFinancialDetails) {
+      const unitPrice = Number(record[product.unitPriceField]);
+      const lineTotal = Number(record[`${product.key}Line`]);
+      if (Number.isFinite(unitPrice) && unitPrice > 0) {
+        line += ` @ ${formatMoney(unitPrice)}`;
       }
-      lines.push(line);
+      if (Number.isFinite(lineTotal) && lineTotal > 0) {
+        line += ` · ${formatMoney(lineTotal)}`;
+      }
     }
+    lines.push(line);
   }
   return lines;
 }
@@ -63,12 +62,12 @@ function messageHeader({ company, title }) {
   return lines.join('\n');
 }
 
-function buildBillWhatsApp({ customer, bill, remainingAmount, company, hideFinancialDetails = false }) {
+function buildBillWhatsApp({ customer, bill, remainingAmount, company, hideFinancialDetails = false, products = [] }) {
   const lines = [
     messageHeader({ company, title: 'Credit sale recorded' }),
     `Customer: ${customer.name}`,
     `Date: ${formatDate(bill.date)}`,
-    ...billBagLines(bill, hideFinancialDetails),
+    ...billBagLines(bill, hideFinancialDetails, products),
   ];
   if (!hideFinancialDetails) {
     const billTotal = Number(bill.totalAmount);
@@ -107,6 +106,18 @@ function buildPaymentWhatsApp({ customer, payment, remainingAmount, company, hid
   if (!hideFinancialDetails) {
     lines.push(`Amount received: ${formatMoney(payment.amount)}`);
     if (cash > 0) lines.push(`Cash: ${formatMoney(cash)}`);
+    const cdm = Number(payment.cdmAmount) || 0;
+    if (cdm > 0) {
+      let s = formatMoney(cdm);
+      if (payment.cdmNumber) s += ` · ${payment.cdmNumber}`;
+      lines.push(`CDM deposit: ${s}`);
+    }
+    const onlineTransfer = Number(payment.onlineTransferAmount) || 0;
+    if (onlineTransfer > 0) {
+      let s = formatMoney(onlineTransfer);
+      if (payment.onlineTransferReference) s += ` · ${payment.onlineTransferReference}`;
+      lines.push(`Online transfer: ${s}`);
+    }
     if (payment.cheques?.length) {
       const chequeSummary = payment.cheques
         .map((c) => {
@@ -198,13 +209,10 @@ function buildChequeReturnWhatsApp({ customer, payment, cheque, remainingAmount,
   };
 }
 
-function unloadBagLines(record) {
+function unloadBagLines(record, products = []) {
   const lines = [];
-  for (const key of Object.keys(BRAND_LABELS)) {
-    const bags = Number(record[`${key}Bags`]) || 0;
-    if (bags > 0) {
-      lines.push(`• ${BRAND_LABELS[key]}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
-    }
+  for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
+    lines.push(`• ${product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
   }
   return lines;
 }
@@ -265,11 +273,9 @@ function buildOverdueBalanceWhatsApp({
   };
 }
 
-function buildUnloadWhatsApp({ customer, unload, company }) {
-  const bagLines = unloadBagLines(unload);
-  const totalBags = bagLines.length
-    ? Object.keys(BRAND_LABELS).reduce((sum, key) => sum + (Number(unload[`${key}Bags`]) || 0), 0)
-    : 0;
+function buildUnloadWhatsApp({ customer, unload, company, products = [] }) {
+  const bagLines = unloadBagLines(unload, products);
+  const totalBags = totalBagsFromRecord(unload, products);
   const previewBrand =
     bagLines.length === 1
       ? bagLines[0].replace(/^• /, '').replace(/: \d+ bag.*$/, ' unloaded')

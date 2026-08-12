@@ -8,6 +8,9 @@ export function getPaymentCheques(p) {
         amount: Math.max(0, Number(c?.amount) || 0),
         chequeDate: String(c?.chequeDate ?? '').slice(0, 10),
         chequeNumber: String(c?.chequeNumber ?? '').trim(),
+        chequeBank: String(c?.chequeBank ?? '').trim(),
+        chequeBankCode: String(c?.chequeBankCode ?? '').trim(),
+        chequeBranchCode: String(c?.chequeBranchCode ?? '').trim(),
         chequeDeposited: !!c?.chequeDeposited,
         chequeDepositedAt: String(c?.chequeDepositedAt ?? '').trim(),
         chequeDepositedBy: String(c?.chequeDepositedBy ?? '').trim(),
@@ -57,6 +60,14 @@ export function cashPortion(p) {
   const total = Number(p.amount) || 0;
   if (total > 0) return total;
   return Math.max(0, Number(p.cashAmount) || 0);
+}
+
+export function cdmPortion(p) {
+  return Math.max(0, Number(p?.cdmAmount) || 0);
+}
+
+export function onlineTransferPortion(p) {
+  return Math.max(0, Number(p?.onlineTransferAmount) || 0);
 }
 
 /** Flat rows for bank / reports tables. */

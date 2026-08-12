@@ -1,5 +1,7 @@
 const { toNonNegMoney } = require('./customersStore');
 const { getPaymentCheques } = require('./paymentCheques');
+const { cdmPortion, onlineTransferPortion, isPaymentCreditActive } = require('./paymentOtherMethods');
+const { promotionCreditAmount, promotionType, sumInvoiceDiscountForBill, PROMOTION_TYPES } = require('./promotionsStore');
 
 function normalizeCustomerName(s) {
   return String(s ?? '')
@@ -12,17 +14,20 @@ function normalizeCustomerName(s) {
  * Total applied against the customer’s balance for one payment (cash + non-returned cheques).
  */
 function paymentCreditToCustomer(p) {
+  if (!isPaymentCreditActive(p)) return 0;
   const cheques = getPaymentCheques(p);
+  const cdm = cdmPortion(p);
+  const onlineTransfer = onlineTransferPortion(p);
   if (cheques.length > 0) {
     const cash = toNonNegMoney(p?.cashAmount);
     const activeCheques = cheques
       .filter((c) => !c.chequeReturned)
       .reduce((s, c) => s + toNonNegMoney(c.amount), 0);
-    return roundMoney(cash + activeCheques);
+    return roundMoney(cash + activeCheques + cdm + onlineTransfer);
   }
   const total = toNonNegMoney(p?.amount);
   if (total > 0) return total;
-  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount));
+  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount) + cdm + onlineTransfer);
 }
 
 /** Full payment amount recorded (before any returned cheques). */
@@ -30,12 +35,14 @@ function paymentGrossCredit(p) {
   const total = toNonNegMoney(p?.amount);
   if (total > 0) return total;
   const cheques = getPaymentCheques(p);
+  const cdm = cdmPortion(p);
+  const onlineTransfer = onlineTransferPortion(p);
   if (cheques.length > 0) {
     const cash = toNonNegMoney(p?.cashAmount);
     const chequeSum = cheques.reduce((s, c) => s + toNonNegMoney(c.amount), 0);
-    return roundMoney(cash + chequeSum);
+    return roundMoney(cash + chequeSum + cdm + onlineTransfer);
   }
-  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount));
+  return roundMoney(toNonNegMoney(p?.cashAmount) + toNonNegMoney(p?.chequeAmount) + cdm + onlineTransfer);
 }
 
 function roundMoney(n) {
@@ -66,12 +73,18 @@ function getPaymentBillCashAllocations(p) {
     .filter((a) => a.billId && a.cashAmount > 0);
 }
 
+function effectiveBillTotal(bill, promotions = []) {
+  const base = toNonNegMoney(bill?.totalAmount);
+  const discount = sumInvoiceDiscountForBill(promotions, bill?.id);
+  return Math.max(0, roundMoney(base - discount));
+}
+
 /**
  * Per-bill paid amounts after processing payments in order.
  * Payments with billCashAllocations apply only to those bills (skip FIFO).
  * Other payments apply pastBill first, then oldest bills.
  */
-function computeBillPaymentAllocation(customer, bills, payments) {
+function computeBillPaymentAllocation(customer, bills, payments, promotions = []) {
   const nameKey = normalizeCustomerName(customer.name);
   const custBills = sortBillsChronological(
     (Array.isArray(bills) ? bills : []).filter(
@@ -100,7 +113,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
       for (const { billId, cashAmount } of explicit) {
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = toNonNegMoney(bill?.totalAmount);
+        const total = effectiveBillTotal(bill, promotions);
         const current = paidByBillId.get(billId) || 0;
         const room = Math.max(0, roundMoney(total - current));
         const toward = Math.min(room, cashAmount);
@@ -118,7 +131,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
       if (remaining <= 0) break;
       const id = String(bill.id ?? '').trim();
       if (!id) continue;
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = effectiveBillTotal(bill, promotions);
       const current = paidByBillId.get(id) || 0;
       const room = Math.max(0, roundMoney(total - current));
       const toward = Math.min(room, remaining);
@@ -131,11 +144,11 @@ function computeBillPaymentAllocation(customer, bills, payments) {
 }
 
 /** Bill id → payment date when each bill was fully cleared. */
-function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
+function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotions = []) {
   const settledByBillId = new Map();
   if (!customer) return settledByBillId;
 
-  const { paidByBillId, custBills } = computeBillPaymentAllocation(customer, bills, payments);
+  const { paidByBillId, custBills } = computeBillPaymentAllocation(customer, bills, payments, promotions);
   const custPayments = (Array.isArray(payments) ? payments : [])
     .filter((p) => p.customerId === customer.id)
     .sort(comparePaymentsChronological);
@@ -160,7 +173,7 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
       for (const { billId, cashAmount } of explicit) {
         if (!runningPaid.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = toNonNegMoney(bill?.totalAmount);
+        const total = effectiveBillTotal(bill, promotions);
         const current = runningPaid.get(billId) || 0;
         const room = Math.max(0, roundMoney(total - current));
         const toward = Math.min(room, cashAmount);
@@ -180,7 +193,7 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
       if (remaining <= 0) break;
       const id = String(bill.id ?? '').trim();
       if (!id) continue;
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = effectiveBillTotal(bill, promotions);
       const current = runningPaid.get(id) || 0;
       const room = Math.max(0, roundMoney(total - current));
       const toward = Math.min(room, remaining);
@@ -194,8 +207,8 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
   return settledByBillId;
 }
 
-/** Signed balance: opening past bill + credit bills − payments (negative = overpaid). */
-function computeRawBalance(customer, bills, payments) {
+/** Signed balance: opening past bill + credit bills − payments − promotion credits (negative = overpaid). */
+function computeRawBalance(customer, bills, payments, promotions = []) {
   const nameKey = normalizeCustomerName(customer.name);
   let owed = toNonNegMoney(customer.pastBill);
   for (const b of bills) {
@@ -206,12 +219,16 @@ function computeRawBalance(customer, bills, payments) {
     if (p.customerId !== customer.id) continue;
     owed -= paymentCreditToCustomer(p);
   }
+  for (const promo of Array.isArray(promotions) ? promotions : []) {
+    if (promo.customerId !== customer.id) continue;
+    owed -= promotionCreditAmount(promo);
+  }
   return roundMoney(owed);
 }
 
 /** Amount still owed and any credit from paying more than owed. */
-function computeCustomerBalance(customer, bills, payments) {
-  const raw = computeRawBalance(customer, bills, payments);
+function computeCustomerBalance(customer, bills, payments, promotions = []) {
+  const raw = computeRawBalance(customer, bills, payments, promotions);
   return {
     amountToPay: Math.max(0, raw),
     overpaymentAmount: Math.max(0, -raw),
@@ -219,8 +236,8 @@ function computeCustomerBalance(customer, bills, payments) {
 }
 
 /** Amount still owed (0 when the customer has overpaid). */
-function computeRemainingAmount(customer, bills, payments) {
-  return computeCustomerBalance(customer, bills, payments).amountToPay;
+function computeRemainingAmount(customer, bills, payments, promotions = []) {
+  return computeCustomerBalance(customer, bills, payments, promotions).amountToPay;
 }
 
 module.exports = {
@@ -235,4 +252,5 @@ module.exports = {
   getPaymentBillCashAllocations,
   computeBillPaymentAllocation,
   buildSettledDateByBillIdForCustomer,
+  effectiveBillTotal,
 };

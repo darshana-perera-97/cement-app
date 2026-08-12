@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 import { inDateRange } from './tableToolbar';
 
 const MARGIN = 10;
@@ -38,7 +38,7 @@ export function buildDailyBagsByShopBrandRows(bills, monthValue, brandKey = '') 
   const from = `${year}-${mm}-01`;
   const to = `${year}-${mm}-${String(daysInMonth).padStart(2, '0')}`;
 
-  const brands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
+  const brands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
   const map = new Map();
 
   for (const bill of Array.isArray(bills) ? bills : []) {

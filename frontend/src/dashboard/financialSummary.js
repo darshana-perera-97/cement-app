@@ -1,4 +1,4 @@
-import { BRANDS } from './brandTheme';
+import { getCachedBrands } from './brandTheme';
 import { chequePortion, getPaymentCheques } from './paymentCheques';
 import { inDateRange } from './tableToolbar';
 
@@ -31,13 +31,14 @@ function formatChequeDetailLine(cheques) {
  * Columns: date, vehicle, cheque #, invoice #, bag type, bags, total cost.
  */
 export function buildFinancialLoadPurchaseRows(loads, from, to) {
+  const brands = getCachedBrands();
   const rows = [];
   for (const load of loads) {
     const date = String(load.date ?? '').slice(0, 10);
     if (!inDateRange(date, from, to)) continue;
     const vehicle = String(load.vehicleNumber ?? '').trim() || '—';
 
-    for (const brand of BRANDS) {
+    for (const brand of brands) {
       const bags = Number(load[`${brand.key}Bags`]) || 0;
       if (bags <= 0) continue;
       rows.push({

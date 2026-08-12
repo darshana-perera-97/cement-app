@@ -1,3 +1,5 @@
+const { activeBagProductsOnRecord, totalBagsFromRecord } = require('./bagProducts');
+
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
   samudra: 'Samudra',
@@ -26,40 +28,31 @@ function formatDate(ymd) {
   return dt.toLocaleDateString('en-LK', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function bagLines(record) {
+function bagLines(record, products = []) {
   const lines = [];
-  for (const key of Object.keys(BRAND_LABELS)) {
-    const bags = Number(record[`${key}Bags`]) || 0;
-    if (bags > 0) {
-      const unitPrice = Number(record[`${key}UnitPrice`]);
-      const lineTotal = Number(record[`${key}Line`]);
-      let detail = `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
-      if (Number.isFinite(unitPrice) && unitPrice > 0) {
-        detail += ` @ ${formatMoney(unitPrice)}`;
-      }
-      if (Number.isFinite(lineTotal) && lineTotal > 0) {
-        detail += ` · ${formatMoney(lineTotal)}`;
-      }
-      lines.push({ label: BRAND_LABELS[key], value: detail });
+  for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
+    const unitPrice = Number(record[product.unitPriceField]);
+    const lineTotal = Number(record[`${product.key}Line`]);
+    let detail = `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
+    if (Number.isFinite(unitPrice) && unitPrice > 0) {
+      detail += ` @ ${formatMoney(unitPrice)}`;
     }
+    if (Number.isFinite(lineTotal) && lineTotal > 0) {
+      detail += ` · ${formatMoney(lineTotal)}`;
+    }
+    lines.push({ label: product.label, value: detail });
   }
   return lines;
 }
 
-/** Bill emails: bag type and count only (no unit price or line totals). */
-function billBagLines(record) {
+/** Bill emails: item name and bag count only (no unit price or line totals). */
+function billBagLines(record, products = []) {
   const lines = [];
-  for (const key of Object.keys(BRAND_LABELS)) {
-    const bags = Number(record[`${key}Bags`]) || 0;
-    if (bags > 0) {
-      lines.push(
-        { label: 'Bag type', value: BRAND_LABELS[key] },
-        {
-          label: 'Bag amount',
-          value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
-        },
-      );
-    }
+  for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
+    lines.push({
+      label: product.label,
+      value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
+    });
   }
   return lines;
 }
@@ -142,11 +135,11 @@ function emailLayout({ preheader, accent, accentLight, title, subtitle, rows, hi
 </html>`;
 }
 
-function buildBillEmail({ customer, bill, remainingAmount, company, hideFinancialDetails = false }) {
+function buildBillEmail({ customer, bill, remainingAmount, company, hideFinancialDetails = false, products = [] }) {
   const rows = [
     { label: 'Customer', value: customer.name },
     { label: 'Date', value: formatDate(bill.date) },
-    ...(hideFinancialDetails ? billBagLines(bill) : bagLines(bill)),
+    ...(hideFinancialDetails ? billBagLines(bill, products) : bagLines(bill, products)),
   ];
   if (!hideFinancialDetails) {
     const billTotal = Number(bill.totalAmount);
@@ -185,6 +178,18 @@ function buildPaymentEmail({ customer, payment, remainingAmount, company, hideFi
     rows.push({ label: 'Amount received', value: formatMoney(payment.amount) });
     const cash = Number(payment.cashAmount) || 0;
     if (cash > 0) rows.push({ label: 'Cash', value: formatMoney(cash) });
+    const cdm = Number(payment.cdmAmount) || 0;
+    if (cdm > 0) {
+      let s = formatMoney(cdm);
+      if (payment.cdmNumber) s += ` · ${payment.cdmNumber}`;
+      rows.push({ label: 'CDM deposit', value: s });
+    }
+    const onlineTransfer = Number(payment.onlineTransferAmount) || 0;
+    if (onlineTransfer > 0) {
+      let s = formatMoney(onlineTransfer);
+      if (payment.onlineTransferReference) s += ` · ${payment.onlineTransferReference}`;
+      rows.push({ label: 'Online transfer', value: s });
+    }
     if (payment.cheques?.length) {
       const chequeSummary = payment.cheques
         .map((c) => {
@@ -235,30 +240,24 @@ function buildPaymentEmail({ customer, payment, remainingAmount, company, hideFi
   };
 }
 
-function unloadBagLines(record) {
+function unloadBagLines(record, products = []) {
   const lines = [];
-  for (const key of Object.keys(BRAND_LABELS)) {
-    const bags = Number(record[`${key}Bags`]) || 0;
-    if (bags > 0) {
-      lines.push({
-        label: BRAND_LABELS[key],
-        value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
-      });
-    }
+  for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
+    lines.push({
+      label: product.label,
+      value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
+    });
   }
   return lines;
 }
 
-function buildUnloadEmail({ customer, unload, company }) {
+function buildUnloadEmail({ customer, unload, company, products = [] }) {
   const rows = [
     { label: 'Shop', value: customer.name },
     { label: 'Date', value: formatDate(unload.date) },
-    ...unloadBagLines(unload),
+    ...unloadBagLines(unload, products),
   ];
-  const totalBags = Object.keys(BRAND_LABELS).reduce(
-    (sum, key) => sum + (Number(unload[`${key}Bags`]) || 0),
-    0,
-  );
+  const totalBags = totalBagsFromRecord(unload, products);
 
   return {
     subject: `Delivery unloaded · ${customer.name}`,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch } from '../auth';
+import { authFetch, canEditDetails } from '../auth';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -387,13 +387,15 @@ export default function PaymentsPage() {
         variant="payment"
         onClose={() => setDetailPayment(null)}
         actions={
-          <button
-            type="button"
-            onClick={() => openPaymentEdit(detailPayment)}
-            className="mt-4 w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
-          >
-            Edit payment
-          </button>
+          canEditDetails() ? (
+            <button
+              type="button"
+              onClick={() => openPaymentEdit(detailPayment)}
+              className="mt-4 w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+            >
+              Edit payment
+            </button>
+          ) : null
         }
       />
     </div>

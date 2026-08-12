@@ -57,6 +57,8 @@ function normalizeEntry(row) {
   if (distributorId) entry.distributorId = distributorId;
   const distributorName = String(row.distributorName ?? '').trim();
   if (distributorName) entry.distributorName = distributorName;
+  const expireDate = normalizeYmd(row.expireDate);
+  if (expireDate) entry.expireDate = expireDate;
   return entry;
 }
 
@@ -122,6 +124,9 @@ function validateCreateBody(body, { bankAccountById, distributorById } = {}) {
       accountType: String(acc.accountType ?? '').trim(),
     };
   }
+
+  const expireDate = normalizeYmd(body.expireDate);
+  if (expireDate) payload.expireDate = expireDate;
 
   return { payload };
 }

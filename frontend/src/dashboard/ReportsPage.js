@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { isManagerOrAdmin } from '../auth';
-import { BRANDS } from './brandTheme';
+import { authFetch, getDisplayName, isCollector, isManagerOrAdmin } from '../auth';
+import { getCachedBrands } from './brandTheme';
+import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
   MobileRowCard,
   TableFiltersBar,
   filterControl,
+  filterLabel,
   filterLabelNarrow,
   inDateRange,
   scrollTableWrap,
@@ -35,6 +37,13 @@ import { downloadMonthlyBillsPdf } from './monthlyBillsPdf';
 import { downloadReportsPdf } from './reportsPdf';
 import { downloadRefReport } from './reportsRefExport';
 import { downloadStockDistributionPdf } from './stockDistributionPdf';
+import {
+  buildBillSettledDateLookup,
+  buildSettledCollectionsRows,
+  summarizeCollectionsByBucket,
+  COLLECTION_DAY_BUCKETS,
+} from './collectionsReport';
+import { downloadCollectionsReportPdf } from './collectorCommissionPdf';
 
 const apiBase = getApiBase();
 
@@ -84,112 +93,6 @@ function daysFromYmdToToday(fromYmd, toYmd = localYmd()) {
   return Math.max(0, Math.round((t1 - t0) / (24 * 60 * 60 * 1000)));
 }
 
-function normalizeCustomerName(s) {
-  return String(s ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-}
-
-/**
- * Map bill id → settled date (YYYY-MM-DD) when fully paid.
- * Explicit per-bill allocations are honored; other payments use FIFO.
- */
-function buildBillSettledDateLookup(customers, bills, payments) {
-  const settledByBillId = new Map();
-
-  const applyPayments = (custBills, custPayments, pastBillAmount) => {
-    const sortedBills = [...custBills].sort(compareByDateThenCreated);
-    const runningPaid = new Map();
-    for (const b of sortedBills) {
-      const id = String(b.id ?? '').trim();
-      if (id) runningPaid.set(id, 0);
-    }
-    const pastOwed = round2(pastBillAmount);
-    let pastPaid = 0;
-
-    for (const p of [...custPayments].sort(compareByDateThenCreated)) {
-      let credit = round2(paymentTotal(p));
-      if (credit <= 0) continue;
-      const payDate = String(p.date ?? '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) continue;
-
-      const explicit = Array.isArray(p.billCashAllocations)
-        ? p.billCashAllocations
-            .map((a) => ({
-              billId: String(a?.billId ?? '').trim(),
-              cashAmount: round2(a?.cashAmount ?? a?.amount ?? 0),
-            }))
-            .filter((a) => a.billId && a.cashAmount > 0)
-        : [];
-
-      if (explicit.length > 0) {
-        for (const { billId, cashAmount } of explicit) {
-          if (!runningPaid.has(billId)) continue;
-          const bill = sortedBills.find((b) => String(b.id ?? '').trim() === billId);
-          const total = round2(bill?.totalAmount);
-          const current = runningPaid.get(billId) || 0;
-          const room = Math.max(0, round2(total - current));
-          const toward = Math.min(room, cashAmount);
-          const next = round2(current + toward);
-          runningPaid.set(billId, next);
-          if (next >= total - 0.009 && billId) settledByBillId.set(billId, payDate);
-        }
-        continue;
-      }
-
-      if (pastOwed > pastPaid) {
-        const toward = Math.min(pastOwed - pastPaid, credit);
-        pastPaid = round2(pastPaid + toward);
-        credit = round2(credit - toward);
-      }
-
-      for (const bill of sortedBills) {
-        if (credit <= 0) break;
-        const id = String(bill.id ?? '').trim();
-        if (!id) continue;
-        const total = round2(bill.totalAmount);
-        const current = runningPaid.get(id) || 0;
-        const room = Math.max(0, round2(total - current));
-        const toward = Math.min(room, credit);
-        const next = round2(current + toward);
-        runningPaid.set(id, next);
-        credit = round2(credit - toward);
-        if (next >= total - 0.009) settledByBillId.set(id, payDate);
-      }
-    }
-  };
-
-  const safeCustomers = Array.isArray(customers) ? customers : [];
-  const safeBills = Array.isArray(bills) ? bills : [];
-  const safePayments = Array.isArray(payments) ? payments : [];
-  const registeredNk = new Set();
-
-  for (const cust of safeCustomers) {
-    const nk = normalizeCustomerName(cust.name);
-    if (!nk) continue;
-    registeredNk.add(nk);
-    const custBills = safeBills.filter((b) => normalizeCustomerName(b.customerName) === nk);
-    const custPayments = safePayments.filter((p) => p.customerId === cust.id);
-    applyPayments(custBills, custPayments, cust.pastBill);
-  }
-
-  const orphanBillsByNk = new Map();
-  for (const bill of safeBills) {
-    const nk = normalizeCustomerName(bill.customerName);
-    if (!nk || registeredNk.has(nk)) continue;
-    if (!orphanBillsByNk.has(nk)) orphanBillsByNk.set(nk, []);
-    orphanBillsByNk.get(nk).push(bill);
-  }
-
-  for (const [nk, obills] of orphanBillsByNk) {
-    const custPayments = safePayments.filter((p) => normalizeCustomerName(p.customerName) === nk);
-    applyPayments(obills, custPayments, 0);
-  }
-
-  return settledByBillId;
-}
-
 /** One row per brand line on bills in the month, with settled date from payment FIFO. */
 function buildMonthlyBillRows(bills, settledByBillId, from, to) {
   const rows = [];
@@ -201,7 +104,7 @@ function buildMonthlyBillRows(bills, settledByBillId, from, to) {
     const daysToSettle = settledDate ? daysFromYmdToToday(date, settledDate) : null;
 
     let anyBrand = false;
-    for (const brand of BRANDS) {
+    for (const brand of getCachedBrands()) {
       const bagCount = Number(bill[brand.bagsField]) || 0;
       if (bagCount <= 0) continue;
       anyBrand = true;
@@ -250,13 +153,11 @@ function buildShopRowsForRange(bills, payments, customerLocationMap, from, to, b
     const key = String(name ?? '').trim() || '—';
     if (!map.has(key)) {
       const location = customerLocationMap.get(key.toLowerCase()) || '';
+      const bagFields = Object.fromEntries(getCachedBrands().map((b) => [b.bagsField, 0]));
       map.set(key, {
         shop: key,
         location,
-        tokyoBags: 0,
-        samudraBags: 0,
-        atlasBags: 0,
-        nipponBags: 0,
+        ...bagFields,
         totalBags: 0,
         creditSales: 0,
         billCount: 0,
@@ -272,10 +173,9 @@ function buildShopRowsForRange(bills, payments, customerLocationMap, from, to, b
     if (!recordHasBrandBags(b, brandKey)) continue;
     const row = ensure(b.customerName);
     const { byBrand, total } = bagsFromRecord(b, brandKey);
-    row.tokyoBags += byBrand.tokyo || 0;
-    row.samudraBags += byBrand.samudra || 0;
-    row.atlasBags += byBrand.atlas || 0;
-    row.nipponBags += byBrand.nippon || 0;
+    for (const brand of getCachedBrands()) {
+      row[brand.bagsField] += byBrand[brand.key] || 0;
+    }
     row.totalBags += total;
     row.creditSales += brandLineFromBill(b, brandKey);
     row.billCount += 1;
@@ -346,7 +246,7 @@ function SummaryLkrAmount({ value, valueClassName = 'text-slate-900' }) {
 function bagsFromRecord(record, brandKey = '') {
   const byBrand = {};
   let total = 0;
-  const brands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
+  const brands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
   for (const b of brands) {
     const n = Number(record[b.bagsField]) || 0;
     byBrand[b.key] = n;
@@ -366,7 +266,7 @@ function brandLineFromBill(bill, brandKey) {
 
 function recordHasBrandBags(record, brandKey) {
   if (!brandKey) return true;
-  const brand = BRANDS.find((b) => b.key === brandKey);
+  const brand = getCachedBrands().find((b) => b.key === brandKey);
   return brand ? (Number(record[brand.bagsField]) || 0) > 0 : false;
 }
 
@@ -386,13 +286,13 @@ function compareByDateThenCreated(a, b) {
 }
 
 function emptyBrandBagMap() {
-  return Object.fromEntries(BRANDS.map((b) => [b.key, 0]));
+  return Object.fromEntries(getCachedBrands().map((b) => [b.key, 0]));
 }
 
 /** Per-brand bag counts from a daily-ledger day entry for one field (start/end/in/out). */
 function ledgerBagsByBrand(dayBrands, brandKey, field) {
   const byBrand = emptyBrandBagMap();
-  const keys = brandKey ? [brandKey] : BRANDS.map((b) => b.key);
+  const keys = brandKey ? [brandKey] : getCachedBrands().map((b) => b.key);
   for (const k of keys) {
     byBrand[k] = Number(dayBrands?.[k]?.[field]) || 0;
   }
@@ -449,13 +349,13 @@ function remainingBagsForMonth(dailyDays, from, to, brandKey = '') {
  * Returns one row per bill × brand × stock chunk.
  */
 function buildStockDistributionRows(loads, bills, brandKey = '') {
-  const brands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
-  const pools = Object.fromEntries(BRANDS.map((b) => [b.key, []]));
+  const brands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
+  const pools = Object.fromEntries(getCachedBrands().map((b) => [b.key, []]));
 
   for (const load of [...loads].sort(compareByDateThenCreated)) {
     const stockId = String(load.stockId ?? '').trim();
     if (!stockId) continue;
-    for (const b of BRANDS) {
+    for (const b of getCachedBrands()) {
       const bagCount = Number(load[`${b.key}Bags`]) || 0;
       if (bagCount > 0) pools[b.key].push({ stockId, remaining: bagCount });
     }
@@ -693,7 +593,7 @@ function Card({ title, subtitle, children }) {
 }
 
 function BrandBagSummary({ byBrand, total, loadCount, brandKey = '' }) {
-  const visibleBrands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
+  const visibleBrands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
   return (
     <div
       className={`grid gap-3 sm:grid-cols-2 ${visibleBrands.length > 1 ? 'lg:grid-cols-5' : 'lg:grid-cols-2'}`}
@@ -721,7 +621,7 @@ function BrandBagSummary({ byBrand, total, loadCount, brandKey = '' }) {
 
 /** Compact per-brand remaining bag list for stock distribution summary cards. */
 function BrandRemainingBreakdown({ byBrand, brandKey = '' }) {
-  const visibleBrands = brandKey ? BRANDS.filter((b) => b.key === brandKey) : BRANDS;
+  const visibleBrands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
   return (
     <ul className="mt-2 space-y-1">
       {visibleBrands.map((b) => (
@@ -741,6 +641,7 @@ function BrandRemainingBreakdown({ byBrand, brandKey = '' }) {
 }
 
 export default function ReportsPage() {
+  const { brands } = useBagProducts();
   const [loads, setLoads] = useState([]);
   const [bills, setBills] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -766,8 +667,14 @@ export default function ReportsPage() {
   const [dailyBagsBrand, setDailyBagsBrand] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
   const [dailyReportDate, setDailyReportDate] = useState(() => localYmd());
+  const [collectionsMonth, setCollectionsMonth] = useState(() => currentMonthValue());
+  const [collectionsCollectorId, setCollectionsCollectorId] = useState('');
+  const [collectors, setCollectors] = useState([]);
+  const [collectorStaffUserId, setCollectorStaffUserId] = useState('');
+  const [collectorDisplayName, setCollectorDisplayName] = useState('');
 
-  const managerDailyReport = isManagerOrAdmin();
+  const collectorReportsView = isCollector();
+  const showDailyCollectionsReport = isManagerOrAdmin() || collectorReportsView;
 
   const [fsPeriodMode, setFsPeriodMode] = useState('monthly');
   const [fsSelectedWeek, setFsSelectedWeek] = useState(() => currentIsoWeekValue());
@@ -781,25 +688,53 @@ export default function ReportsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes] = await Promise.all([
+      if (collectorReportsView) {
+        const [billsRes, paymentsRes, customersRes] = await Promise.all([
+          authFetch(`${apiBase}/api/bills`),
+          authFetch(`${apiBase}/api/payments`),
+          fetch(`${apiBase}/api/customers`),
+        ]);
+        if (!billsRes.ok) throw new Error('Failed to load bills');
+        if (!paymentsRes.ok) throw new Error('Failed to load payments');
+        if (!customersRes.ok) throw new Error('Failed to load customers');
+
+        const [billsData, paymentsData, customersData] = await Promise.all([
+          billsRes.json(),
+          paymentsRes.json(),
+          customersRes.json(),
+        ]);
+
+        setBills(Array.isArray(billsData) ? billsData : []);
+        setPayments(Array.isArray(paymentsData) ? paymentsData : []);
+        setCustomers(Array.isArray(customersData) ? customersData : []);
+        setLoads([]);
+        setDailyStockDays([]);
+        setCollectors([]);
+        return;
+      }
+
+      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectorsRes] = await Promise.all([
         fetch(`${apiBase}/api/stocks`),
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/customers`),
         fetch(`${apiBase}/api/daily-stock`),
+        authFetch(`${apiBase}/api/collectors`),
       ]);
       if (!loadsRes.ok) throw new Error('Failed to load loads');
       if (!billsRes.ok) throw new Error('Failed to load bills');
       if (!paymentsRes.ok) throw new Error('Failed to load payments');
       if (!customersRes.ok) throw new Error('Failed to load customers');
       if (!dailyRes.ok) throw new Error('Failed to load daily stock');
+      if (!collectorsRes.ok) throw new Error('Failed to load collectors');
 
-      const [loadsData, billsData, paymentsData, customersData, dailyData] = await Promise.all([
+      const [loadsData, billsData, paymentsData, customersData, dailyData, collectorsData] = await Promise.all([
         loadsRes.json(),
         billsRes.json(),
         paymentsRes.json(),
         customersRes.json(),
         dailyRes.json(),
+        collectorsRes.json(),
       ]);
 
       setLoads(Array.isArray(loadsData) ? loadsData : []);
@@ -807,6 +742,7 @@ export default function ReportsPage() {
       setPayments(Array.isArray(paymentsData) ? paymentsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
       setDailyStockDays(Array.isArray(dailyData?.days) ? dailyData.days : []);
+      setCollectors(Array.isArray(collectorsData) ? collectorsData : []);
     } catch (e) {
       setError(e.message || 'Could not load report data');
       setLoads([]);
@@ -814,14 +750,41 @@ export default function ReportsPage() {
       setPayments([]);
       setCustomers([]);
       setDailyStockDays([]);
+      setCollectors([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [collectorReportsView]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!collectorReportsView) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch(`${apiBase}/api/me`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const id = String(data.staffUserId ?? '').trim();
+        if (id) setCollectorStaffUserId(id);
+        const name = String(data.name ?? '').trim();
+        setCollectorDisplayName(name || getDisplayName());
+      } catch {
+        if (!cancelled) setCollectorDisplayName(getDisplayName());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [collectorReportsView]);
+
+  const effectiveCollectionsCollectorId = collectorReportsView
+    ? collectorStaffUserId
+    : collectionsCollectorId;
 
   const customerLocationMap = useMemo(() => {
     const map = new Map();
@@ -900,17 +863,17 @@ export default function ReportsPage() {
     setFsAppliedTo(fsDateTo);
   };
 
-  const activeBrand = useMemo(() => BRANDS.find((b) => b.key === brandFilter) ?? null, [brandFilter]);
+  const activeBrand = useMemo(() => brands.find((b) => b.key === brandFilter) ?? null, [brandFilter, brands]);
 
   const loadsReport = useMemo(() => {
     const filtered = loads.filter(
       (r) => inDateRange(r.date, appliedFrom, appliedTo) && recordHasBrandBags(r, brandFilter),
     );
-    const byBrand = Object.fromEntries(BRANDS.map((b) => [b.key, 0]));
+    const byBrand = Object.fromEntries(brands.map((b) => [b.key, 0]));
     let total = 0;
     for (const r of filtered) {
       const { byBrand: row, total: rowTotal } = bagsFromRecord(r, brandFilter);
-      for (const b of BRANDS) byBrand[b.key] += row[b.key] || 0;
+      for (const b of brands) byBrand[b.key] += row[b.key] || 0;
       total += rowTotal;
     }
     return { byBrand, total, loadCount: filtered.length };
@@ -950,7 +913,7 @@ export default function ReportsPage() {
   const dailyBagsMonthLabel = useMemo(() => monthDisplayLabel(dailyBagsMonth), [dailyBagsMonth]);
 
   const dailyBagsActiveBrand = useMemo(
-    () => BRANDS.find((b) => b.key === dailyBagsBrand) ?? null,
+    () => brands.find((b) => b.key === dailyBagsBrand) ?? null,
     [dailyBagsBrand],
   );
 
@@ -988,8 +951,63 @@ export default function ReportsPage() {
     [monthlyBillRows],
   );
 
+  const collectionsMonthRange = useMemo(
+    () => monthlyRangeFromMonthValue(collectionsMonth),
+    [collectionsMonth],
+  );
+
+  const collectionsMonthLabel = useMemo(
+    () => monthDisplayLabel(collectionsMonth),
+    [collectionsMonth],
+  );
+
+  const settledCollectionsRows = useMemo(() => {
+    if (collectorReportsView && !collectorStaffUserId) return [];
+    return buildSettledCollectionsRows(customers, bills, billSettledDateLookup, payments, {
+      from: collectionsMonthRange.from,
+      to: collectionsMonthRange.to,
+      collectorUserId: effectiveCollectionsCollectorId,
+    });
+  }, [
+    collectorReportsView,
+    collectorStaffUserId,
+    customers,
+    bills,
+    payments,
+    billSettledDateLookup,
+    collectionsMonthRange,
+    effectiveCollectionsCollectorId,
+  ]);
+
+  const settledCollectionsBucketSummary = useMemo(
+    () => summarizeCollectionsByBucket(settledCollectionsRows),
+    [settledCollectionsRows],
+  );
+
+  const settledCollectionsTotal = useMemo(
+    () => settledCollectionsRows.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+    [settledCollectionsRows],
+  );
+
+  const collectionsCollectorLabel = useMemo(() => {
+    if (collectorReportsView) return collectorDisplayName || getDisplayName() || 'Your collections';
+    if (!collectionsCollectorId) return 'All collectors';
+    return collectors.find((c) => c.id === collectionsCollectorId)?.name || '—';
+  }, [collectorReportsView, collectorDisplayName, collectionsCollectorId, collectors]);
+
+  const handleDownloadSettledCollectionsPdf = () => {
+    downloadCollectionsReportPdf({
+      periodLabel: collectionsMonthLabel,
+      collectorName: collectionsCollectorLabel,
+      rows: settledCollectionsRows,
+      bucketSummary: settledCollectionsBucketSummary,
+      totals: { amount: settledCollectionsTotal },
+      generatedAt: new Date(),
+    });
+  };
+
   const stockDistActiveBrand = useMemo(
-    () => BRANDS.find((b) => b.key === stockDistBrand) ?? null,
+    () => brands.find((b) => b.key === stockDistBrand) ?? null,
     [stockDistBrand],
   );
 
@@ -1029,7 +1047,7 @@ export default function ReportsPage() {
       const { byBrand, total } = bagsFromRecord(r, stockDistBrand);
       bagsIn += total;
       bagsInAmount += brandCostFromLoad(r, stockDistBrand);
-      for (const b of BRANDS) bagsInByBrand[b.key] += byBrand[b.key] || 0;
+      for (const b of brands) bagsInByBrand[b.key] += byBrand[b.key] || 0;
     }
 
     for (const b of bills) {
@@ -1068,7 +1086,7 @@ export default function ReportsPage() {
       outByBrand[r.brandKey] = (outByBrand[r.brandKey] || 0) + (Number(r.bags) || 0);
     }
 
-    const visible = stockDistBrand ? [stockDistBrand] : BRANDS.map((b) => b.key);
+    const visible = stockDistBrand ? [stockDistBrand] : brands.map((b) => b.key);
     for (const key of visible) {
       const inn = stockDistInOutAll.bagsInByBrand?.[key] || 0;
       const out = outByBrand[key] || 0;
@@ -1134,12 +1152,12 @@ export default function ReportsPage() {
   const monthLoadsReport = useMemo(() => {
     const { from, to } = loadsSummaryRange;
     const filtered = loads.filter((r) => inDateRange(r.date, from, to));
-    const byBrand = Object.fromEntries(BRANDS.map((b) => [b.key, 0]));
+    const byBrand = Object.fromEntries(brands.map((b) => [b.key, 0]));
     let total = 0;
     let totalAmount = 0;
     for (const r of filtered) {
       const { byBrand: row, total: rowTotal } = bagsFromRecord(r, '');
-      for (const b of BRANDS) byBrand[b.key] += row[b.key] || 0;
+      for (const b of brands) byBrand[b.key] += row[b.key] || 0;
       total += rowTotal;
       totalAmount += Number(r.totalAmount) || 0;
     }
@@ -1150,18 +1168,20 @@ export default function ReportsPage() {
     const { from, to } = loadsSummaryRange;
     return loads
       .filter((r) => inDateRange(r.date, from, to))
-      .map((r) => ({
-        date: String(r.date ?? '').slice(0, 10),
-        stockId: String(r.stockId ?? '').trim(),
-        vehicleNumber: String(r.vehicleNumber ?? '').trim(),
-        tokyoBags: Number(r.tokyoBags) || 0,
-        samudraBags: Number(r.samudraBags) || 0,
-        atlasBags: Number(r.atlasBags) || 0,
-        nipponBags: Number(r.nipponBags) || 0,
-        totalAmount: Number(r.totalAmount) || 0,
-      }))
+      .map((r) => {
+        const bagCols = Object.fromEntries(
+          brands.map((b) => [b.bagsField, Number(r[b.bagsField]) || 0]),
+        );
+        return {
+          date: String(r.date ?? '').slice(0, 10),
+          stockId: String(r.stockId ?? '').trim(),
+          vehicleNumber: String(r.vehicleNumber ?? '').trim(),
+          ...bagCols,
+          totalAmount: Number(r.totalAmount) || 0,
+        };
+      })
       .sort((a, b) => a.date.localeCompare(b.date) || a.stockId.localeCompare(b.stockId));
-  }, [loads, loadsSummaryRange]);
+  }, [loads, loadsSummaryRange, brands]);
 
   const monthShopRows = useMemo(
     () =>
@@ -1264,12 +1284,12 @@ export default function ReportsPage() {
   );
 
   const visibleBrands = useMemo(
-    () => (activeBrand ? [activeBrand] : BRANDS),
+    () => (activeBrand ? [activeBrand] : brands),
     [activeBrand],
   );
 
   const refDetailRows = useMemo(() => {
-    const brands = brandFilter ? BRANDS.filter((b) => b.key === brandFilter) : BRANDS;
+    const filteredBrands = brandFilter ? brands.filter((b) => b.key === brandFilter) : brands;
     const rows = [];
     for (const b of bills) {
       if (!inDateRange(b.date, appliedFrom, appliedTo)) continue;
@@ -1277,7 +1297,7 @@ export default function ReportsPage() {
       const shop = String(b.customerName ?? '').trim() || '—';
       const location = customerLocationMap.get(shop.toLowerCase()) || '';
       const date = String(b.date ?? '').slice(0, 10);
-      for (const brand of brands) {
+      for (const brand of filteredBrands) {
         const bagCount = Number(b[brand.bagsField]) || 0;
         if (bagCount <= 0) continue;
         rows.push({
@@ -1313,7 +1333,7 @@ export default function ReportsPage() {
   );
 
   const dailyReportShopRows = useMemo(() => {
-    if (!managerDailyReport) return [];
+    if (!showDailyCollectionsReport) return [];
     const base = buildShopRowsForRange(
       bills,
       payments,
@@ -1323,7 +1343,7 @@ export default function ReportsPage() {
       '',
     );
     return enrichDailyShopRows(base, payments, dailyReportDate).filter((r) => r.cashIn > 0);
-  }, [managerDailyReport, bills, payments, customerLocationMap, dailyReportDate]);
+  }, [showDailyCollectionsReport, bills, payments, customerLocationMap, dailyReportDate]);
 
   const dailyReportTotals = useMemo(
     () =>
@@ -1340,9 +1360,9 @@ export default function ReportsPage() {
   );
 
   const dailyReportChequeRows = useMemo(() => {
-    if (!managerDailyReport) return [];
+    if (!showDailyCollectionsReport) return [];
     return buildDailyCollectionChequeRows(payments, dailyReportDate);
-  }, [managerDailyReport, payments, dailyReportDate]);
+  }, [showDailyCollectionsReport, payments, dailyReportDate]);
 
   const dailyReportChequeTotal = useMemo(
     () => round2(dailyReportChequeRows.reduce((s, r) => s + r.amount, 0)),
@@ -1659,16 +1679,28 @@ export default function ReportsPage() {
       <div className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
-          {managerDailyReport
-            ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
-            : 'Monthly summaries, balances, and downloadable reports.'}
+          {collectorReportsView
+            ? 'Daily collections, monthly bills, and settled collections for your assigned shops.'
+            : showDailyCollectionsReport
+              ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
+              : 'Monthly summaries, balances, and downloadable reports.'}
         </p>
       </div>
 
-      {managerDailyReport ? (
+      {error ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {showDailyCollectionsReport ? (
         <Card
           title="Daily collections report"
-          subtitle="Collections and cheques received for the selected day (manager / admin)"
+          subtitle={
+            collectorReportsView
+              ? 'Collections and cheques received from your assigned shops on the selected day'
+              : 'Collections and cheques received for the selected day (manager / admin)'
+          }
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
             <label className={filterLabelNarrow}>
@@ -1890,8 +1922,162 @@ export default function ReportsPage() {
       ) : null}
 
       <Card
+        title="Settled collections"
+        subtitle={
+          collectorReportsView
+            ? `Your fully settled invoices by settled date in ${collectionsMonthLabel}`
+            : `Fully settled invoices by settled date in ${collectionsMonthLabel} — filter by collector`
+        }
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <label className={filterLabelNarrow}>
+            Settled in month
+            <input
+              type="month"
+              value={collectionsMonth}
+              onChange={(e) => setCollectionsMonth(e.target.value || currentMonthValue())}
+              className={filterControl}
+            />
+          </label>
+          {!collectorReportsView ? (
+            <label className={filterLabel}>
+              Collector
+              <select
+                value={collectionsCollectorId}
+                onChange={(e) => setCollectionsCollectorId(e.target.value)}
+                className={filterControl}
+              >
+                <option value="">All collectors</option>
+                {collectors.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleDownloadSettledCollectionsPdf}
+            disabled={
+              loading ||
+              !!error ||
+              settledCollectionsRows.length === 0 ||
+              (collectorReportsView && !collectorStaffUserId)
+            }
+            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Download PDF
+          </button>
+        </div>
+
+        <div className={`mt-5 ${scrollTableWrap}`}>
+          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Days to settle</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Lines</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Collection amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {COLLECTION_DAY_BUCKETS.map((bucket) => {
+                const s = settledCollectionsBucketSummary[bucket.key] || {};
+                return (
+                  <tr key={bucket.key} className="bg-white">
+                    <td className={`whitespace-nowrap px-4 py-3 font-medium ${stickyFirstTd}`}>{bucket.label}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{s.lineCount || 0}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold">
+                      {money(s.amount || 0)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-indigo-950">
+                <td className="px-4 py-3">Total</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  {settledCollectionsRows.length}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(settledCollectionsTotal)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div className={`mt-6 ${scrollTableWrap}`}>
+          <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+                <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
+                <th className="whitespace-nowrap px-4 py-3">Shop name</th>
+                <th className="whitespace-nowrap px-4 py-3">Bag type</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                <th className="whitespace-nowrap px-4 py-3">Bill date</th>
+                <th className="whitespace-nowrap px-4 py-3">Settled date</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Bill amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {loading || (collectorReportsView && !collectorStaffUserId) ? (
+                <tr>
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                    <LoadingSpinner />
+                  </td>
+                </tr>
+              ) : settledCollectionsRows.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                    No settled collections for {collectionsCollectorLabel} in {collectionsMonthLabel}.
+                  </td>
+                </tr>
+              ) : (
+                settledCollectionsRows.map((r) => {
+                  const brand = brands.find((b) => b.key === r.brandKey);
+                  return (
+                    <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
+                      <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-600 ${stickyFirstTd}`}>
+                        {r.date}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">{r.invoiceNumber}</td>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{r.shopName}</td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        {r.bagType !== '—' ? (
+                          <span
+                            className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                              brand?.iconBg || 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {r.bagType}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate}</td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.daysToSettle}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.billAmount)}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card
         title="Bills by month"
-        subtitle={`All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`}
+        subtitle={
+          collectorReportsView
+            ? `Credit bills for your assigned shops in ${billsMonthLabel} — settled date from payments (oldest bills first)`
+            : `All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`
+        }
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           <label className={filterLabelNarrow}>
@@ -1968,7 +2154,7 @@ export default function ReportsPage() {
                 </tr>
               ) : (
                 monthlyBillRows.map((r) => {
-                  const brand = BRANDS.find((b) => b.key === r.brandKey);
+                  const brand = brands.find((b) => b.key === r.brandKey);
                   return (
                     <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
                       <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-600 ${stickyFirstTd}`}>{r.date}</td>
@@ -2023,6 +2209,8 @@ export default function ReportsPage() {
         </div>
       </Card>
 
+      {!collectorReportsView ? (
+      <>
       <Card
         title="Daily bags sold by shop"
         subtitle={`Bags sold per shop and brand for each day of ${dailyBagsMonthLabel}${
@@ -2047,7 +2235,7 @@ export default function ReportsPage() {
               className={filterControl}
             >
               <option value="">All brands</option>
-              {BRANDS.map((b) => (
+              {brands.map((b) => (
                 <option key={b.key} value={b.key}>
                   {b.label}
                 </option>
@@ -2075,7 +2263,7 @@ export default function ReportsPage() {
             </p>
           ) : (
             dailyBagsReport.rows.map((r) => {
-              const brand = BRANDS.find((b) => b.key === r.brandKey);
+              const brand = brands.find((b) => b.key === r.brandKey);
               const soldDays = r.dayBags
                 .map((n, i) => (n > 0 ? { day: i + 1, bags: n } : null))
                 .filter(Boolean);
@@ -2147,7 +2335,7 @@ export default function ReportsPage() {
                 </tr>
               ) : (
                 dailyBagsReport.rows.map((r) => {
-                  const brand = BRANDS.find((b) => b.key === r.brandKey);
+                  const brand = brands.find((b) => b.key === r.brandKey);
                   return (
                     <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
                       {r.shopRowSpan > 0 ? (
@@ -2248,7 +2436,7 @@ export default function ReportsPage() {
                 key={r.rowKey}
                 title={r.shop}
                 fields={[
-                  ...BRANDS.map((b) => ({
+                  ...brands.map((b) => ({
                     label: b.label,
                     value: (r.byBrand[b.key] || 0).toLocaleString(),
                   })),
@@ -2282,7 +2470,7 @@ export default function ReportsPage() {
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
-                {BRANDS.map((b) => (
+                {brands.map((b) => (
                   <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
                     {b.label} bags
                   </th>
@@ -2295,13 +2483,13 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={BRANDS.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={brands.length + 4} className="px-4 py-8 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : shopTargetsReport.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={BRANDS.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={brands.length + 4} className="px-4 py-8 text-center text-slate-500">
                     No shop sales or targets in {shopTargetsMonthLabel}.
                   </td>
                 </tr>
@@ -2311,7 +2499,7 @@ export default function ReportsPage() {
                     <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>
                       {r.shop}
                     </td>
-                    {BRANDS.map((b) => (
+                    {brands.map((b) => (
                       <td
                         key={b.key}
                         className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
@@ -2350,7 +2538,7 @@ export default function ReportsPage() {
                     Total ({shopTargetsReport.rows.length} shop
                     {shopTargetsReport.rows.length === 1 ? '' : 's'})
                   </td>
-                  {BRANDS.map((b) => (
+                  {brands.map((b) => (
                     <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                       {(shopTargetsReport.totals.byBrand[b.key] || 0).toLocaleString()}
                     </td>
@@ -2403,7 +2591,7 @@ export default function ReportsPage() {
               className={filterControl}
             >
               <option value="">All brands</option>
-              {BRANDS.map((b) => (
+              {brands.map((b) => (
                 <option key={b.key} value={b.key}>
                   {b.label}
                 </option>
@@ -2544,7 +2732,7 @@ export default function ReportsPage() {
               ) : (
                 stockDistGroups.flatMap((g) => [
                   ...g.rows.map((r) => {
-                    const brand = BRANDS.find((b) => b.key === r.brandKey);
+                    const brand = brands.find((b) => b.key === r.brandKey);
                     return (
                       <tr
                         key={r.rowKey}
@@ -3429,7 +3617,7 @@ export default function ReportsPage() {
           Brand
           <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className={filterControl}>
             <option value="">All brands</option>
-            {BRANDS.map((b) => (
+            {brands.map((b) => (
               <option key={b.key} value={b.key}>
                 {b.label}
               </option>
@@ -3913,6 +4101,8 @@ export default function ReportsPage() {
         </>
       )}
       </div>
+      </>
+      ) : null}
     </div>
   );
 }

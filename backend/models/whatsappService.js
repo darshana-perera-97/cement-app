@@ -6,6 +6,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const { readNotificationSettings, isNotificationTypeEnabled } = require('./notificationSettingsStore');
 const { readWhatsAppConfig, writeWhatsAppConfig } = require('./whatsappConfigsStore');
 const { readCompanyData } = require('./companyDataStore');
+const { getBagProducts } = require('./bagProducts');
 const { appendSentWhatsapp } = require('./sentWhatsappStore');
 const {
   buildBillWhatsApp,
@@ -458,7 +459,7 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
       : record?.id);
 
   let built;
-  const company = await readCompanyData();
+  const [company, bagProducts] = await Promise.all([readCompanyData(), getBagProducts()]);
   switch (type) {
     case 'bill':
       built = buildBillWhatsApp({
@@ -467,6 +468,7 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
         remainingAmount,
         company,
         hideFinancialDetails,
+        products: bagProducts,
       });
       break;
     case 'payment':
@@ -476,7 +478,7 @@ async function sendCustomerWhatsApp({ type, customer, record, remainingAmount, r
       built = buildPromotionWhatsApp({ customer, promotion: record, company });
       break;
     case 'unload':
-      built = buildUnloadWhatsApp({ customer, unload: record, company });
+      built = buildUnloadWhatsApp({ customer, unload: record, company, products: bagProducts });
       break;
     case 'cheque_return': {
       const payload = record && typeof record === 'object' ? record : {};
