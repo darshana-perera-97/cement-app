@@ -129,12 +129,27 @@ function hasLocalWebVersionCache() {
   }
 }
 
+function resolvePuppeteerExecutablePath() {
+  const fromEnv = String(process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
+  if (fromEnv) return fromEnv;
+  for (const candidate of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch (_) {}
+  }
+  return undefined;
+}
+
 function buildWhatsAppClientOptions() {
   const hasLocalCache = hasLocalWebVersionCache();
   if (!hasLocalCache) {
     console.warn(
       `[whatsapp] local web version cache missing for ${WEB_VERSION} — will download on first connect`,
     );
+  }
+  const executablePath = resolvePuppeteerExecutablePath();
+  if (executablePath) {
+    console.log(`[whatsapp] using Chrome at ${executablePath}`);
   }
   return {
     authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
@@ -148,6 +163,7 @@ function buildWhatsAppClientOptions() {
     takeoverOnConflict: true,
     puppeteer: {
       headless: true,
+      ...(executablePath ? { executablePath } : {}),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
