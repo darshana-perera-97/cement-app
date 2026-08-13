@@ -2,6 +2,54 @@ import { buildChequeTableRows, depositQueueRowKey } from './paymentCheques';
 
 export const GUARANTEE_RENEWAL_WARN_DAYS = 30;
 
+function toNonNegMoney(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
+
+/** Unique PO outgoing cheques (shared batch cheques counted once). Mirrors backend bankAccountBalance.js. */
+export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
+  const seen = new Set();
+  const rows = [];
+  for (const po of Array.isArray(purchaseOrders) ? purchaseOrders : []) {
+    const cheques = Array.isArray(po.cheques) ? po.cheques : [];
+    const mode = String(po.chequeMode ?? '').trim();
+    const batchId = String(po.batchId ?? '').trim();
+    const poId = String(po.id ?? '').trim();
+    for (let i = 0; i < cheques.length; i++) {
+      const c = cheques[i];
+      if (!c || typeof c !== 'object') continue;
+      if (c.cancelled) continue;
+      const bankAccountId = String(c.bankAccountId ?? '').trim();
+      const amount = toNonNegMoney(c.amount);
+      if (!bankAccountId || amount <= 0) continue;
+      const chequeNumber = String(c.chequeNumber ?? '').trim();
+      const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const dedupeKey =
+        mode === 'shared' && batchId
+          ? `shared:${batchId}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const distributorId = String(po.distributorId ?? '').trim();
+      const distributorName = String(po.distributorName ?? '').trim();
+      rows.push({
+        bankAccountId,
+        amount,
+        chequeNumber,
+        chequeDate,
+        poId,
+        batchId: batchId || undefined,
+        product: String(po.product ?? '').trim() || undefined,
+        source: 'purchase_order',
+        ...(distributorId ? { distributorId } : {}),
+        ...(distributorName ? { distributorName } : {}),
+      });
+    }
+  }
+  return rows;
+}
+
 function todayYmdLocal() {
   const d = new Date();
   const y = d.getFullYear();
@@ -170,7 +218,8 @@ function sumPoPendingForDistributor(outgoingCheques, distributorId, asOfDate) {
   let total = 0;
   let count = 0;
   for (const row of Array.isArray(outgoingCheques) ? outgoingCheques : []) {
-    if (String(row.distributorId ?? '').trim() !== distId) continue;
+    const rowDistId = String(row.distributorId ?? '').trim() || '__unassigned__';
+    if (rowDistId !== distId) continue;
     const converting = String(row.chequeDate ?? '').slice(0, 10);
     if (converting && converting <= asOfDate) continue;
     const amount = Math.max(0, Number(row.amount) || 0);
@@ -221,9 +270,11 @@ export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheque
   const byDistributor = new Map();
 
   for (const g of Array.isArray(guarantees) ? guarantees : []) {
-    const distributorId = String(g.distributorId ?? '').trim();
-    if (!distributorId) continue;
-    const distributorName = String(g.distributorName ?? '').trim() || distributorId;
+    const rawId = String(g.distributorId ?? '').trim();
+    const distributorId = rawId || '__unassigned__';
+    const distributorName = rawId
+      ? String(g.distributorName ?? '').trim() || rawId
+      : 'Unassigned';
     if (!byDistributor.has(distributorId)) {
       byDistributor.set(distributorId, { distributorId, distributorName, guarantees: [] });
     }
@@ -231,9 +282,10 @@ export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheque
   }
 
   for (const row of Array.isArray(outgoingCheques) ? outgoingCheques : []) {
-    const distributorId = String(row.distributorId ?? '').trim();
-    if (!distributorId || byDistributor.has(distributorId)) continue;
-    const distributorName = String(row.distributorName ?? '').trim() || distributorId;
+    const rawId = String(row.distributorId ?? '').trim();
+    const distributorId = rawId || '__unassigned__';
+    if (byDistributor.has(distributorId)) continue;
+    const distributorName = rawId ? String(row.distributorName ?? '').trim() || rawId : 'Unassigned';
     byDistributor.set(distributorId, { distributorId, distributorName, guarantees: [] });
   }
 

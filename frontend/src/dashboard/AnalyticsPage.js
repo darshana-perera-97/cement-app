@@ -36,13 +36,14 @@ import {
 import { downloadOverdueBillsPdf, downloadSalesPersonOverduePdf } from './overdueBillsPdf';
 import { buildPendingBillRows } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   buildCashBookSourceEntries,
   buildCashBookLedgerRows,
   summarizeCashBookLedger,
 } from './cashBookLedger';
 import {
+  collectPurchaseOrderOutgoingCheques,
   computeGuaranteeStatus,
   computeGuaranteeStatusByDistributor,
   formatGuaranteeExpiryHint,
@@ -346,6 +347,7 @@ export function OverdueBillsTable({ rows, totalLoadedCount, defaultPageSize = 10
 
 export default function AnalyticsPage() {
   const apiRoot = getApiBase() || '';
+  const location = useLocation();
   const { brands } = useBagProducts();
   const [cashSummary, setCashSummary] = useState(null);
   const [cashFlow, setCashFlow] = useState([]);
@@ -365,14 +367,17 @@ export default function AnalyticsPage() {
   const [promotions, setPromotions] = useState([]);
   const [bankGuarantees, setBankGuarantees] = useState([]);
   const [bankBalancePayload, setBankBalancePayload] = useState(null);
+  const [bankGuaranteeErr, setBankGuaranteeErr] = useState(null);
   const [overdueSearch, setOverdueSearch] = useState('');
   const [overdueListView, setOverdueListView] = useState('preview');
 
   useEffect(() => {
     let cancelled = false;
+    setCashDashLoading(true);
+    setBankGuaranteeErr(null);
     (async () => {
       try {
-        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes, promoRes] =
+        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes, poRes, promoRes] =
           await Promise.all([
             fetch(`${apiRoot}/api/cash-summary`),
             fetch(`${apiRoot}/api/cash-flow?days=7`),
@@ -386,6 +391,7 @@ export default function AnalyticsPage() {
             fetch(`${apiRoot}/api/cash-book-entries`),
             fetch(`${apiRoot}/api/bank-guarantees`),
             fetch(`${apiRoot}/api/bank-account-balances`),
+            fetch(`${apiRoot}/api/purchase-orders`),
             fetch(`${apiRoot}/api/promotions`),
           ]);
         if (!cancelled) {
@@ -443,11 +449,25 @@ export default function AnalyticsPage() {
           if (bgRes.ok) {
             const bgData = await bgRes.json();
             setBankGuarantees(Array.isArray(bgData) ? bgData : []);
+            setBankGuaranteeErr(null);
           } else {
             setBankGuarantees([]);
+            setBankGuaranteeErr(
+              'Could not load bank guarantees. The server may need the latest backend deployed (missing /api/bank-guarantees).',
+            );
           }
           if (balRes.ok) {
             setBankBalancePayload(await balRes.json());
+          } else if (poRes.ok) {
+            const purchaseOrders = await poRes.json();
+            const asOfDate = todayYmdLocal();
+            setBankBalancePayload({
+              asOfDate,
+              byAccountId: {},
+              outgoingCheques: collectPurchaseOrderOutgoingCheques(
+                Array.isArray(purchaseOrders) ? purchaseOrders : [],
+              ),
+            });
           } else {
             setBankBalancePayload(null);
           }
@@ -477,6 +497,7 @@ export default function AnalyticsPage() {
           setCashBookEntries([]);
           setBankGuarantees([]);
           setBankBalancePayload(null);
+          setBankGuaranteeErr('Could not load dashboard data');
           setChequeDepositQueue({ asOfDate: '', throughDate: '', items: [] });
           setChequeDepositErr('Could not load dashboard data');
         }
@@ -487,7 +508,7 @@ export default function AnalyticsPage() {
     return () => {
       cancelled = true;
     };
-  }, [apiRoot]);
+  }, [apiRoot, location.pathname]);
 
   const donutModel = useMemo(() => {
     const pending = Number(cashSummary?.pendingFromCustomers) || 0;
@@ -876,6 +897,30 @@ export default function AnalyticsPage() {
           {cashDashLoading ? (
             <div className="flex min-h-[88px] items-center justify-center text-sm text-slate-500">
               <LoadingSpinner />
+            </div>
+          ) : bankGuaranteeErr ? (
+            <div className="space-y-3">
+              <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 ring-1 ring-amber-100" role="alert">
+                {bankGuaranteeErr}
+              </p>
+              <div className="overflow-hidden rounded-2xl ring-1 ring-slate-100">
+                <div className="grid grid-cols-2 divide-x divide-slate-100">
+                  <DashboardStatStripCell
+                    label="Incoming cheques"
+                    value={guaranteeStatus.incomingPendingTotal}
+                    valueClassName="text-violet-900"
+                    hint="Customer cheques not deposited"
+                    tone="indigo"
+                  />
+                  <DashboardStatStripCell
+                    label="PO pending"
+                    value={guaranteeStatus.poPendingOutgoingTotal}
+                    valueClassName="text-amber-900"
+                    hint="From purchase orders when available"
+                    tone="amber"
+                  />
+                </div>
+              </div>
             </div>
           ) : distributorGuaranteeStatuses.length === 0 ? (
             <div className="space-y-3">
