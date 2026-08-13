@@ -20,6 +20,7 @@ export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
       const c = cheques[i];
       if (!c || typeof c !== 'object') continue;
       if (c.cancelled) continue;
+      if (c.chequeReturned) continue;
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = toNonNegMoney(c.amount);
       if (!bankAccountId || amount <= 0) continue;

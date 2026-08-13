@@ -367,6 +367,7 @@ export default function AnalyticsPage() {
   const [promotions, setPromotions] = useState([]);
   const [bankGuarantees, setBankGuarantees] = useState([]);
   const [bankBalancePayload, setBankBalancePayload] = useState(null);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [bankGuaranteeErr, setBankGuaranteeErr] = useState(null);
   const [overdueSearch, setOverdueSearch] = useState('');
   const [overdueListView, setOverdueListView] = useState('preview');
@@ -456,21 +457,30 @@ export default function AnalyticsPage() {
               'Could not load bank guarantees. The server may need the latest backend deployed (missing /api/bank-guarantees).',
             );
           }
+
+          const poList = poRes.ok ? await poRes.json() : [];
+          setPurchaseOrders(Array.isArray(poList) ? poList : []);
+
+          let balancePayload = null;
           if (balRes.ok) {
-            setBankBalancePayload(await balRes.json());
-          } else if (poRes.ok) {
-            const purchaseOrders = await poRes.json();
-            const asOfDate = todayYmdLocal();
-            setBankBalancePayload({
-              asOfDate,
-              byAccountId: {},
-              outgoingCheques: collectPurchaseOrderOutgoingCheques(
-                Array.isArray(purchaseOrders) ? purchaseOrders : [],
-              ),
-            });
-          } else {
-            setBankBalancePayload(null);
+            balancePayload = await balRes.json();
           }
+          const poOutgoing = collectPurchaseOrderOutgoingCheques(Array.isArray(poList) ? poList : []);
+          if (balancePayload && typeof balancePayload === 'object') {
+            // Purchase orders are the source of truth for per-distributor PO pending.
+            balancePayload = {
+              ...balancePayload,
+              asOfDate: todayYmdLocal(),
+              outgoingCheques: poOutgoing.length > 0 ? poOutgoing : balancePayload.outgoingCheques || [],
+            };
+          } else if (poOutgoing.length > 0 || poRes.ok) {
+            balancePayload = {
+              asOfDate: todayYmdLocal(),
+              byAccountId: {},
+              outgoingCheques: poOutgoing,
+            };
+          }
+          setBankBalancePayload(balancePayload);
           if (chequeRes.ok) {
             const cd = await chequeRes.json();
             setChequeDepositErr(null);
@@ -497,6 +507,7 @@ export default function AnalyticsPage() {
           setCashBookEntries([]);
           setBankGuarantees([]);
           setBankBalancePayload(null);
+          setPurchaseOrders([]);
           setBankGuaranteeErr('Could not load dashboard data');
           setChequeDepositQueue({ asOfDate: '', throughDate: '', items: [] });
           setChequeDepositErr('Could not load dashboard data');
@@ -575,14 +586,17 @@ export default function AnalyticsPage() {
     return { totalBalance, totalPendingOutgoing, accountCount: Object.keys(byAccountId).length };
   }, [bankBalancePayload]);
 
+  const guaranteeOutgoingCheques = useMemo(() => {
+    const fromPo = collectPurchaseOrderOutgoingCheques(purchaseOrders);
+    if (fromPo.length > 0) return fromPo;
+    return Array.isArray(bankBalancePayload?.outgoingCheques) ? bankBalancePayload.outgoingCheques : [];
+  }, [purchaseOrders, bankBalancePayload]);
+
   const poPendingMetrics = useMemo(() => {
-    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
-    const outgoing = Array.isArray(bankBalancePayload?.outgoingCheques)
-      ? bankBalancePayload.outgoingCheques
-      : [];
+    const asOf = todayYmdLocal();
     let total = 0;
     let count = 0;
-    for (const row of outgoing) {
+    for (const row of guaranteeOutgoingCheques) {
       const converting = String(row.chequeDate ?? '').slice(0, 10);
       if (converting && converting <= asOf) continue;
       const amount = Math.max(0, Number(row.amount) || 0);
@@ -590,25 +604,23 @@ export default function AnalyticsPage() {
       total += amount;
       count += 1;
     }
-    return { total, count };
-  }, [bankBalancePayload]);
+    return { total, count, asOf };
+  }, [guaranteeOutgoingCheques]);
 
   const guaranteeStatus = useMemo(() => {
-    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
     return computeGuaranteeStatus(bankGuarantees, payments, {
       poPendingOutgoing: poPendingMetrics.total,
       poPendingCount: poPendingMetrics.count,
-      asOfDate: asOf,
+      asOfDate: poPendingMetrics.asOf,
     });
-  }, [bankGuarantees, payments, poPendingMetrics, bankBalancePayload]);
+  }, [bankGuarantees, payments, poPendingMetrics]);
 
   const distributorGuaranteeStatuses = useMemo(() => {
-    const asOf = String(bankBalancePayload?.asOfDate ?? '').slice(0, 10) || todayYmdLocal();
-    const outgoing = Array.isArray(bankBalancePayload?.outgoingCheques)
-      ? bankBalancePayload.outgoingCheques
-      : [];
-    return computeGuaranteeStatusByDistributor(bankGuarantees, { outgoingCheques: outgoing, asOfDate: asOf });
-  }, [bankGuarantees, bankBalancePayload]);
+    return computeGuaranteeStatusByDistributor(bankGuarantees, {
+      outgoingCheques: guaranteeOutgoingCheques,
+      asOfDate: poPendingMetrics.asOf,
+    });
+  }, [bankGuarantees, guaranteeOutgoingCheques, poPendingMetrics.asOf]);
 
   const overdueSearchInput = (
     <label className={filterLabel}>
@@ -916,7 +928,11 @@ export default function AnalyticsPage() {
                     label="PO pending"
                     value={guaranteeStatus.poPendingOutgoingTotal}
                     valueClassName="text-amber-900"
-                    hint="From purchase orders when available"
+                    hint={
+                      guaranteeStatus.poPendingOutgoingTotal > 0
+                        ? 'From purchase orders'
+                        : 'Load purchase orders API for PO pending'
+                    }
                     tone="amber"
                   />
                 </div>
