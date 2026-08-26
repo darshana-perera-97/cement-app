@@ -160,6 +160,7 @@ function findLastUnitPrice(records, distributorId, product) {
 
   const matches = records
     .filter((r) => {
+      if (isPurchaseOrderCancelled(r)) return false;
       if (String(r.distributorId ?? '').trim() !== distId) return false;
       if (String(r.product ?? '').trim().toLowerCase() !== productKey) return false;
       const price = toNonNegMoney(r.unitPrice);
@@ -192,6 +193,7 @@ function lastPricesByProduct(records, distributorId) {
     });
 
   for (const r of sorted) {
+    if (isPurchaseOrderCancelled(r)) continue;
     const product = String(r.product ?? '').trim();
     if (!product) continue;
     const key = product.toLowerCase();
@@ -206,6 +208,10 @@ function lastPricesByProduct(records, distributorId) {
     out[product] = unitPrice;
   }
   return out;
+}
+
+function isPurchaseOrderCancelled(row) {
+  return Boolean(row?.cancelled);
 }
 
 function poChequeMatchKey(c) {
@@ -283,6 +289,85 @@ function cancelIssuedCheque(records, opts) {
   return { ok: true, updated, cancelledAt };
 }
 
+/**
+ * Cancel a purchase order (admin). Per-product cheques are cancelled immediately.
+ * Shared-batch cheques are cancelled only when this is the last active PO in the batch.
+ * @returns {{ ok: boolean, error?: string, po?: object, cancelledAt?: string, shouldCancelCashBook?: boolean, batchId?: string|null, chequeMode?: string }}
+ */
+function cancelPurchaseOrder(records, opts) {
+  const poId = String(opts?.poId ?? '').trim();
+  const cancelledBy = String(opts?.cancelledBy ?? '').trim();
+  if (!poId) return { ok: false, error: 'Purchase order id is required' };
+  if (!cancelledBy) return { ok: false, error: 'cancelledBy (username) is required' };
+
+  const idx = records.findIndex((r) => r.id === poId);
+  if (idx < 0) return { ok: false, error: 'Purchase order not found' };
+
+  const po = records[idx];
+  if (isPurchaseOrderCancelled(po)) {
+    return { ok: false, error: 'Purchase order is already cancelled' };
+  }
+
+  const cancelledAt = new Date().toISOString();
+  const batchId = String(po.batchId ?? '').trim();
+  const mode = String(po.chequeMode ?? '').trim();
+  const batchRows = batchId
+    ? records.filter((r) => String(r.batchId ?? '').trim() === batchId)
+    : [po];
+  const lastInBatch = batchRows.every(
+    (r) => String(r.id) === poId || isPurchaseOrderCancelled(r),
+  );
+  const shouldCancelCheques = mode !== 'shared' || lastInBatch;
+
+  const poIdsToTouchCheques = new Set([poId]);
+  if (shouldCancelCheques && mode === 'shared' && batchId) {
+    for (const r of batchRows) {
+      const id = String(r.id ?? '').trim();
+      if (id) poIdsToTouchCheques.add(id);
+    }
+  }
+
+  if (shouldCancelCheques) {
+    for (const id of poIdsToTouchCheques) {
+      const i = records.findIndex((r) => r.id === id);
+      if (i < 0) continue;
+      const row = records[i];
+      const cheques = Array.isArray(row.cheques) ? row.cheques.map((c) => (c && typeof c === 'object' ? { ...c } : c)) : [];
+      let touched = false;
+      for (const ch of cheques) {
+        if (!ch || typeof ch !== 'object' || ch.cancelled || isPoCashPayment(ch)) continue;
+        ch.cancelled = true;
+        ch.cancelledAt = cancelledAt;
+        ch.cancelledBy = cancelledBy;
+        touched = true;
+      }
+      if (touched) {
+        records[i] = { ...row, cheques, updatedAt: cancelledAt, updatedBy: cancelledBy };
+      }
+    }
+  }
+
+  const current = records[idx];
+  records[idx] = {
+    ...current,
+    cancelled: true,
+    cancelledAt,
+    cancelledBy,
+    updatedAt: cancelledAt,
+    updatedBy: cancelledBy,
+  };
+
+  return {
+    ok: true,
+    po: records[idx],
+    cancelledAt,
+    lastInBatch,
+    batchId: batchId || null,
+    chequeMode: mode,
+    shouldCancelCashBook: mode !== 'shared' || lastInBatch,
+  };
+}
+
 module.exports = {
   readPurchaseOrders,
   writePurchaseOrders,
@@ -294,6 +379,8 @@ module.exports = {
   findLastUnitPrice,
   lastPricesByProduct,
   cancelIssuedCheque,
+  cancelPurchaseOrder,
+  isPurchaseOrderCancelled,
   isPoCashPayment,
   normalizePaymentType,
   PURCHASE_ORDERS_FILE,

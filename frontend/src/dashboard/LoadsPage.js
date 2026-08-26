@@ -276,6 +276,7 @@ export default function LoadsPage() {
   const selectablePurchaseOrders = useMemo(() => {
     return purchaseOrders
       .filter((po) => {
+        if (po?.cancelled) return false;
         const id = String(po.id || '').trim();
         if (!id) return false;
         if (selectedPoIds.includes(id)) return true;
@@ -891,7 +892,7 @@ export default function LoadsPage() {
                               {po.doorStock ? (
                                 <>
                                   {' · '}
-                                  <span className="font-medium text-indigo-700">Door stock</span>
+                                  <span className="font-medium text-indigo-700">Door step</span>
                                 </>
                               ) : null}
                             </span>
@@ -954,7 +955,7 @@ export default function LoadsPage() {
                   ) : null}
                   {hasDoorStockPo ? (
                     <label className="block text-sm font-medium text-slate-600">
-                      Door Stock transport cost per bag (LKR)
+                      Door step transport cost per bag (LKR)
                       <input
                         type="number"
                         min={0}
@@ -965,7 +966,7 @@ export default function LoadsPage() {
                         placeholder="0"
                       />
                       <span className="mt-1 block text-xs font-normal text-slate-400">
-                        Added to transport per bag for incentive calculations on door stock POs.
+                        Added to transport per bag for incentive calculations on door step POs.
                       </span>
                     </label>
                   ) : null}

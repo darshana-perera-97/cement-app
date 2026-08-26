@@ -1,5 +1,9 @@
 import { getCachedBrands } from './brandTheme';
-import { buildBillSettledDateLookup, isBillFullySettled } from './pendingBills';
+import {
+  buildBillSettledDateLookup,
+  isBillFullySettled,
+  listCustomerBillPaymentAllocations,
+} from './pendingBills';
 import { inDateRange } from './tableToolbar';
 
 export { buildBillSettledDateLookup };
@@ -181,6 +185,128 @@ export function buildSettledCollectionsRows(
     const byShop = a.shopName.localeCompare(b.shopName);
     if (byShop !== 0) return byShop;
     return a.invoiceNumber.localeCompare(b.invoiceNumber);
+  });
+
+  return rows;
+}
+
+function prorateCollectionAcrossBrands(bill, collectedAmount) {
+  const collected = round2(collectedAmount);
+  if (collected <= 0) return [];
+  const brands = getCachedBrands();
+  const brandLines = [];
+  for (const brand of brands) {
+    const bagCount = Number(bill[brand.bagsField]) || 0;
+    if (bagCount <= 0) continue;
+    brandLines.push({
+      brandKey: brand.key,
+      bagType: brand.label,
+      bagCount,
+      lineAmount: brandLineFromBill(bill, brand.key),
+    });
+  }
+  const billAmount = round2(bill.totalAmount);
+  if (brandLines.length === 0) {
+    return [
+      {
+        brandKey: '',
+        bagType: '—',
+        bagCount: 0,
+        amount: collected,
+      },
+    ];
+  }
+  let remaining = collected;
+  return brandLines.map((line, i) => {
+    const isLast = i === brandLines.length - 1;
+    const rawShare =
+      isLast || billAmount <= 0
+        ? remaining
+        : round2((collected * line.lineAmount) / billAmount);
+    const share = round2(Math.max(0, Math.min(remaining, rawShare)));
+    remaining = round2(remaining - share);
+    return {
+      brandKey: line.brandKey,
+      bagType: line.bagType,
+      bagCount: line.bagCount,
+      amount: share,
+    };
+  });
+}
+
+/**
+ * Collection lines for collector commission.
+ * Includes every approved payment allocated to an invoice (full or partial).
+ * Amount is the collected portion; days are from bill date to payment date.
+ */
+export function buildCollectorCollectionRows(
+  customers,
+  bills,
+  payments,
+  settledByBillId,
+  { from, to, collectorUserId = '' } = {},
+) {
+  const collectorFilter = String(collectorUserId ?? '').trim();
+  const settledLookup = settledByBillId instanceof Map ? settledByBillId : new Map();
+  const rows = [];
+  let rowSeq = 0;
+
+  for (const cust of customers || []) {
+    if (collectorFilter && String(cust?.collectorUserId ?? '') !== collectorFilter) continue;
+    const allocations = listCustomerBillPaymentAllocations(cust, bills, payments);
+    const collectorName = String(cust?.collectorName ?? '').trim() || '—';
+    const shopName = String(cust?.name ?? '').trim() || '—';
+
+    for (const alloc of allocations) {
+      const paymentDate = String(alloc.paymentDate ?? '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) continue;
+      if (from && to && !inDateRange(paymentDate, from, to)) continue;
+
+      const bill = alloc.bill;
+      const billId = String(bill?.id ?? '').trim();
+      const billDate = String(bill?.date ?? '').slice(0, 10);
+      const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+      const billAmount = round2(bill?.totalAmount);
+      const settledDate = billId ? settledLookup.get(billId) || '' : '';
+      const daysToSettle = daysBetweenYmd(billDate, paymentDate);
+      const commissionBucket = commissionBucketForDays(daysToSettle);
+      const brandShares = prorateCollectionAcrossBrands(bill, alloc.amount);
+
+      for (const share of brandShares) {
+        if (share.amount <= 0) continue;
+        rowSeq += 1;
+        rows.push({
+          rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${rowSeq}`,
+          paymentId: alloc.paymentId,
+          billId,
+          date: paymentDate,
+          invoiceNumber,
+          shopName,
+          bagType: share.bagType,
+          brandKey: share.brandKey,
+          bagCount: share.bagCount,
+          amount: share.amount,
+          billDate,
+          settledDate,
+          daysToSettle,
+          billAmount,
+          collectorUserId: String(cust?.collectorUserId ?? ''),
+          collectorName,
+          commissionBucket,
+          isPartial: !settledDate,
+        });
+      }
+    }
+  }
+
+  rows.sort((a, b) => {
+    const byDate = a.date.localeCompare(b.date);
+    if (byDate !== 0) return byDate;
+    const byShop = a.shopName.localeCompare(b.shopName);
+    if (byShop !== 0) return byShop;
+    const byInvoice = a.invoiceNumber.localeCompare(b.invoiceNumber);
+    if (byInvoice !== 0) return byInvoice;
+    return (a.brandKey || '').localeCompare(b.brandKey || '');
   });
 
   return rows;

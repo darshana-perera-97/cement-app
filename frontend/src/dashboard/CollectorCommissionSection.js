@@ -5,7 +5,7 @@ import { useBagProducts } from './BagProductsContext';
 import {
   COLLECTION_DAY_BUCKETS,
   buildBillSettledDateLookup,
-  buildSettledCollectionsRows,
+  buildCollectorCollectionRows,
   enrichRowsWithCommission,
   normalizeCollectorCommissionRates,
   summarizeCommissionByBucket,
@@ -128,7 +128,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
 
   const baseRows = useMemo(
     () =>
-      buildSettledCollectionsRows(customers, bills, settledLookup, payments, {
+      buildCollectorCollectionRows(customers, bills, payments, settledLookup, {
         from: monthRange.from,
         to: monthRange.to,
         collectorUserId: selectedCollectorId,
@@ -211,7 +211,8 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
         <div>
           <h2 className="text-sm font-bold text-slate-900">Collector commission</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Commission is calculated on fully settled bills only — partial or open invoices are excluded.
+            Commission is calculated on all collections in the selected month, including partial payments.
+            The rate uses days from the bill date to the collection date.
           </p>
         </div>
         <button
@@ -263,7 +264,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
 
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
         <label className={filterLabelNarrow}>
-          Settled in month
+          Collected in month
           <input
             type="month"
             value={commissionMonth}
@@ -344,7 +345,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                   <th className="whitespace-nowrap px-4 py-3">Bag type</th>
                   <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
                   <th className="whitespace-nowrap px-4 py-3">Bill date</th>
-                  <th className="whitespace-nowrap px-4 py-3">Settled</th>
+                  <th className="whitespace-nowrap px-4 py-3">Settled / status</th>
                   <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
                   <th className="whitespace-nowrap px-4 py-3 text-right">Bill amount</th>
                   <th className="whitespace-nowrap px-4 py-3 text-right">Comm. %</th>
@@ -355,7 +356,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                 {commissionRows.length === 0 ? (
                   <tr>
                     <td colSpan={11} className="px-4 py-8 text-center text-slate-500">
-                      No settled collections for {selectedCollectorName} in {monthLabel}.
+                      No collections for {selectedCollectorName} in {monthLabel}.
                     </td>
                   </tr>
                 ) : (
@@ -381,7 +382,9 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.amount)}</td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate}</td>
-                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate}</td>
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
+                          {r.settledDate || 'Partial'}
+                        </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.daysToSettle}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.billAmount)}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">

@@ -16,6 +16,7 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
   const seen = new Set();
   const rows = [];
   for (const po of Array.isArray(purchaseOrders) ? purchaseOrders : []) {
+    if (po?.cancelled) continue;
     const cheques = Array.isArray(po.cheques) ? po.cheques : [];
     const mode = String(po.chequeMode ?? '').trim();
     const batchId = String(po.batchId ?? '').trim();
@@ -24,6 +25,8 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
       const c = cheques[i];
       if (!c || typeof c !== 'object') continue;
       if (c.cancelled) continue;
+      if (c.chequeReturned) continue;
+      if (String(c.paymentType ?? '').trim().toLowerCase() === 'cash') continue;
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = toNonNegMoney(c.amount);
       if (!bankAccountId || amount <= 0) continue;

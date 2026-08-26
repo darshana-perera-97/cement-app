@@ -32,7 +32,7 @@ const DEFAULT_SHOP_DATA = {
   bankAccounts: [],
   /** Master bag product catalog — suppliers pick from this list. */
   products: [],
-  /** Door stock transport invoice / export letterhead and per-brand locations. */
+  /** Door step transport invoice / export letterhead and per-brand locations. */
   doorStockTransportSettings: {
     companyName: '',
     companyAddress: '',

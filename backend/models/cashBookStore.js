@@ -141,6 +141,13 @@ function normalizeEntry(row) {
   if (poId) entry.poId = poId;
   if (poNumber) entry.poNumber = poNumber;
   if (batchId) entry.batchId = batchId;
+  if (row.cancelled) {
+    entry.cancelled = true;
+    const cancelledAt = String(row.cancelledAt ?? '').trim();
+    const cancelledBy = String(row.cancelledBy ?? '').trim();
+    if (cancelledAt) entry.cancelledAt = cancelledAt;
+    if (cancelledBy) entry.cancelledBy = cancelledBy;
+  }
   return entry;
 }
 

@@ -83,8 +83,8 @@ function totalAmount(rows) {
 }
 
 /**
- * Download door stock transport statement PDF (Shakya Transport layout).
- * @param {Array} rows — filtered door stock rows
+ * Download door step transport statement PDF (Shakya Transport layout).
+ * @param {Array} rows — filtered door step rows
  * @param {object} settings — doorStockTransportSettings from shop
  * @param {object} [options]
  */
@@ -262,10 +262,10 @@ export function downloadDoorStockTransportPdf(rows, settings = {}, options = {})
   }
 
   const { rangeSlug, safeDate } = fileSlug({ dateFrom, dateTo, generatedAt });
-  doc.save(`door-stock-transport-${rangeSlug}-${safeDate}.pdf`);
+  doc.save(`door-step-transport-${rangeSlug}-${safeDate}.pdf`);
 }
 
-/** Download door stock transport statement as Excel. */
+/** Download door step transport statement as Excel. */
 export function downloadDoorStockTransportExcel(rows, settings = {}, options = {}) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const cfg = normalizeSettings(settings, { ...options, rows: safeRows });
@@ -335,9 +335,9 @@ export function downloadDoorStockTransportExcel(rows, settings = {}, options = {
     { wch: 12 },
   ];
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Door Stock Transport');
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Door Step Transport');
   const { rangeSlug, safeDate } = fileSlug({ dateFrom, dateTo, generatedAt });
-  XLSX.writeFile(workbook, `door-stock-transport-${rangeSlug}-${safeDate}.xlsx`);
+  XLSX.writeFile(workbook, `door-step-transport-${rangeSlug}-${safeDate}.xlsx`);
 }
 
 /** Download both PDF and Excel. */

@@ -11,6 +11,7 @@ export function collectPoOutgoingCheques(purchaseOrders) {
   const seen = new Set();
   const rows = [];
   for (const po of Array.isArray(purchaseOrders) ? purchaseOrders : []) {
+    if (po?.cancelled) continue;
     const cheques = Array.isArray(po.cheques) ? po.cheques : [];
     const mode = String(po.chequeMode ?? '').trim();
     const batchId = String(po.batchId ?? '').trim();
@@ -20,6 +21,7 @@ export function collectPoOutgoingCheques(purchaseOrders) {
       if (!c || typeof c !== 'object') continue;
       if (c.cancelled) continue;
       if (c.chequeReturned) continue;
+      if (isPoCashPayment(c)) continue;
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = Math.max(0, Number(c.amount) || 0);
       if (!bankAccountId || amount <= 0) continue;
@@ -97,6 +99,13 @@ export function poChequeBankLabel(c, bankAccounts) {
 
 export function isPoCashPayment(c) {
   return String(c?.paymentType ?? '').trim().toLowerCase() === 'cash';
+}
+
+/** User-facing Door step note; stored "Door stock" still displays as Door step. */
+export function doorStepNotesText(row) {
+  const notes = String(row?.notes ?? '').trim();
+  if (/^door stock$/i.test(notes) || (!notes && row?.doorStock)) return 'Door step';
+  return notes;
 }
 
 /** e.g. "Commercial Bank · #123456" or "Cash" */

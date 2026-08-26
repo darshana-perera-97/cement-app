@@ -7,10 +7,10 @@
  */
 // export const DEFAULT_DEV_API_URL = 'http://93.127.129.102:1240';
 // export const DEFAULT_DEV_API_URL = 'http://69.197.187.24:1249';
-export const DEFAULT_DEV_API_URL = 'https://anuradha-distribution.aipulse.lk';
+// export const DEFAULT_DEV_API_URL = 'https://anuradha-distribution.aipulse.lk';
 // export const DEFAULT_DEV_API_URL = 'https://shakya.aipulse.lk';
 // export const DEFAULT_DEV_API_URL = 'https://chaminda-stores.aipulse.lk';
-// export const DEFAULT_DEV_API_URL = 'http://localhost:1249';
+export const DEFAULT_DEV_API_URL = 'http://localhost:1249';
 
 export function getApiBase() {
   const fromEnv = (process.env.REACT_APP_API_URL || '').trim().replace(/\/$/, '');

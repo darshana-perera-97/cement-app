@@ -16,7 +16,7 @@ import {
 } from './detailModalShared';
 import { useBagProducts } from './BagProductsContext';
 import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
-import { formatPoChequeWithBank, formatPoChequesList, isPoCashPayment } from './poChequeDisplay';
+import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment } from './poChequeDisplay';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import { MANAGER_ACCESS_OPTIONS } from './navConfig';
 
@@ -65,7 +65,7 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'purchaseOrder':
       return {
-        title: 'Purchase order',
+        title: row.cancelled ? 'Purchase order (cancelled)' : 'Purchase order',
         subtitle:
           [
             row.poNumber,
@@ -348,7 +348,7 @@ function LoadDetailContent({ row }) {
         />
         {Number(row.doorStockTransportCostPerBag) > 0 ? (
           <SummaryField
-            label="Door stock transport / bag"
+            label="Door step transport / bag"
             value={formatMoney(row.doorStockTransportCostPerBag)}
             valueClassName="tabular-nums"
           />
@@ -779,6 +779,12 @@ function PurchaseOrderDetailContent({ row }) {
 
   return (
     <>
+      {row.cancelled ? (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-800 ring-1 ring-rose-100">
+          Cancelled{row.cancelledBy ? ` by ${row.cancelledBy}` : ''}
+          {row.cancelledAt ? ` · ${formatDateTime(row.cancelledAt)}` : ''}
+        </p>
+      ) : null}
       <SummaryGrid>
         <SummaryField label="PO number" value={displayText(row.poNumber)} valueClassName="font-mono font-semibold" />
         <SummaryField label="Date" value={displayText(row.date)} />
@@ -821,7 +827,7 @@ function PurchaseOrderDetailContent({ row }) {
         <SummaryField label="Created" value={formatDateTime(row.createdAt)} />
       </SummaryGrid>
       {row.doorStock || String(row.notes ?? '').trim() ? (
-        <NoteBlock label="Notes" value={String(row.notes ?? '').trim() || 'Door stock'} />
+        <NoteBlock label="Notes" value={doorStepNotesText(row) || 'Door step'} />
       ) : null}
       {cheques.length > 0 ? (
         <div className="mt-4 space-y-2">

@@ -96,12 +96,12 @@ export default function DoorStockTransportSettingsModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby="door-stock-settings-title"
+        aria-labelledby="door-step-settings-title"
         className={`${modalPanelClass2xl} max-h-[92vh] overflow-y-auto`}
       >
         <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
-          <h2 id="door-stock-settings-title" className="text-lg font-semibold text-slate-900">
-            Door stock transport settings
+          <h2 id="door-step-settings-title" className="text-lg font-semibold text-slate-900">
+            Door step transport settings
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             Configure letterhead, client, destinations, and bank details separately for each product.
@@ -220,7 +220,7 @@ export default function DoorStockTransportSettingsModal({
                   <div className="rounded-2xl bg-indigo-50/50 p-4 ring-1 ring-indigo-100">
                     <h3 className="text-sm font-semibold text-indigo-900">Destinations</h3>
                     <p className="mt-1 text-xs text-slate-500">
-                      Starting and end locations used on door stock exports for {activeBrand.label}.
+                      Starting and end locations used on door step exports for {activeBrand.label}.
                     </p>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                       <label className="block text-sm">

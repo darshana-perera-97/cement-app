@@ -107,7 +107,7 @@ export function downloadCollectorCommissionPdf(data, options = {}) {
   let startY = doc.lastAutoTable.finalY + 8;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('Settled collections detail', MARGIN, startY);
+  doc.text('Collections detail', MARGIN, startY);
   startY += 4;
 
   const detailHead = [
@@ -117,7 +117,7 @@ export function downloadCollectorCommissionPdf(data, options = {}) {
     'Bag type',
     'Amount',
     'Bill date',
-    'Settled',
+    'Settled / status',
     'Days',
     'Bill amount',
     'Comm. %',
@@ -133,7 +133,7 @@ export function downloadCollectorCommissionPdf(data, options = {}) {
           r.bagType || '—',
           moneyCell(r.amount),
           r.billDate || '—',
-          r.settledDate || '—',
+          r.settledDate || 'Partial',
           r.daysToSettle != null ? String(r.daysToSettle) : '—',
           moneyCell(r.billAmount),
           r.commissionPercent != null ? `${Number(r.commissionPercent).toFixed(2)}%` : '—',

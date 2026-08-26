@@ -12,6 +12,7 @@ export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
   const seen = new Set();
   const rows = [];
   for (const po of Array.isArray(purchaseOrders) ? purchaseOrders : []) {
+    if (po?.cancelled) continue;
     const cheques = Array.isArray(po.cheques) ? po.cheques : [];
     const mode = String(po.chequeMode ?? '').trim();
     const batchId = String(po.batchId ?? '').trim();
@@ -21,6 +22,7 @@ export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
       if (!c || typeof c !== 'object') continue;
       if (c.cancelled) continue;
       if (c.chequeReturned) continue;
+      if (String(c.paymentType ?? '').trim().toLowerCase() === 'cash') continue;
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = toNonNegMoney(c.amount);
       if (!bankAccountId || amount <= 0) continue;
@@ -129,6 +131,39 @@ export function formatGuaranteeExpiryHint(expiryInfo) {
   return `Expires ${expireDate}`;
 }
 
+/** Short expiry label for dense table cells. Full hint stays on `title`. */
+export function formatGuaranteeExpiryCompact(expiryInfo) {
+  if (!expiryInfo || expiryInfo.status === 'none') return '';
+  const { status, daysUntil } = expiryInfo;
+  if (status === 'expired') {
+    const daysAgo = Math.abs(daysUntil);
+    return daysAgo === 0 ? 'Expired today' : `Expired ${daysAgo}d`;
+  }
+  if (status === 'near') {
+    return daysUntil === 0 ? 'Expires today' : `${daysUntil}d left`;
+  }
+  return '';
+}
+
+function expiryAttentionRank(status) {
+  if (status === 'expired') return 0;
+  if (status === 'near') return 1;
+  if (status === 'ok') return 2;
+  return 3;
+}
+
+/** Over-limit and nearest expiry first, then lowest available headroom. */
+export function sortDistributorGuaranteeStatuses(statuses) {
+  return [...(Array.isArray(statuses) ? statuses : [])].sort((a, b) => {
+    if (Boolean(a.overLimit) !== Boolean(b.overLimit)) return a.overLimit ? -1 : 1;
+    const ra = expiryAttentionRank(a.nearestExpiry?.status);
+    const rb = expiryAttentionRank(b.nearestExpiry?.status);
+    if (ra !== rb) return ra - rb;
+    if (a.available !== b.available) return a.available - b.available;
+    return String(a.distributorName ?? '').localeCompare(String(b.distributorName ?? ''));
+  });
+}
+
 /** Pending vs deposited customer cheques for bank guarantee tracking. */
 export function buildGuaranteeChequeMetrics(payments) {
   let pendingTotal = 0;
@@ -213,7 +248,7 @@ export function canIssueChequeUnderGuarantee(row, status) {
   return false;
 }
 
-function sumPoPendingForDistributor(outgoingCheques, distributorId, asOfDate) {
+function sumPoIssuedForDistributor(outgoingCheques, distributorId) {
   const distId = String(distributorId ?? '').trim();
   if (!distId) return { total: 0, count: 0 };
   let total = 0;
@@ -221,8 +256,6 @@ function sumPoPendingForDistributor(outgoingCheques, distributorId, asOfDate) {
   for (const row of Array.isArray(outgoingCheques) ? outgoingCheques : []) {
     const rowDistId = String(row.distributorId ?? '').trim() || '__unassigned__';
     if (rowDistId !== distId) continue;
-    const converting = String(row.chequeDate ?? '').slice(0, 10);
-    if (converting && converting <= asOfDate) continue;
     const amount = Math.max(0, Number(row.amount) || 0);
     if (amount <= 0) continue;
     total += amount;
@@ -265,7 +298,7 @@ function buildDistributorGuaranteeStatus({
   };
 }
 
-/** Per-distributor guarantee vs PO outgoing cheques not yet converted. */
+/** Per-distributor guarantee vs issued PO cheques (cash, cancelled, and returned excluded). */
 export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheques = [], asOfDate = '' } = {}) {
   const asOf = String(asOfDate ?? '').slice(0, 10);
   const byDistributor = new Map();
@@ -292,7 +325,7 @@ export function computeGuaranteeStatusByDistributor(guarantees, { outgoingCheque
 
   const statuses = [];
   for (const { distributorId, distributorName, guarantees: distGuarantees } of byDistributor.values()) {
-    const { total, count } = sumPoPendingForDistributor(outgoingCheques, distributorId, asOf);
+    const { total, count } = sumPoIssuedForDistributor(outgoingCheques, distributorId);
     statuses.push(
       buildDistributorGuaranteeStatus({
         distributorId,

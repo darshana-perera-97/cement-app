@@ -46,8 +46,10 @@ import {
   collectPurchaseOrderOutgoingCheques,
   computeGuaranteeStatus,
   computeGuaranteeStatusByDistributor,
+  formatGuaranteeExpiryCompact,
   formatGuaranteeExpiryHint,
   GUARANTEE_RENEWAL_WARN_DAYS,
+  sortDistributorGuaranteeStatuses,
 } from './guaranteeStatus';
 
 /** Bar fills aligned with bag products — same hues as light theme, higher chroma for readability */
@@ -70,6 +72,14 @@ function formatLkrCompact(n) {
     currency: 'LKR',
     maximumFractionDigits: 0,
   }).format(Number(n) || 0);
+}
+
+function formatLkrSigned(n) {
+  const v = Number(n) || 0;
+  const formatted = formatLkrCompact(Math.abs(v));
+  if (v > 0) return `+${formatted}`;
+  if (v < 0) return `−${formatted}`;
+  return formatted;
 }
 
 function formatLkrExact(n) {
@@ -175,14 +185,20 @@ function DashboardStatStripCell({ label, value, valueClassName, hint, tone = 'sl
 
 function GuaranteeUtilizationBar({ pct, overLimit }) {
   return (
-    <div className="flex min-w-[5.5rem] items-center gap-2">
+    <div className="flex min-w-[4.5rem] items-center gap-1.5">
       <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-100">
         <div
           className={`h-full rounded-full transition-all ${overLimit ? 'bg-rose-500' : 'bg-teal-500'}`}
           style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>
-      <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-600">{pct}%</span>
+      <span
+        className={`w-9 shrink-0 text-right text-xs font-semibold tabular-nums ${
+          overLimit ? 'text-rose-700' : 'text-slate-600'
+        }`}
+      >
+        {pct}%
+      </span>
     </div>
   );
 }
@@ -211,11 +227,48 @@ function GuaranteeExpiryBadge({ expiryInfo }) {
   );
 }
 
+function GuaranteeExpiryCell({ expiryInfo }) {
+  if (!expiryInfo || expiryInfo.status === 'none') {
+    return <span className="text-slate-400">—</span>;
+  }
+  const hint = formatGuaranteeExpiryHint(expiryInfo);
+  const label =
+    expiryInfo.status === 'ok'
+      ? formatDisplayDate(expiryInfo.expireDate)
+      : formatGuaranteeExpiryCompact(expiryInfo) || hint;
+  const tone =
+    expiryInfo.status === 'expired'
+      ? 'font-semibold text-rose-700'
+      : expiryInfo.status === 'near'
+        ? 'font-semibold text-amber-800'
+        : 'text-slate-600';
+  return (
+    <span className={tone} title={hint}>
+      {label}
+    </span>
+  );
+}
+
 function guaranteeAvailableToneClass(value) {
   const n = Number(value) || 0;
   if (n < 0) return 'text-rose-700';
   if (n > 0) return 'text-emerald-800';
   return 'text-slate-600';
+}
+
+function guaranteeStatusRowClass(dist) {
+  if (dist.overLimit) return 'group bg-rose-50/70 hover:bg-rose-50';
+  if (dist.nearestExpiry?.status === 'expired') return 'group bg-rose-50/40 hover:bg-rose-50/70';
+  if (dist.nearestExpiry?.status === 'near') return 'group bg-amber-50/50 hover:bg-amber-50/80';
+  return 'group hover:bg-slate-50/80';
+}
+
+function guaranteeStatusStickyTdClass(dist) {
+  const sticky = 'sticky left-0 z-[11] shadow-[2px_0_4px_-2px_rgba(15,23,42,0.06)]';
+  if (dist.overLimit) return `${sticky} bg-rose-50/70 group-hover:bg-rose-50`;
+  if (dist.nearestExpiry?.status === 'expired') return `${sticky} bg-rose-50/40 group-hover:bg-rose-50/70`;
+  if (dist.nearestExpiry?.status === 'near') return `${sticky} bg-amber-50/50 group-hover:bg-amber-50/80`;
+  return `${sticky} bg-white group-hover:bg-slate-50`;
 }
 
 function Card({ title, subtitle, children, className = '', headerExtra = null }) {
@@ -597,8 +650,6 @@ export default function AnalyticsPage() {
     let total = 0;
     let count = 0;
     for (const row of guaranteeOutgoingCheques) {
-      const converting = String(row.chequeDate ?? '').slice(0, 10);
-      if (converting && converting <= asOf) continue;
       const amount = Math.max(0, Number(row.amount) || 0);
       if (amount <= 0) continue;
       total += amount;
@@ -616,11 +667,36 @@ export default function AnalyticsPage() {
   }, [bankGuarantees, payments, poPendingMetrics]);
 
   const distributorGuaranteeStatuses = useMemo(() => {
-    return computeGuaranteeStatusByDistributor(bankGuarantees, {
-      outgoingCheques: guaranteeOutgoingCheques,
-      asOfDate: poPendingMetrics.asOf,
-    });
+    return sortDistributorGuaranteeStatuses(
+      computeGuaranteeStatusByDistributor(bankGuarantees, {
+        outgoingCheques: guaranteeOutgoingCheques,
+        asOfDate: poPendingMetrics.asOf,
+      }),
+    );
   }, [bankGuarantees, guaranteeOutgoingCheques, poPendingMetrics.asOf]);
+
+  const guaranteeTableTotals = useMemo(() => {
+    let totalGuarantee = 0;
+    let pendingTotal = 0;
+    let available = 0;
+    let poPendingCount = 0;
+    for (const d of distributorGuaranteeStatuses) {
+      totalGuarantee += d.totalGuarantee;
+      pendingTotal += d.pendingTotal;
+      available += d.available;
+      poPendingCount += d.poPendingCount;
+    }
+    const utilizationPct =
+      totalGuarantee > 0 ? Math.min(100, Math.round((pendingTotal / totalGuarantee) * 1000) / 10) : 0;
+    return {
+      totalGuarantee,
+      pendingTotal,
+      available,
+      poPendingCount,
+      utilizationPct,
+      overLimit: totalGuarantee > 0 && pendingTotal > totalGuarantee,
+    };
+  }, [distributorGuaranteeStatuses]);
 
   const overdueSearchInput = (
     <label className={filterLabel}>
@@ -896,7 +972,7 @@ export default function AnalyticsPage() {
 
         <Card
           title="Bank guarantee status"
-          subtitle="Per distributor — PO cheques not yet converted vs collateral recorded for that distributor"
+          subtitle="Per distributor — issued PO cheques vs collateral recorded for that distributor"
           headerExtra={
             <Link
               to="/dashboard/bank"
@@ -925,13 +1001,13 @@ export default function AnalyticsPage() {
                     tone="indigo"
                   />
                   <DashboardStatStripCell
-                    label="PO pending"
+                    label="PO cheques"
                     value={guaranteeStatus.poPendingOutgoingTotal}
                     valueClassName="text-amber-900"
                     hint={
                       guaranteeStatus.poPendingOutgoingTotal > 0
-                        ? 'From purchase orders'
-                        : 'Load purchase orders API for PO pending'
+                        ? 'Issued on purchase orders'
+                        : 'No issued PO cheques loaded'
                     }
                     tone="amber"
                   />
@@ -954,7 +1030,7 @@ export default function AnalyticsPage() {
                     tone="indigo"
                   />
                   <DashboardStatStripCell
-                    label="PO pending"
+                    label="PO cheques"
                     value={guaranteeStatus.poPendingOutgoingTotal}
                     valueClassName="text-amber-900"
                     hint="All distributors combined"
@@ -1002,10 +1078,10 @@ export default function AnalyticsPage() {
                       dist.nearestExpiry?.status === 'near' || dist.nearestExpiry?.status === 'expired'
                         ? formatGuaranteeExpiryHint(dist.nearestExpiry)
                         : dist.poPendingCount > 0
-                          ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
+                          ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} issued`
                           : dist.nearestExpiry?.status === 'ok'
                             ? `Expires ${formatDisplayDate(dist.nearestExpiry.expireDate)}`
-                            : 'No pending PO cheques'
+                            : 'No issued PO cheques'
                     }
                     badge={
                       <span className="inline-flex flex-wrap items-center gap-1">
@@ -1027,12 +1103,12 @@ export default function AnalyticsPage() {
                     }
                     fields={[
                       { label: 'Guarantee', value: formatLkrCompact(dist.totalGuarantee) },
-                      { label: 'PO pending', value: formatLkrCompact(dist.pendingTotal) },
+                      { label: 'PO cheques', value: formatLkrCompact(dist.pendingTotal) },
                       {
                         label: 'Available',
                         value: (
                           <span className={guaranteeAvailableToneClass(dist.available)}>
-                            {formatLkrCompact(dist.available)}
+                            {formatLkrSigned(dist.available)}
                           </span>
                         ),
                       },
@@ -1053,78 +1129,102 @@ export default function AnalyticsPage() {
               </div>
 
               <div className={`hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[38rem] border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
-                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <th className={`px-4 py-2.5 ${stickyFirstTh}`}>Distributor</th>
-                      <th className="whitespace-nowrap px-3 py-2.5 text-right">Guarantee</th>
-                      <th className="whitespace-nowrap px-3 py-2.5 text-right">PO pending</th>
-                      <th className="whitespace-nowrap px-3 py-2.5 text-right">Available</th>
-                      <th className="whitespace-nowrap px-3 py-2.5">Expiry</th>
-                      <th className="min-w-[8rem] px-3 py-2.5">Utilization</th>
+                    <tr className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`px-3 py-2 ${stickyFirstTh}`}>Distributor</th>
+                      <th className="whitespace-nowrap px-2 py-2 text-right">Guarantee</th>
+                      <th className="whitespace-nowrap px-2 py-2 text-right">PO cheques</th>
+                      <th className="whitespace-nowrap px-2 py-2 text-right">Available</th>
+                      <th className="min-w-[6.5rem] whitespace-nowrap px-2 py-2">Used</th>
+                      <th className="whitespace-nowrap px-3 py-2">Expiry</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                  <tbody className="text-slate-800">
                     {distributorGuaranteeStatuses.map((dist) => (
-                      <tr key={dist.distributorId} className="hover:bg-slate-50/70">
-                        <td className={`max-w-[12rem] px-4 py-2.5 ${stickyFirstTd}`}>
-                          <span className="block font-medium text-slate-900">{dist.distributorName}</span>
-                          <span className="mt-0.5 block text-xs text-slate-500">
-                            {dist.poPendingCount > 0
-                              ? `${dist.poPendingCount} PO cheque${dist.poPendingCount === 1 ? '' : 's'} pending`
-                              : dist.hasGuarantee
-                                ? 'No pending PO cheques'
-                                : 'No guarantee recorded'}
-                          </span>
-                          <span className="mt-1 inline-flex flex-wrap gap-1">
-                            <GuaranteeExpiryBadge expiryInfo={dist.nearestExpiry} />
+                      <tr key={dist.distributorId} className={guaranteeStatusRowClass(dist)}>
+                        <td className={`min-w-0 max-w-[14rem] border-b border-slate-100 px-3 py-2 ${guaranteeStatusStickyTdClass(dist)}`}>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="min-w-0 truncate font-medium text-slate-900" title={dist.distributorName}>
+                              {dist.distributorName}
+                            </span>
                             {dist.overLimit ? (
-                              <span className="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-800">
-                                Over limit
+                              <span className="shrink-0 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                                Over
+                              </span>
+                            ) : !dist.hasGuarantee ? (
+                              <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                                None
                               </span>
                             ) : null}
-                          </span>
+                          </div>
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
+                        <td className="whitespace-nowrap border-b border-slate-100 px-2 py-2 text-right font-semibold tabular-nums text-slate-900">
                           {formatLkrCompact(dist.totalGuarantee)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-violet-900">
-                          {formatLkrCompact(dist.pendingTotal)}
+                        <td className="whitespace-nowrap border-b border-slate-100 px-2 py-2 text-right tabular-nums">
+                          <span className="font-semibold text-violet-900">{formatLkrCompact(dist.pendingTotal)}</span>
+                          {dist.poPendingCount > 0 ? (
+                            <span
+                              className="ml-1 text-[10px] font-medium text-slate-400"
+                              title={`${dist.poPendingCount} issued PO cheque${dist.poPendingCount === 1 ? '' : 's'}`}
+                            >
+                              {dist.poPendingCount}
+                            </span>
+                          ) : null}
                         </td>
                         <td
-                          className={`whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums ${guaranteeAvailableToneClass(dist.available)}`}
+                          className={`whitespace-nowrap border-b border-slate-100 px-2 py-2 text-right font-semibold tabular-nums ${guaranteeAvailableToneClass(dist.available)}`}
                         >
-                          {formatLkrCompact(dist.available)}
+                          {formatLkrSigned(dist.available)}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-xs">
-                          {dist.nearestExpiry?.status && dist.nearestExpiry.status !== 'none' ? (
-                            <span
-                              className={
-                                dist.nearestExpiry.status === 'expired'
-                                  ? 'font-semibold text-rose-700'
-                                  : dist.nearestExpiry.status === 'near'
-                                    ? 'font-semibold text-amber-800'
-                                    : 'text-slate-600'
-                              }
-                            >
-                              {dist.nearestExpiry.status === 'ok'
-                                ? formatDisplayDate(dist.nearestExpiry.expireDate)
-                                : formatGuaranteeExpiryHint(dist.nearestExpiry)}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5">
+                        <td className="border-b border-slate-100 px-2 py-2">
                           {dist.hasGuarantee ? (
                             <GuaranteeUtilizationBar pct={dist.utilizationPct} overLimit={dist.overLimit} />
                           ) : (
-                            <span className="text-xs text-amber-800">—</span>
+                            <span className="text-xs text-slate-400">—</span>
                           )}
+                        </td>
+                        <td className="whitespace-nowrap border-b border-slate-100 px-3 py-2 text-xs">
+                          <GuaranteeExpiryCell expiryInfo={dist.nearestExpiry} />
                         </td>
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot className="sticky bottom-0 z-10 border-t border-slate-200 bg-slate-50/95 backdrop-blur-sm">
+                    <tr className="text-sm font-semibold text-slate-900">
+                      <td className={`px-3 py-2 ${stickyFirstTh}`}>
+                        Total ({distributorGuaranteeStatuses.length})
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
+                        {formatLkrCompact(guaranteeTableTotals.totalGuarantee)}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums text-violet-900">
+                        {formatLkrCompact(guaranteeTableTotals.pendingTotal)}
+                        {guaranteeTableTotals.poPendingCount > 0 ? (
+                          <span className="ml-1 text-[10px] font-medium text-slate-400">
+                            {guaranteeTableTotals.poPendingCount}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td
+                        className={`whitespace-nowrap px-2 py-2 text-right tabular-nums ${guaranteeAvailableToneClass(guaranteeTableTotals.available)}`}
+                      >
+                        {formatLkrSigned(guaranteeTableTotals.available)}
+                      </td>
+                      <td className="px-2 py-2">
+                        {guaranteeTableTotals.totalGuarantee > 0 ? (
+                          <GuaranteeUtilizationBar
+                            pct={guaranteeTableTotals.utilizationPct}
+                            overLimit={guaranteeTableTotals.overLimit}
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs font-medium text-slate-500">—</td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 

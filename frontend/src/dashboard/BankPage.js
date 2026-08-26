@@ -8,7 +8,11 @@ import CashBookChequeDepositModal from './CashBookChequeDepositModal';
 import CashBookCompanyChequeModal from './CashBookCompanyChequeModal';
 import CashBookOwnerShareModal from './CashBookOwnerShareModal';
 import CashBookBankGuaranteeModal from './CashBookBankGuaranteeModal';
-import { summarizeGuaranteesByDistributor } from './guaranteeStatus';
+import {
+  collectPurchaseOrderOutgoingCheques,
+  computeGuaranteeStatusByDistributor,
+  summarizeGuaranteesByDistributor,
+} from './guaranteeStatus';
 import BankAccountMultiSelect, { formatBankAccountsLabel } from './BankAccountMultiSelect';
 import {
   CASHIER_EXPENSE_ACTIONS,
@@ -35,7 +39,7 @@ import {
   useTablePagination,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
-import { formatPoChequeWithBank } from './poChequeDisplay';
+import { formatPoChequeWithBank, isPoCashPayment } from './poChequeDisplay';
 import {
   buildCashBookLedgerRows,
   buildCashBookSourceEntries,
@@ -147,6 +151,7 @@ function collectPoOutgoingCheques(purchaseOrders) {
   const seen = new Set();
   const rows = [];
   for (const po of Array.isArray(purchaseOrders) ? purchaseOrders : []) {
+    if (po?.cancelled) continue;
     const cheques = Array.isArray(po.cheques) ? po.cheques : [];
     const mode = String(po.chequeMode ?? '').trim();
     const batchId = String(po.batchId ?? '').trim();
@@ -156,6 +161,7 @@ function collectPoOutgoingCheques(purchaseOrders) {
       if (!c || typeof c !== 'object') continue;
       if (c.cancelled) continue;
       if (c.chequeReturned) continue;
+      if (isPoCashPayment(c)) continue;
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = Math.max(0, Number(c.amount) || 0);
       if (!bankAccountId || amount <= 0) continue;
@@ -591,7 +597,7 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
 
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="min-w-0 rounded-[20px] bg-white p-4 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cash in</p>
           <CashierStatAmount loading={loading} value={ledgerSummary.debit} valueClassName="text-emerald-800" />
@@ -601,11 +607,6 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cash out</p>
           <CashierStatAmount loading={loading} value={ledgerSummary.credit} valueClassName="text-rose-800" />
           <p className="mt-1 text-sm text-slate-500">Credit · expenses & bank deposits</p>
-        </div>
-        <div className="min-w-0 rounded-[20px] bg-white p-4 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Net movement</p>
-          <CashierStatAmount loading={loading} value={ledgerSummary.netInPeriod} valueClassName="text-slate-900" />
-          <p className="mt-1 text-sm text-slate-500">In selected period</p>
         </div>
         <div className="min-w-0 rounded-[20px] bg-white p-4 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Closing balance</p>
@@ -1547,6 +1548,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
 
 function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
   const [guarantees, setGuarantees] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [distributors, setDistributors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1564,10 +1566,11 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     setLoading(true);
     setError(null);
     try {
-      const [bgRes, shopRes, distRes] = await Promise.all([
+      const [bgRes, shopRes, distRes, poRes] = await Promise.all([
         fetch(`${apiBase}/api/bank-guarantees`),
         fetch(`${apiBase}/api/shop`),
         fetch(`${apiBase}/api/distributors`),
+        fetch(`${apiBase}/api/purchase-orders`),
       ]);
       if (!bgRes.ok) throw new Error('Failed to load bank guarantees');
       const bgData = await bgRes.json();
@@ -1586,9 +1589,17 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
       } else {
         setDistributors([]);
       }
+
+      if (poRes.ok) {
+        const poData = await poRes.json();
+        setPurchaseOrders(Array.isArray(poData) ? poData : []);
+      } else {
+        setPurchaseOrders([]);
+      }
     } catch (e) {
       setError(e.message || 'Could not load bank guarantees');
       setGuarantees([]);
+      setPurchaseOrders([]);
     } finally {
       setLoading(false);
     }
@@ -1629,6 +1640,13 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
     () => summarizeGuaranteesByDistributor(guarantees.filter((row) => inDateRange(row.date, dateFrom, dateTo))),
     [guarantees, dateFrom, dateTo],
   );
+
+  const distributorGuaranteeStatuses = useMemo(() => {
+    return computeGuaranteeStatusByDistributor(guarantees, {
+      outgoingCheques: collectPurchaseOrderOutgoingCheques(purchaseOrders),
+      asOfDate: todayYmdLocal(),
+    });
+  }, [guarantees, purchaseOrders]);
 
   const totalAmount = useMemo(
     () => filteredRows.reduce((s, g) => s + Math.max(0, Number(g.amount) || 0), 0),
@@ -1724,14 +1742,16 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
         </div>
       </div>
 
-      {!loading && distributorSummaries.length > 0 ? (
+      {!loading && distributorGuaranteeStatuses.length > 0 ? (
         <section className="space-y-3">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">By distributor</h2>
-            <p className="mt-0.5 text-sm text-slate-500">Total collateral recorded per distributor in the current date range.</p>
+            <h2 className="text-sm font-bold text-slate-900">Status by distributor</h2>
+            <p className="mt-0.5 text-sm text-slate-500">
+              Live collateral vs issued PO cheques — same figures as Analytics.
+            </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {distributorSummaries.map((row) => (
+            {distributorGuaranteeStatuses.map((row) => (
               <button
                 key={row.distributorId ?? '__unassigned__'}
                 type="button"
@@ -1747,11 +1767,40 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
                     : 'bg-white ring-slate-100'
                 }`}
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{row.distributorName}</p>
-                <p className="mt-1 text-xl font-bold tabular-nums text-teal-900">{money(row.total)}</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {row.count} guarantee{row.count === 1 ? '' : 's'}
-                </p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{row.distributorName}</p>
+                  {row.overLimit ? (
+                    <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                      Over limit
+                    </span>
+                  ) : row.hasGuarantee ? (
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-teal-900">
+                      {row.utilizationPct}%
+                    </span>
+                  ) : (
+                    <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                      No guarantee
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xl font-bold tabular-nums text-teal-900">{money(row.totalGuarantee)}</p>
+                <p className="mt-1 text-sm text-slate-500">Guarantee</p>
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">PO cheques</dt>
+                    <dd className="mt-0.5 font-semibold tabular-nums text-violet-900">{money(row.pendingTotal)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Available</dt>
+                    <dd
+                      className={`mt-0.5 font-semibold tabular-nums ${
+                        row.available < 0 ? 'text-rose-700' : row.available > 0 ? 'text-emerald-800' : 'text-slate-700'
+                      }`}
+                    >
+                      {money(row.available)}
+                    </dd>
+                  </div>
+                </dl>
               </button>
             ))}
           </div>

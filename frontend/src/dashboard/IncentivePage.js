@@ -323,7 +323,7 @@ function formatLocationFromTo(from, to) {
   return `${f} | ${t}`;
 }
 
-/** One row per door-stock stock load × brand (bags > 0). */
+/** One row per door-step stock load × brand (bags > 0). */
 function buildDoorStockRows(loads, purchaseOrders, doorStockSettings, brands) {
   const settings = doorStockSettings || EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS;
   const poById = new Map(
@@ -1937,10 +1937,10 @@ export default function IncentivePage() {
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Door Stock Transport</h2>
+          <h2 className="text-base font-semibold text-slate-900">Door Step Transport</h2>
           {!loading ? (
             <p className="mt-1 text-sm text-slate-500">
-              Showing {filteredDoorStockRows.length} door stock line
+              Showing {filteredDoorStockRows.length} door step line
               {filteredDoorStockRows.length === 1 ? '' : 's'}
               {filteredDoorStockRows.length > 0
                 ? ` · Total transport ${money(doorStockTotals.amount)}`
@@ -2031,8 +2031,8 @@ export default function IncentivePage() {
         ) : filteredDoorStockRows.length === 0 ? (
           <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
             {doorStockRows.length === 0
-              ? 'No door stock loads yet. Mark a PO as door stock and record the load on the Loads page.'
-              : 'No door stock rows match your date or bag type filters.'}
+              ? 'No door step loads yet. Mark a PO as door step and record the load on the Loads page.'
+              : 'No door step rows match your date or bag type filters.'}
           </p>
         ) : (
           pagedDoorStockRows.map((r) => {
@@ -2092,8 +2092,8 @@ export default function IncentivePage() {
               <tr>
                 <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   {doorStockRows.length === 0
-                    ? 'No door stock loads yet. Mark a PO as door stock and record the load on the Loads page.'
-                    : 'No door stock rows match your date or bag type filters.'}
+                    ? 'No door step loads yet. Mark a PO as door step and record the load on the Loads page.'
+                    : 'No door step rows match your date or bag type filters.'}
                 </td>
               </tr>
             ) : (

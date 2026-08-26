@@ -244,6 +244,7 @@ const {
   findLastUnitPrice,
   lastPricesByProduct,
   cancelIssuedCheque,
+  cancelPurchaseOrder,
   isPoCashPayment,
 } = require('./models/purchaseOrdersStore');
 const { computeBankAccountBalances } = require('./models/bankAccountBalance');
@@ -344,7 +345,7 @@ app.put('/api/shop/door-stock-transport-settings', async (req, res) => {
     res.json(settings);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Failed to save door stock transport settings' });
+    res.status(500).json({ error: 'Failed to save door step transport settings' });
   }
 });
 
@@ -4539,7 +4540,7 @@ app.post('/api/purchase-orders', async (req, res) => {
         vehicleNumber,
         driverName,
         ...(driverId ? { driverId } : {}),
-        ...(doorStock ? { doorStock: true, notes: 'Door stock' } : {}),
+        ...(doorStock ? { doorStock: true, notes: 'Door step' } : {}),
         createdBy,
         createdAt,
       });
@@ -4626,6 +4627,9 @@ app.patch('/api/purchase-orders/:id', async (req, res) => {
     }
 
     const current = rows[idx];
+    if (current.cancelled) {
+      return res.status(400).json({ error: 'Cancelled purchase orders cannot be edited' });
+    }
     const date = body.date !== undefined ? String(body.date ?? '').trim() : current.date;
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
@@ -4753,6 +4757,79 @@ app.post('/api/purchase-orders/:id/cancel-cheque', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to cancel cheque' });
+  }
+});
+
+/** Admin: cancel a purchase order (and its unused payments). Blocked if already used on a load. */
+app.post('/api/purchase-orders/:id/cancel', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to cancel purchase orders' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can cancel purchase orders' });
+  }
+  try {
+    const poId = String(req.params.id ?? '').trim();
+    if (!poId) {
+      return res.status(400).json({ error: 'Purchase order id is required' });
+    }
+    const body = req.body || {};
+    const cancelledBy = String(body.cancelledBy ?? auth.username ?? '').trim();
+    if (!cancelledBy) {
+      return res.status(400).json({ error: 'cancelledBy (username) is required' });
+    }
+
+    const stocks = await readStocks();
+    const usedOn = [];
+    for (const load of stocks) {
+      const ids = Array.isArray(load.purchaseOrderIds) ? load.purchaseOrderIds : [];
+      if (ids.some((id) => String(id).trim() === poId)) {
+        usedOn.push(String(load.stockId || load.id || '').trim() || 'a load');
+      }
+    }
+    if (usedOn.length > 0) {
+      return res.status(400).json({
+        error: `This purchase order is already used on load ${usedOn[0]}. Remove it from the load first.`,
+      });
+    }
+
+    const rows = await readPurchaseOrders();
+    const result = cancelPurchaseOrder(rows, { poId, cancelledBy });
+    if (!result.ok) {
+      return res.status(result.error === 'Purchase order not found' ? 404 : 400).json({ error: result.error });
+    }
+
+    if (result.shouldCancelCashBook) {
+      const cashBook = await readCashBookEntries();
+      let cashTouched = false;
+      const nextCash = cashBook.map((entry) => {
+        if (String(entry.category ?? '').trim() !== 'purchase_order') return entry;
+        if (entry.cancelled) return entry;
+        const matchesPo = String(entry.poId ?? '').trim() === poId;
+        const matchesBatch =
+          result.chequeMode === 'shared' &&
+          result.batchId &&
+          String(entry.batchId ?? '').trim() === result.batchId;
+        if (!matchesPo && !matchesBatch) return entry;
+        cashTouched = true;
+        return {
+          ...entry,
+          cancelled: true,
+          cancelledAt: result.cancelledAt,
+          cancelledBy,
+        };
+      });
+      if (cashTouched) {
+        await writeCashBookEntries(nextCash);
+      }
+    }
+
+    await writePurchaseOrders(rows);
+    res.json({ ok: true, po: result.po, cancelledAt: result.cancelledAt });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to cancel purchase order' });
   }
 });
 

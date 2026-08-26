@@ -120,6 +120,85 @@ function computeBillPaymentAllocation(customer, bills, payments) {
   return { paidByBillId, pastPaid, custBills };
 }
 
+/**
+ * Each approved payment’s amount applied to a specific invoice (FIFO or explicit allocation).
+ * Opening past-bill amounts are not included — those have no invoice date for aging.
+ */
+export function listCustomerBillPaymentAllocations(customer, bills, payments) {
+  if (!customer) return [];
+  const nk = normalizeCustomerName(customer.name);
+  const custBills = sortBillsChronological(
+    (Array.isArray(bills) ? bills : []).filter(
+      (b) => normalizeCustomerName(b.customerName) === nk,
+    ),
+  );
+  const paidByBillId = new Map();
+  for (const b of custBills) {
+    const id = String(b.id ?? '').trim();
+    if (id) paidByBillId.set(id, 0);
+  }
+
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  let pastPaid = 0;
+  const allocations = [];
+
+  const custPayments = (Array.isArray(payments) ? payments : [])
+    .filter((p) => p.customerId === customer.id)
+    .sort(comparePaymentsChronological);
+
+  const pushAlloc = (payment, bill, amount) => {
+    const toward = toNonNegMoney(amount);
+    if (toward <= 0 || !bill) return;
+    const paymentDate = String(payment.date ?? '').slice(0, 10);
+    allocations.push({
+      paymentId: String(payment.id ?? '').trim(),
+      paymentDate,
+      bill,
+      amount: toward,
+    });
+  };
+
+  for (const p of custPayments) {
+    const credit = paymentCreditToCustomer(p);
+    if (credit <= 0) continue;
+
+    const explicit = getPaymentBillCashAllocations(p);
+    if (explicit.length > 0) {
+      for (const { billId, cashAmount } of explicit) {
+        if (!paidByBillId.has(billId)) continue;
+        const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
+        const total = toNonNegMoney(bill?.totalAmount);
+        const current = paidByBillId.get(billId) || 0;
+        const room = Math.max(0, toNonNegMoney(total - current));
+        const toward = Math.min(room, cashAmount);
+        paidByBillId.set(billId, toNonNegMoney(current + toward));
+        pushAlloc(p, bill, toward);
+      }
+      continue;
+    }
+
+    let remaining = credit;
+    const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
+    pastPaid = toNonNegMoney(pastPaid + towardPast);
+    remaining = toNonNegMoney(remaining - towardPast);
+
+    for (const bill of custBills) {
+      if (remaining <= 0) break;
+      const id = String(bill.id ?? '').trim();
+      if (!id) continue;
+      const total = toNonNegMoney(bill.totalAmount);
+      const current = paidByBillId.get(id) || 0;
+      const room = Math.max(0, toNonNegMoney(total - current));
+      const toward = Math.min(room, remaining);
+      paidByBillId.set(id, toNonNegMoney(current + toward));
+      remaining = toNonNegMoney(remaining - toward);
+      pushAlloc(p, bill, toward);
+    }
+  }
+
+  return allocations;
+}
+
 function todayYmdLocal() {
   const d = new Date();
   const y = d.getFullYear();

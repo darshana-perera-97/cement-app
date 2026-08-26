@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { getUsername } from '../auth';
+import { authFetch, getUsername, isAdmin } from '../auth';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import {
   LoadingSpinner,
@@ -18,6 +18,7 @@ import {
   stickyFirstTh,
   stickyThead,
   useTablePagination,
+  modalPanelClass,
   modalPanelClass4xl,
   ModalBackdrop,
 } from './tableToolbar';
@@ -359,6 +360,9 @@ export default function PurchaseOrdersPage() {
   const [dateTo, setDateTo] = useState('');
   const [distributorFilter, setDistributorFilter] = useState('');
   const [detailRow, setDetailRow] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelError, setCancelError] = useState(null);
   const [shopDetails, setShopDetails] = useState({ shopName: '' });
   const [lorryNumbers, setLorryNumbers] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -520,6 +524,7 @@ export default function PurchaseOrdersPage() {
         r.vehicleNumber,
         r.driverName,
         r.createdBy,
+        r.cancelled ? 'cancelled' : '',
         String(r.quantity ?? ''),
         String(r.unitPrice ?? ''),
         String(r.lineTotal ?? r.totalAmount ?? ''),
@@ -941,6 +946,53 @@ export default function PurchaseOrdersPage() {
     });
   };
 
+  const openCancelConfirm = (po, e) => {
+    e?.stopPropagation?.();
+    setCancelError(null);
+    setCancelTarget(po);
+  };
+
+  const closeCancelConfirm = () => {
+    if (cancelBusy) return;
+    setCancelTarget(null);
+    setCancelError(null);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!cancelTarget?.id) return;
+    const username = getUsername();
+    if (!username) {
+      setCancelError('Sign in as admin to cancel purchase orders.');
+      return;
+    }
+    setCancelBusy(true);
+    setCancelError(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/purchase-orders/${encodeURIComponent(cancelTarget.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancelledBy: username }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCancelError(data.error || 'Could not cancel purchase order');
+        return;
+      }
+      await load();
+      const cancelledPo = data.po || { ...cancelTarget, cancelled: true };
+      if (detailRow?.id === cancelTarget.id) {
+        setDetailRow(cancelledPo);
+      }
+      setCancelTarget(null);
+    } catch {
+      setCancelError('Could not reach the server.');
+    } finally {
+      setCancelBusy(false);
+    }
+  };
+
+  const adminCanCancel = (po) => isAdmin() && po && !po.cancelled;
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1034,6 +1086,14 @@ export default function PurchaseOrdersPage() {
                 key={r.id}
                 title={r.poNumber || '—'}
                 subtitle={r.date || '—'}
+                className={r.cancelled ? 'opacity-75' : ''}
+                badge={
+                  r.cancelled ? (
+                    <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 ring-1 ring-rose-100">
+                      Cancelled
+                    </span>
+                  ) : null
+                }
                 fields={[
                   { label: 'Product', value: r.product || '—' },
                   { label: 'Amount', value: String(r.quantity ?? '—') },
@@ -1055,6 +1115,15 @@ export default function PurchaseOrdersPage() {
                     >
                       PDF
                     </button>
+                    {adminCanCancel(r) ? (
+                      <button
+                        type="button"
+                        onClick={(e) => openCancelConfirm(r, e)}
+                        className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
                   </>
                 }
               />
@@ -1099,11 +1168,16 @@ export default function PurchaseOrdersPage() {
                 pagedRows.map((r) => (
                   <tr
                     key={r.id}
-                    className="cursor-pointer hover:bg-slate-50/80"
+                    className={`cursor-pointer hover:bg-slate-50/80 ${r.cancelled ? 'opacity-75' : ''}`}
                     {...detailRowAttrs(() => setDetailRow(r))}
                   >
                     <td className={`whitespace-nowrap px-4 py-2.5 ${stickyFirstTd}`}>
                       <span className="font-mono text-xs font-semibold text-indigo-700">{r.poNumber || '—'}</span>
+                      {r.cancelled ? (
+                        <span className="ml-2 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 ring-1 ring-rose-100">
+                          Cancelled
+                        </span>
+                      ) : null}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{r.date || '—'}</td>
                     <td className="px-3 py-2.5 text-slate-800">{r.product || '—'}</td>
@@ -1137,6 +1211,15 @@ export default function PurchaseOrdersPage() {
                         >
                           PDF
                         </button>
+                        {adminCanCancel(r) ? (
+                          <button
+                            type="button"
+                            onClick={(e) => openCancelConfirm(r, e)}
+                            className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1165,16 +1248,78 @@ export default function PurchaseOrdersPage() {
         variant="purchaseOrder"
         actions={
           detailRow ? (
-            <button
-              type="button"
-              onClick={() => handleDownloadPdf(detailRow)}
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
-            >
-              Download PO PDF
-            </button>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleDownloadPdf(detailRow)}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
+              >
+                Download PO PDF
+              </button>
+              {adminCanCancel(detailRow) ? (
+                <button
+                  type="button"
+                  onClick={(e) => openCancelConfirm(detailRow, e)}
+                  className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-500"
+                >
+                  Cancel purchase order
+                </button>
+              ) : null}
+            </div>
           ) : null
         }
       />
+
+      {cancelTarget ? (
+        <div className="fixed inset-0 z-[110] flex items-end justify-center p-4 sm:items-center">
+          <ModalBackdrop onClose={closeCancelConfirm} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="po-cancel-title"
+            className={`${modalPanelClass} w-full max-w-md`}
+          >
+            <h2 id="po-cancel-title" className="text-lg font-bold text-slate-900">
+              Cancel purchase order?
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              This will cancel{' '}
+              <span className="font-semibold text-slate-900">{cancelTarget.poNumber || 'this PO'}</span>
+              {cancelTarget.product ? (
+                <>
+                  {' '}
+                  for <span className="font-semibold text-slate-900">{cancelTarget.product}</span>
+                </>
+              ) : null}
+              . Issued cheques for this order will be removed from bank balances, and cash payments will be
+              reversed from the cash book. This cannot be undone.
+            </p>
+            {cancelError ? (
+              <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+                {cancelError}
+              </p>
+            ) : null}
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={cancelBusy}
+                onClick={closeCancelConfirm}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Keep PO
+              </button>
+              <button
+                type="button"
+                disabled={cancelBusy}
+                onClick={handleConfirmCancel}
+                className="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+              >
+                {cancelBusy ? 'Cancelling…' : 'Cancel purchase order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {modalOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
@@ -1478,9 +1623,9 @@ export default function PurchaseOrdersPage() {
                   className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 <span className="text-sm text-slate-800">
-                  <span className="font-semibold">Door stock</span>
+                  <span className="font-semibold">Door step</span>
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                    When ticked, &ldquo;Door stock&rdquo; appears under Notes on the PO PDF.
+                    When ticked, &ldquo;Door step&rdquo; appears under Notes on the PO PDF.
                   </span>
                 </span>
               </label>

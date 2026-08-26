@@ -65,6 +65,7 @@ function appendPendingChequeEntries(entries, payments, cashBookEntries) {
   });
 
   for (const e of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    if (e.cancelled) continue;
     const category = String(e.category ?? '').trim();
     if (category === 'company_cheque') {
       appendPendingIncomingChequeEntry(entries, e, {
@@ -170,6 +171,7 @@ export function buildCashBookSourceEntries(payments, cashBookEntries, promotions
   appendPendingChequeEntries(entries, payments, cashBookEntries);
 
   for (const e of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    if (e.cancelled) continue;
     const date = String(e.date ?? '').slice(0, 10);
     const category = String(e.category ?? '').trim();
     if (category === 'company_cheque') continue;

@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { isPoCashPayment, poChequeBankLabel } from './poChequeDisplay';
+import { doorStepNotesText, isPoCashPayment, poChequeBankLabel } from './poChequeDisplay';
 
 const MARGIN = 16;
 const BLACK = [0, 0, 0];
@@ -335,7 +335,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   });
   y = (doc.lastAutoTable?.finalY || y) + 10;
 
-  const notesText = String(po.notes ?? '').trim() || (po.doorStock ? 'Door stock' : '');
+  const notesText = doorStepNotesText(po);
   if (notesText) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
