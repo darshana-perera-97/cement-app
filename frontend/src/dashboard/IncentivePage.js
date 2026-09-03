@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canEditDetails } from '../auth';
 import { getApiBase } from '../apiBase';
-import { getCachedBrands } from './brandTheme';
+import { getCachedBrands, productToBrandKey } from './brandTheme';
 import { useBagProducts } from './BagProductsContext';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
@@ -298,15 +298,6 @@ function moneyOrDashStyled(n) {
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
-}
-
-function productToBrandKey(product, brands) {
-  const p = String(product || '').toLowerCase();
-  if (!p) return null;
-  for (const b of brands) {
-    if (p.includes(b.key) || p.includes(b.label.toLowerCase())) return b.key;
-  }
-  return null;
 }
 
 function resolveDoorStockLocations(brandKey, settings, poFromFallback) {

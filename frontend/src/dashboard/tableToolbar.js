@@ -88,6 +88,9 @@ export const modalPanelClassMd =
 export const modalPanelClass2xl =
   'relative z-10 min-h-0 w-full max-h-[min(90vh,calc(100dvh-3rem))] max-w-2xl overflow-y-auto overscroll-contain rounded-t-2xl rounded-b-none bg-white p-4 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl sm:p-6';
 
+export const modalPanelClass3xl =
+  'relative z-10 min-h-0 w-full max-h-[min(90vh,calc(100dvh-3rem))] max-w-3xl overflow-y-auto overscroll-contain rounded-t-2xl rounded-b-none bg-white p-4 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl sm:p-6';
+
 export const modalPanelClass4xl =
   'relative z-10 min-h-0 w-full max-h-[min(90vh,calc(100dvh-3rem))] max-w-6xl overflow-y-auto overscroll-contain rounded-t-2xl rounded-b-none bg-white p-4 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl sm:p-6';
 

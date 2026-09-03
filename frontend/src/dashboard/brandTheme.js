@@ -68,6 +68,37 @@ export const THEME_PALETTES = [
   },
 ];
 
+function slugifyProductName(name) {
+  return (
+    String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_|_$/g, '')
+  );
+}
+
+/**
+ * Map a purchase-order product name to the matching bag-product key.
+ * Uses exact label / key / slug only — substring matches like "tokyo" inside
+ * "Tokyo Superbond …" would otherwise load stock onto the wrong product.
+ */
+export function productToBrandKey(product, brands) {
+  const raw = String(product || '').trim();
+  if (!raw || !Array.isArray(brands) || brands.length === 0) return null;
+  const p = raw.toLowerCase();
+  const slug = slugifyProductName(raw);
+
+  for (const b of brands) {
+    if (String(b.label || '').trim().toLowerCase() === p) return b.key;
+  }
+  for (const b of brands) {
+    const k = String(b.key || '').toLowerCase();
+    if (k && (k === p || (slug && k === slug))) return b.key;
+  }
+  return null;
+}
+
 /** Build themed brand rows from `/api/bag-products` payload. */
 export function buildBrands(products) {
   const list = Array.isArray(products) ? products : [];

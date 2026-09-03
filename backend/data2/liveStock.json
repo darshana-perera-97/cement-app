@@ -1,0 +1,174 @@
+{
+  "updatedAt": "2026-08-07T13:53:57.448Z",
+  "bags": {
+    "tokyo": 53,
+    "samudra": 559,
+    "adhesive": 29
+  },
+  "dailyLedger": {
+    "generatedAt": "2026-08-07T13:53:57.448Z",
+    "days": [
+      {
+        "date": "2026-08-01",
+        "brands": {
+          "tokyo": {
+            "start": 0,
+            "in": 0,
+            "out": 1,
+            "end": -1
+          },
+          "samudra": {
+            "start": 0,
+            "in": 0,
+            "out": 2,
+            "end": -2
+          },
+          "adhesive": {
+            "start": 0,
+            "in": 0,
+            "out": 0,
+            "end": 0
+          }
+        }
+      },
+      {
+        "date": "2026-08-02",
+        "brands": {
+          "tokyo": {
+            "start": -1,
+            "in": 20,
+            "out": 0,
+            "end": 19
+          },
+          "samudra": {
+            "start": -2,
+            "in": 0,
+            "out": 0,
+            "end": -2
+          },
+          "adhesive": {
+            "start": 0,
+            "in": 0,
+            "out": 0,
+            "end": 0
+          }
+        }
+      },
+      {
+        "date": "2026-08-03",
+        "brands": {
+          "tokyo": {
+            "start": 19,
+            "in": 0,
+            "out": 9,
+            "end": 10
+          },
+          "samudra": {
+            "start": -2,
+            "in": 0,
+            "out": 0,
+            "end": -2
+          },
+          "adhesive": {
+            "start": 0,
+            "in": 0,
+            "out": 0,
+            "end": 0
+          }
+        }
+      },
+      {
+        "date": "2026-08-04",
+        "brands": {
+          "tokyo": {
+            "start": 10,
+            "in": 22,
+            "out": 24,
+            "end": 8
+          },
+          "samudra": {
+            "start": -2,
+            "in": 50,
+            "out": 33,
+            "end": 15
+          },
+          "adhesive": {
+            "start": 0,
+            "in": 0,
+            "out": 0,
+            "end": 0
+          }
+        }
+      },
+      {
+        "date": "2026-08-05",
+        "brands": {
+          "tokyo": {
+            "start": 8,
+            "in": 55,
+            "out": 20,
+            "end": 43
+          },
+          "samudra": {
+            "start": 15,
+            "in": 625,
+            "out": 81,
+            "end": 559
+          },
+          "adhesive": {
+            "start": 0,
+            "in": 45,
+            "out": 16,
+            "end": 29
+          }
+        }
+      },
+      {
+        "date": "2026-08-06",
+        "brands": {
+          "tokyo": {
+            "start": 43,
+            "in": 0,
+            "out": 0,
+            "end": 43
+          },
+          "samudra": {
+            "start": 559,
+            "in": 0,
+            "out": 0,
+            "end": 559
+          },
+          "adhesive": {
+            "start": 29,
+            "in": 0,
+            "out": 0,
+            "end": 29
+          }
+        }
+      },
+      {
+        "date": "2026-08-07",
+        "brands": {
+          "tokyo": {
+            "start": 43,
+            "in": 10,
+            "out": 0,
+            "end": 53
+          },
+          "samudra": {
+            "start": 559,
+            "in": 0,
+            "out": 0,
+            "end": 559
+          },
+          "adhesive": {
+            "start": 29,
+            "in": 0,
+            "out": 0,
+            "end": 29
+          }
+        }
+      }
+    ]
+  }
+}

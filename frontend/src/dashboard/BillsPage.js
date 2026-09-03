@@ -26,7 +26,7 @@ import {
   stickyFirstThTransparent,
   stickyTheadTransparent,
   useTablePagination,
-  modalPanelClass,
+  modalPanelClass3xl,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 
@@ -70,11 +70,69 @@ function formFromBill(bill, customers, brands) {
   return f;
 }
 
-function BillSaleFormFields({ form, customers, brands, onChange, isEdit = false }) {
+function normalizeCustomerNameKey(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function formatUnitPrice(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return '';
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+}
+
+/** Newest non-zero unit price per brand, keyed by customer id. */
+function lastUnitPricesByCustomerId(bills, customers, brands) {
+  const nameToId = new Map();
+  for (const c of customers) {
+    const nk = normalizeCustomerNameKey(c.name);
+    const id = String(c.id ?? '').trim();
+    if (nk && id && !nameToId.has(nk)) nameToId.set(nk, id);
+  }
+  const sorted = [...(Array.isArray(bills) ? bills : [])].sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+  const out = new Map();
+  for (const bill of sorted) {
+    const id = nameToId.get(normalizeCustomerNameKey(bill.customerName));
+    if (!id) continue;
+    if (!out.has(id)) out.set(id, {});
+    const prices = out.get(id);
+    for (const b of brands) {
+      if (prices[b.key] != null) continue;
+      const p = Number(bill[`${b.key}UnitPrice`]);
+      if (Number.isFinite(p) && p > 0) prices[b.key] = p;
+    }
+  }
+  return out;
+}
+
+function fillLastPricesOnForm(form, brands, lastPrices, brandKey = null) {
+  if (!lastPrices || typeof lastPrices !== 'object') return form;
+  const keys = brandKey ? [brandKey] : brands.map((b) => b.key);
+  let next = form;
+  for (const key of keys) {
+    const bags = Number(form[`${key}Bags`]);
+    if (!Number.isFinite(bags) || bags < 1) continue;
+    if (String(form[`${key}UnitPrice`] ?? '').trim()) continue;
+    const filled = formatUnitPrice(lastPrices[key]);
+    if (!filled) continue;
+    if (next === form) next = { ...form };
+    next[`${key}UnitPrice`] = filled;
+  }
+  return next;
+}
+
+function BillSaleFormFields({ form, customers, brands, onChange, lastPrices = {}, isEdit = false }) {
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-sm font-medium text-slate-600">
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        <label className="block text-xs font-medium text-slate-600">
           Invoice #
           <input
             type="text"
@@ -83,32 +141,32 @@ function BillSaleFormFields({ form, customers, brands, onChange, isEdit = false 
             maxLength={40}
             value={form.invoiceNumber}
             onChange={(e) => onChange('invoiceNumber', e.target.value)}
-            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 font-mono text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
             placeholder="e.g. INV-012 or CS100"
           />
         </label>
-        <label className="block text-sm font-medium text-slate-600">
+        <label className="block text-xs font-medium text-slate-600">
           Date
           <input
             type="date"
             required
             value={form.date}
             onChange={(e) => onChange('date', e.target.value)}
-            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
           />
         </label>
-        <p className="text-xs font-normal text-slate-500 sm:col-span-2">
+        <p className="text-[11px] font-normal text-slate-500 sm:col-span-2">
           {isEdit
             ? 'Invoice # must be unique across all credit bills.'
             : 'Filled from the last saved invoice (+1). You can change it before saving.'}
         </p>
-        <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+        <label className="block text-xs font-medium text-slate-600 sm:col-span-2">
           Customer
           <select
             required
             value={form.customerId}
             onChange={(e) => onChange('customerId', e.target.value)}
-            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={customers.length === 0}
           >
             <option value="">
@@ -122,13 +180,24 @@ function BillSaleFormFields({ form, customers, brands, onChange, isEdit = false 
           </select>
         </label>
       </div>
-      <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
-        <div className="mt-3 space-y-3">
-          {brands.map((b) => (
-            <div key={b.key} className="grid grid-cols-1 items-end gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <span className="text-sm font-medium text-slate-800 sm:col-span-2 lg:col-span-1">{b.label}</span>
-              <label className="text-xs text-slate-500">
+      <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
+        <p className="mt-0.5 text-[10px] font-normal text-slate-400">
+          Price / bag fills from this customer&apos;s last credit sale when you enter bags. You can still edit it.
+        </p>
+        <div className="mt-2 space-y-2">
+          {brands.map((b) => {
+            const last = lastPrices[b.key];
+            const lastLabel = formatUnitPrice(last);
+            return (
+            <div key={b.key} className="grid grid-cols-1 items-end gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+              <span
+                className="min-w-0 truncate text-[11px] font-normal text-slate-700 sm:col-span-2 lg:col-span-1"
+                title={b.label}
+              >
+                {b.label}
+              </span>
+              <label className="text-[10px] text-slate-500">
                 Bags
                 <input
                   type="number"
@@ -136,22 +205,26 @@ function BillSaleFormFields({ form, customers, brands, onChange, isEdit = false 
                   step={1}
                   value={form[`${b.key}Bags`]}
                   onChange={(e) => onChange(`${b.key}Bags`, e.target.value)}
-                  className="mt-0.5 w-full rounded-lg border-0 bg-white px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                  className="mt-0.5 w-full rounded-lg border-0 bg-white px-2 py-1.5 text-xs tabular-nums ring-1 ring-slate-200"
                 />
               </label>
-              <label className="text-xs text-slate-500">
+              <label className="text-[10px] text-slate-500">
                 Price / bag
+                {lastLabel ? (
+                  <span className="ml-1 font-normal text-slate-400">· last {lastLabel}</span>
+                ) : null}
                 <input
                   type="number"
                   min={0}
                   step={0.01}
                   value={form[`${b.key}UnitPrice`]}
                   onChange={(e) => onChange(`${b.key}UnitPrice`, e.target.value)}
-                  className="mt-0.5 w-full rounded-lg border-0 bg-white px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                  className="mt-0.5 w-full rounded-lg border-0 bg-white px-2 py-1.5 text-xs tabular-nums ring-1 ring-slate-200"
                 />
               </label>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>
@@ -290,6 +363,13 @@ export default function BillsPage() {
 
   const filteredRows = useMemo(() => filterBillRows(rows), [rows, filterBillRows]);
 
+  const lastPricesMap = useMemo(
+    () => lastUnitPricesByCustomerId(rows, customers, brands),
+    [rows, customers, brands],
+  );
+
+  const selectedLastPrices = lastPricesMap.get(String(form.customerId || '')) || {};
+
   const pagination = useTablePagination(filteredRows.length, [search, stockFilter, dateFrom, dateTo]);
   const pagedRows = useMemo(
     () => filteredRows.slice(pagination.offset, pagination.offset + pagination.pageSize),
@@ -351,7 +431,19 @@ export default function BillsPage() {
       setForm((f) => ({ ...f, invoiceNumber: String(value).slice(0, 40) }));
       return;
     }
-    setForm((f) => ({ ...f, [field]: value }));
+    setForm((f) => {
+      const next = { ...f, [field]: value };
+      const customerId = field === 'customerId' ? value : next.customerId;
+      const last = lastPricesMap.get(String(customerId || '')) || {};
+      const bagsMatch = /^(.+)Bags$/.exec(String(field));
+      if (field === 'customerId') {
+        return fillLastPricesOnForm(next, brands, last);
+      }
+      if (bagsMatch) {
+        return fillLastPricesOnForm(next, brands, last, bagsMatch[1]);
+      }
+      return next;
+    });
   };
 
   const validateInvoiceNumber = (excludeBillId = null) => {
@@ -705,28 +797,34 @@ export default function BillsPage() {
           aria-labelledby="bills-add-title"
         >
           <button type="button" className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" aria-label="Close" onClick={closeAdd} />
-          <div className={modalPanelClass}>
-            <h2 id="bills-add-title" className="text-lg font-bold text-slate-900">
+          <div className={modalPanelClass3xl}>
+            <h2 id="bills-add-title" className="text-sm font-semibold text-slate-900">
               Record credit sale
             </h2>
-            <p className="mt-1 text-sm text-slate-500">Logged in as {getUsername() || '—'}</p>
-            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+            <p className="mt-1 text-xs text-slate-500">Logged in as {getUsername() || '—'}</p>
+            <form className="mt-4 space-y-3" onSubmit={handleSubmit}>
               {saveError ? (
-                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <BillSaleFormFields form={form} customers={customers} brands={brands} onChange={handleFormChange} />
-              <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <BillSaleFormFields
+                form={form}
+                customers={customers}
+                brands={brands}
+                onChange={handleFormChange}
+                lastPrices={selectedLastPrices}
+              />
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={closeAdd}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={saving || customers.length === 0}
-                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md disabled:opacity-60"
+                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-medium text-white shadow-md disabled:opacity-60"
                 >
                   {saving ? 'Saving…' : 'Save bill'}
                 </button>
@@ -744,28 +842,35 @@ export default function BillsPage() {
           aria-labelledby="bills-edit-title"
         >
           <button type="button" className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" aria-label="Close" onClick={closeBillEdit} />
-          <div className={modalPanelClass}>
-            <h2 id="bills-edit-title" className="text-lg font-bold text-slate-900">
+          <div className={modalPanelClass3xl}>
+            <h2 id="bills-edit-title" className="text-sm font-semibold text-slate-900">
               Edit credit sale
             </h2>
-            <p className="mt-1 text-sm text-slate-500">Logged in as {getUsername() || '—'}</p>
-            <form className="mt-5 space-y-4" onSubmit={handleEditSubmit}>
+            <p className="mt-1 text-xs text-slate-500">Logged in as {getUsername() || '—'}</p>
+            <form className="mt-4 space-y-3" onSubmit={handleEditSubmit}>
               {saveError ? (
-                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <BillSaleFormFields form={form} customers={customers} brands={brands} onChange={handleFormChange} isEdit />
-              <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <BillSaleFormFields
+                form={form}
+                customers={customers}
+                brands={brands}
+                onChange={handleFormChange}
+                lastPrices={selectedLastPrices}
+                isEdit
+              />
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={closeBillEdit}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={saving || customers.length === 0}
-                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md disabled:opacity-60"
+                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-medium text-white shadow-md disabled:opacity-60"
                 >
                   {saving ? 'Saving…' : 'Save changes'}
                 </button>

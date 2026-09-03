@@ -1,0 +1,12 @@
+{
+  "notifyBill": true,
+  "notifyPayment": true,
+  "notifyPromotion": true,
+  "notifyUnload": true,
+  "notifyChequeReturn": true,
+  "hideFinancialDetails": false,
+  "notifyOverdueBalance": true,
+  "overdueBalanceShareMode": "both",
+  "overdueReminderWeekday": 3,
+  "overdueReminderTime": "18:56"
+}

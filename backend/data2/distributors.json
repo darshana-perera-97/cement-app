@@ -1,0 +1,31 @@
+[
+  {
+    "id": "dist-1785755270692-4wcivnen",
+    "name": "Tokyo Cement PLC",
+    "locations": [
+      "Colombo",
+      "Trincomalee"
+    ],
+    "location": "Colombo",
+    "contact": "+94718197174",
+    "email": "dcharithya@gmail.com",
+    "products": [
+      "Tokyo",
+      "Samudra"
+    ],
+    "createdAt": "2026-08-03T11:07:50.692Z"
+  },
+  {
+    "id": "dist-1785900985119-vj6x4rzj",
+    "name": "Tile Mottah Company",
+    "locations": [
+      "Colombo"
+    ],
+    "location": "Colombo",
+    "contact": "077123456",
+    "products": [
+      "Adhesive"
+    ],
+    "createdAt": "2026-08-05T03:36:25.119Z"
+  }
+]

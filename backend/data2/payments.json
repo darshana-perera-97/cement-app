@@ -1,0 +1,1039 @@
+[
+  {
+    "id": "pay-1785755905570-mmisj4pc",
+    "date": "2026-08-03",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "001",
+    "amount": 1500,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T11:18:25.571Z",
+    "cheques": [
+      {
+        "id": "chq-1785755905570-physj2qf",
+        "amount": 500,
+        "chequeDate": "2026-08-04",
+        "chequeNumber": "SEY21453",
+        "chequeDeposited": true,
+        "chequeDepositedAt": "2026-08-04T16:58:08.221Z",
+        "chequeDepositedBy": "admin"
+      }
+    ],
+    "chequeAmount": 500,
+    "chequeDate": "2026-08-04",
+    "chequeNumber": "SEY21453",
+    "chequeDeposited": true,
+    "chequeDepositedAt": "2026-08-04T16:58:08.221Z",
+    "chequeDepositedBy": "admin"
+  },
+  {
+    "id": "pay-1785760163629-dyrholya",
+    "date": "2026-08-03",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "002",
+    "amount": 500,
+    "cashAmount": 0,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T12:29:23.630Z",
+    "cheques": [
+      {
+        "id": "chq-1785760163629-ff4tg0gs",
+        "amount": 500,
+        "chequeDate": "2026-08-02",
+        "chequeNumber": "g1235863",
+        "chequeDeposited": true,
+        "chequeDepositedAt": "2026-08-04T12:00:00.000Z",
+        "chequeDepositedBy": "admin",
+        "chequeDepositedBankAccountId": "bank-1785755180610-65y3mtr5",
+        "chequeDepositedBankAccount": {
+          "id": "bank-1785755180610-65y3mtr5",
+          "nickName": "Accc01",
+          "bank": "BOC",
+          "accountNumber": "111111",
+          "accountType": "Current"
+        },
+        "chequeReturned": true,
+        "chequeReturnedAt": "2026-08-04T15:42:44.283Z",
+        "chequeReturnedBy": "admin"
+      }
+    ],
+    "chequeAmount": 500,
+    "chequeDate": "2026-08-02",
+    "chequeNumber": "g1235863",
+    "chequeDeposited": true,
+    "chequeDepositedAt": "2026-08-04T12:00:00.000Z",
+    "chequeDepositedBy": "admin",
+    "chequeDepositedBankAccountId": "bank-1785755180610-65y3mtr5",
+    "chequeDepositedBankAccount": {
+      "id": "bank-1785755180610-65y3mtr5",
+      "nickName": "Accc01",
+      "bank": "BOC",
+      "accountNumber": "111111",
+      "accountType": "Current"
+    }
+  },
+  {
+    "id": "pay-1785819890073-lf1kw7e4",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "003",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T05:04:50.073Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785858078675-qbxai6fz",
+    "date": "2026-08-03",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "004",
+    "amount": 500,
+    "cashAmount": 0,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T15:41:18.675Z",
+    "cheques": [
+      {
+        "id": "chq-1785858078675-vj0ygdu3",
+        "amount": 500,
+        "chequeDate": "2026-08-03",
+        "chequeNumber": "258411",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 500,
+    "chequeDate": "2026-08-03",
+    "chequeNumber": "258411",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": ""
+  },
+  {
+    "id": "pay-1785861275092-sdo156a1",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "005",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T16:34:35.093Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785862498158-fnribhge",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "006",
+    "amount": 2000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T16:54:58.158Z",
+    "cheques": [
+      {
+        "id": "chq-1785862498158-72nug6sb",
+        "amount": 1000,
+        "chequeDate": "2026-08-03",
+        "chequeNumber": "852147",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 1000,
+    "chequeDate": "2026-08-03",
+    "chequeNumber": "852147",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": ""
+  },
+  {
+    "id": "pay-1785862533680-mwhwcqhx",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "007",
+    "amount": 600,
+    "cashAmount": 200,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T16:55:33.680Z",
+    "cheques": [
+      {
+        "id": "chq-1785862533680-anlcuho4",
+        "amount": 200,
+        "chequeDate": "2026-07-29",
+        "chequeNumber": "852369",
+        "chequeDeposited": true,
+        "chequeDepositedAt": "2026-08-04T12:00:00.000Z",
+        "chequeDepositedBy": "admin",
+        "chequeDepositedBankAccountId": "bank-1785755180610-65y3mtr5",
+        "chequeDepositedBankAccount": {
+          "id": "bank-1785755180610-65y3mtr5",
+          "nickName": "Accc01",
+          "bank": "BOC",
+          "accountNumber": "111111",
+          "accountType": "Current"
+        },
+        "chequeReturned": true,
+        "chequeReturnedAt": "2026-08-04T16:56:22.317Z",
+        "chequeReturnedBy": "admin"
+      },
+      {
+        "id": "chq-1785862533680-82vhcxt1",
+        "amount": 200,
+        "chequeDate": "2026-07-27",
+        "chequeNumber": "96547",
+        "chequeDeposited": true,
+        "chequeDepositedAt": "2026-08-04T12:00:00.000Z",
+        "chequeDepositedBy": "admin",
+        "chequeDepositedBankAccountId": "bank-1785755180610-65y3mtr5",
+        "chequeDepositedBankAccount": {
+          "id": "bank-1785755180610-65y3mtr5",
+          "nickName": "Accc01",
+          "bank": "BOC",
+          "accountNumber": "111111",
+          "accountType": "Current"
+        }
+      }
+    ],
+    "chequeAmount": 400,
+    "chequeDate": "2026-07-29",
+    "chequeNumber": "852369"
+  },
+  {
+    "id": "pay-1785862639975-kdn59f22",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "008",
+    "amount": 500,
+    "cashAmount": 500,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T16:57:19.975Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785862731913-cu7bl6tc",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "009",
+    "amount": 100,
+    "cashAmount": 0,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T16:58:51.913Z",
+    "cheques": [
+      {
+        "id": "chq-1785862731913-wnw18yxa",
+        "amount": 100,
+        "chequeDate": "2026-08-04",
+        "chequeNumber": "789654",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 100,
+    "chequeDate": "2026-08-04",
+    "chequeNumber": "789654",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": ""
+  },
+  {
+    "id": "pay-1785862862654-mdiagy63",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "010",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:01:02.654Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785755860328-pch6axkh",
+        "cashAmount": 100,
+        "billDate": "2026-08-03",
+        "billTotal": 10400
+      },
+      {
+        "billId": "bill-1785861248500-jv5gwtv7",
+        "cashAmount": 100,
+        "billDate": "2026-08-04",
+        "billTotal": 3980
+      },
+      {
+        "billId": "bill-1785861252080-pvfxqqsa",
+        "cashAmount": 800,
+        "billDate": "2026-08-04",
+        "billTotal": 3980
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785755860328-pch6axkh",
+      "bill-1785861248500-jv5gwtv7",
+      "bill-1785861252080-pvfxqqsa"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785755860328-pch6axkh",
+        "date": "2026-08-03",
+        "totalAmount": 10400
+      },
+      {
+        "id": "bill-1785861248500-jv5gwtv7",
+        "date": "2026-08-04",
+        "totalAmount": 3980
+      },
+      {
+        "id": "bill-1785861252080-pvfxqqsa",
+        "date": "2026-08-04",
+        "totalAmount": 3980
+      }
+    ]
+  },
+  {
+    "id": "pay-1785862974617-zrfra2gw",
+    "date": "2026-08-04",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "011",
+    "amount": 4000,
+    "cashAmount": 4000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:02:54.617Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785862612781-do941mzu",
+        "cashAmount": 4000,
+        "billDate": "2026-08-04",
+        "billTotal": 4000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785862612781-do941mzu"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785862612781-do941mzu",
+        "date": "2026-08-04",
+        "totalAmount": 4000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785863224045-zvergcb1",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "012",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:07:04.046Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785863054888-4zycnycg",
+        "cashAmount": 500,
+        "billDate": "2026-08-04",
+        "billTotal": 20000
+      },
+      {
+        "billId": "bill-1785863059131-1q5jlifa",
+        "cashAmount": 500,
+        "billDate": "2026-08-04",
+        "billTotal": 10000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785863054888-4zycnycg",
+      "bill-1785863059131-1q5jlifa"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785863054888-4zycnycg",
+        "date": "2026-08-04",
+        "totalAmount": 20000
+      },
+      {
+        "id": "bill-1785863059131-1q5jlifa",
+        "date": "2026-08-04",
+        "totalAmount": 10000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785863456740-mrphfj64",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "013",
+    "amount": 100,
+    "cashAmount": 100,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:10:56.740Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785863054888-4zycnycg",
+        "cashAmount": 50,
+        "billDate": "2026-08-04",
+        "billTotal": 20000
+      },
+      {
+        "billId": "bill-1785863059131-1q5jlifa",
+        "cashAmount": 50,
+        "billDate": "2026-08-04",
+        "billTotal": 10000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785863054888-4zycnycg",
+      "bill-1785863059131-1q5jlifa"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785863054888-4zycnycg",
+        "date": "2026-08-04",
+        "totalAmount": 20000
+      },
+      {
+        "id": "bill-1785863059131-1q5jlifa",
+        "date": "2026-08-04",
+        "totalAmount": 10000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785863493181-m2zcspq3",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "014",
+    "amount": 200,
+    "cashAmount": 200,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:11:33.181Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785863054888-4zycnycg",
+        "cashAmount": 20,
+        "billDate": "2026-08-04",
+        "billTotal": 20000
+      },
+      {
+        "billId": "bill-1785863059131-1q5jlifa",
+        "cashAmount": 180,
+        "billDate": "2026-08-04",
+        "billTotal": 10000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785863054888-4zycnycg",
+      "bill-1785863059131-1q5jlifa"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785863054888-4zycnycg",
+        "date": "2026-08-04",
+        "totalAmount": 20000
+      },
+      {
+        "id": "bill-1785863059131-1q5jlifa",
+        "date": "2026-08-04",
+        "totalAmount": 10000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785863570856-k3t1oi8c",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "015",
+    "amount": 200,
+    "cashAmount": 200,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:12:50.856Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785863581665-rzvy20ki",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "016",
+    "amount": 270,
+    "cashAmount": 270,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:13:01.665Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785863601582-kpwmu2ul",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "017",
+    "amount": 960,
+    "cashAmount": 960,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:13:21.582Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": ""
+  },
+  {
+    "id": "pay-1785863672124-ey9dug3m",
+    "date": "2026-08-04",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "018",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-04T17:14:32.125Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785863054888-4zycnycg",
+        "cashAmount": 730,
+        "billDate": "2026-08-04",
+        "billTotal": 20000
+      },
+      {
+        "billId": "bill-1785863059131-1q5jlifa",
+        "cashAmount": 270,
+        "billDate": "2026-08-04",
+        "billTotal": 10000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785863054888-4zycnycg",
+      "bill-1785863059131-1q5jlifa"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785863054888-4zycnycg",
+        "date": "2026-08-04",
+        "totalAmount": 20000
+      },
+      {
+        "id": "bill-1785863059131-1q5jlifa",
+        "date": "2026-08-04",
+        "totalAmount": 10000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785905624741-n1bydrwy",
+    "date": "2026-08-05",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "019",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T04:53:44.742Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785905296024-dp9wvme1",
+        "cashAmount": 300,
+        "billDate": "2026-08-05",
+        "billTotal": 3060
+      },
+      {
+        "billId": "bill-1785905377306-xt2atwsm",
+        "cashAmount": 200,
+        "billDate": "2026-08-05",
+        "billTotal": 2040
+      },
+      {
+        "billId": "bill-1785905179514-56fz40xz",
+        "cashAmount": 500,
+        "billDate": "2026-08-05",
+        "billTotal": 1000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785905296024-dp9wvme1",
+      "bill-1785905377306-xt2atwsm",
+      "bill-1785905179514-56fz40xz"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785905296024-dp9wvme1",
+        "date": "2026-08-05",
+        "totalAmount": 3060
+      },
+      {
+        "id": "bill-1785905377306-xt2atwsm",
+        "date": "2026-08-05",
+        "totalAmount": 2040
+      },
+      {
+        "id": "bill-1785905179514-56fz40xz",
+        "date": "2026-08-05",
+        "totalAmount": 1000
+      }
+    ]
+  },
+  {
+    "id": "pay-1785906327822-g5xikghh",
+    "date": "2026-08-05",
+    "customerId": "Customer-003",
+    "customerName": "Chaminda Stores",
+    "billNumber": "020",
+    "amount": 6000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T05:05:27.822Z",
+    "cheques": [
+      {
+        "id": "chq-1785906327822-wsed7ef4",
+        "amount": 5000,
+        "chequeDate": "2026-08-20",
+        "chequeNumber": "BOC687943",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 5000,
+    "chequeDate": "2026-08-20",
+    "chequeNumber": "BOC687943",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906239152-6816hwzr",
+        "cashAmount": 6000,
+        "billDate": "2026-08-05",
+        "billTotal": 20900
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906239152-6816hwzr"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906239152-6816hwzr",
+        "date": "2026-08-05",
+        "totalAmount": 20900
+      }
+    ]
+  },
+  {
+    "id": "pay-1785906649894-mihf8ek8",
+    "date": "2026-08-05",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "021",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T05:10:49.895Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906578296-y9xculk4",
+        "cashAmount": 1000,
+        "billDate": "2026-08-05",
+        "billTotal": 20650
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906578296-y9xculk4"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906578296-y9xculk4",
+        "date": "2026-08-05",
+        "totalAmount": 20650
+      }
+    ]
+  },
+  {
+    "id": "pay-1785907267323-a63dhy3r",
+    "date": "2026-08-05",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "022",
+    "amount": 2090,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T05:21:07.323Z",
+    "cheques": [
+      {
+        "id": "chq-1785907267323-7fqbdzj6",
+        "amount": 1090,
+        "chequeDate": "2026-08-09",
+        "chequeNumber": "sey678567",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 1090,
+    "chequeDate": "2026-08-09",
+    "chequeNumber": "sey678567",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785907196128-mnz9awru",
+        "cashAmount": 2080,
+        "billDate": "2026-08-05",
+        "billTotal": 2090
+      },
+      {
+        "billId": "bill-1785905377306-xt2atwsm",
+        "cashAmount": 10,
+        "billDate": "2026-08-05",
+        "billTotal": 2040
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785907196128-mnz9awru",
+      "bill-1785905377306-xt2atwsm"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785907196128-mnz9awru",
+        "date": "2026-08-05",
+        "totalAmount": 2090
+      },
+      {
+        "id": "bill-1785905377306-xt2atwsm",
+        "date": "2026-08-05",
+        "totalAmount": 2040
+      }
+    ]
+  },
+  {
+    "id": "pay-1785913233118-58gri1bf",
+    "date": "2026-08-05",
+    "customerId": "Customer-001",
+    "customerName": "Dulangi Stores",
+    "billNumber": "023",
+    "amount": 1000,
+    "cashAmount": 1000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T07:00:33.119Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785755860328-pch6axkh",
+        "cashAmount": 1000,
+        "billDate": "2026-08-03",
+        "billTotal": 10400
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785755860328-pch6axkh"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785755860328-pch6axkh",
+        "date": "2026-08-03",
+        "totalAmount": 10400
+      }
+    ]
+  },
+  {
+    "id": "pay-1785928467128-qa60v1qu",
+    "date": "2026-08-05",
+    "customerId": "C-0009",
+    "customerName": "Chathuranga Hardware",
+    "billNumber": "024",
+    "amount": 40000,
+    "cashAmount": 20000,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T11:14:27.129Z",
+    "cheques": [
+      {
+        "id": "chq-1785928467128-4lf9cccm",
+        "amount": 20000,
+        "chequeDate": "2026-08-13",
+        "chequeNumber": "BOC56724",
+        "chequeDeposited": false,
+        "chequeDepositedAt": "",
+        "chequeDepositedBy": ""
+      }
+    ],
+    "chequeAmount": 20000,
+    "chequeDate": "2026-08-13",
+    "chequeNumber": "BOC56724",
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785927492995-o8mgdlh2",
+        "cashAmount": 20000,
+        "billDate": "2026-08-05",
+        "billTotal": 100000
+      },
+      {
+        "billId": "bill-1785927657039-38mz0lyv",
+        "cashAmount": 20000,
+        "billDate": "2026-08-05",
+        "billTotal": 40200
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785927492995-o8mgdlh2",
+      "bill-1785927657039-38mz0lyv"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785927492995-o8mgdlh2",
+        "date": "2026-08-05",
+        "totalAmount": 100000
+      },
+      {
+        "id": "bill-1785927657039-38mz0lyv",
+        "date": "2026-08-05",
+        "totalAmount": 40200
+      }
+    ]
+  },
+  {
+    "id": "pay-1786079234957-3gmwc93r",
+    "date": "2026-08-07",
+    "customerId": "Customer-002",
+    "customerName": "DS",
+    "billNumber": "025",
+    "amount": 1000,
+    "cashAmount": 0,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-07T05:07:14.957Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "cdmAmount": 1000,
+    "cdmNumber": "12345",
+    "requiresApproval": true,
+    "approvalStatus": "approved",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785863054888-4zycnycg",
+        "cashAmount": 1000,
+        "billDate": "2026-08-04",
+        "billTotal": 20000
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785863054888-4zycnycg"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785863054888-4zycnycg",
+        "date": "2026-08-04",
+        "totalAmount": 20000
+      }
+    ],
+    "approvedBy": "admin",
+    "approvedAt": "2026-08-07T05:07:18.229Z"
+  },
+  {
+    "id": "pay-1786105069787-rjhdi84p",
+    "date": "2026-08-07",
+    "customerId": "Customer-003",
+    "customerName": "Chaminda Stores",
+    "billNumber": "026",
+    "amount": 100,
+    "cashAmount": 100,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-07T12:17:49.788Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906239152-6816hwzr",
+        "cashAmount": 100,
+        "billDate": "2026-08-05",
+        "billTotal": 20900
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906239152-6816hwzr"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906239152-6816hwzr",
+        "date": "2026-08-05",
+        "totalAmount": 20900
+      }
+    ]
+  },
+  {
+    "id": "pay-1786105110750-a6do4992",
+    "date": "2026-08-07",
+    "customerId": "Customer-003",
+    "customerName": "Chaminda Stores",
+    "billNumber": "027",
+    "amount": 4100,
+    "cashAmount": 4100,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-07T12:18:30.750Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906372765-6xjw5nvv",
+        "cashAmount": 4100,
+        "billDate": "2026-08-05",
+        "billTotal": 4200
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906372765-6xjw5nvv"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906372765-6xjw5nvv",
+        "date": "2026-08-05",
+        "totalAmount": 4200
+      }
+    ]
+  },
+  {
+    "id": "pay-1786105137916-3of3o9gk",
+    "date": "2026-08-07",
+    "customerId": "Customer-003",
+    "customerName": "Chaminda Stores",
+    "billNumber": "028",
+    "amount": 100,
+    "cashAmount": 100,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-07T12:18:57.916Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906372765-6xjw5nvv",
+        "cashAmount": 100,
+        "billDate": "2026-08-05",
+        "billTotal": 4200
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906372765-6xjw5nvv"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906372765-6xjw5nvv",
+        "date": "2026-08-05",
+        "totalAmount": 4200
+      }
+    ]
+  },
+  {
+    "id": "pay-1786112523785-4bsslzo5",
+    "date": "2026-08-07",
+    "customerId": "Customer-003",
+    "customerName": "Chaminda Stores",
+    "billNumber": "029",
+    "amount": 100,
+    "cashAmount": 100,
+    "note": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-07T14:22:03.785Z",
+    "chequeAmount": 0,
+    "chequeDate": "",
+    "chequeNumber": "",
+    "billCashAllocations": [
+      {
+        "billId": "bill-1785906239152-6816hwzr",
+        "cashAmount": 100,
+        "billDate": "2026-08-05",
+        "billTotal": 20900
+      }
+    ],
+    "appliedBillIds": [
+      "bill-1785906239152-6816hwzr"
+    ],
+    "appliedBills": [
+      {
+        "id": "bill-1785906239152-6816hwzr",
+        "date": "2026-08-05",
+        "totalAmount": 20900
+      }
+    ]
+  }
+]

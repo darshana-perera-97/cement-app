@@ -1,0 +1,71 @@
+{
+  "shopName": "Shakya2 Transport",
+  "addressLine1": "Wijayakatupotha",
+  "addressLine2": "Chilaw",
+  "contactNumber": "0718197174",
+  "email": "dcharithya@gmail.com",
+  "ownerName": "Chathuranga",
+  "registrationNo": "test-00001",
+  "dealerCode": "deletr-001",
+  "dealerTagline": "All in one solution",
+  "deliveryNote": "",
+  "supplierTin": "123456",
+  "collectorSeparateBillSettlement": true,
+  "collectorCommissionRates": {
+    "0-14": 0.25,
+    "15-21": 0.2,
+    "22-30": 0.15,
+    "30-35": 0,
+    "more than 35": 0
+  },
+  "bankAccounts": [
+    {
+      "id": "bank-1785755180610-65y3mtr5",
+      "nickName": "Acc-1",
+      "bank": "BOC",
+      "accountNumber": "111111",
+      "accountType": "Current",
+      "createdAt": "2026-08-03T11:06:20.610Z"
+    },
+    {
+      "id": "bank-1785755195026-i6bfp8ss",
+      "nickName": "Acc-2",
+      "bank": "BOC",
+      "accountNumber": "222222",
+      "accountType": "Current",
+      "createdAt": "2026-08-03T11:06:35.026Z"
+    }
+  ],
+  "products": [
+    {
+      "id": "prod-1786076220006-npglt2k3",
+      "name": "Tokyo",
+      "createdAt": "2026-08-07T04:17:00.006Z"
+    },
+    {
+      "id": "prod-1786076220014-oyhudymq",
+      "name": "Samudra",
+      "createdAt": "2026-08-07T04:17:00.014Z"
+    },
+    {
+      "id": "prod-1786076220014-f6lrh5ji",
+      "name": "Adhesive",
+      "createdAt": "2026-08-07T04:17:00.014Z"
+    }
+  ],
+  "doorStockTransportSettings": {
+    "companyName": "",
+    "companyAddress": "",
+    "companyTel": "",
+    "clientName": "",
+    "clientAddress": "",
+    "destination": "",
+    "bankAccountName": "",
+    "bankAccountNumber": "",
+    "bankName": "",
+    "bankBranch": "",
+    "nextInvoiceNumber": "",
+    "brandSettings": {},
+    "brandLocations": {}
+  }
+}

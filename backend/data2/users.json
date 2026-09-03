@@ -1,0 +1,47 @@
+[
+  {
+    "id": "usr-1785754799058-v5m8er1m",
+    "username": "97001",
+    "name": "Collector-01",
+    "contact": "+94718197174",
+    "nic": "97001",
+    "customerId": "",
+    "driverLicense": "",
+    "role": "Collector",
+    "access": [],
+    "password": "123456",
+    "passwordHash": "05a4800476ce504cadb15ce55493f97c:929c89c5e7ac839f8432706eca4c39c296433f9775be2c5ae76bbf0f500b752dc0fc5b97d859f6f8414d4742b401e0b77ee9bb0ca0dd623e32848aef077eabbf",
+    "createdAt": "2026-08-03T10:59:59.114Z",
+    "createdBy": "admin"
+  },
+  {
+    "id": "usr-1785754849588-zyyo1n96",
+    "username": "970123",
+    "name": "Driver-01",
+    "contact": "+94718197174",
+    "nic": "970123",
+    "customerId": "",
+    "driverLicense": "DL-00123456",
+    "role": "Driver",
+    "access": [],
+    "password": "123456",
+    "passwordHash": "3d3c4ff6804c9e9e97cc8aa0653b59d3:744a24782ff167172f4f28915d478b246a4ca121d59051d106cff86e0a8b28d83125024c941e28f993490ce14a0b5d2e9f36a45c6ab5161009530031918538b5",
+    "createdAt": "2026-08-03T11:00:49.647Z",
+    "createdBy": "admin"
+  },
+  {
+    "id": "usr-1785925318034-3fllakg5",
+    "username": "1234567",
+    "name": "drivern2",
+    "contact": "077",
+    "nic": "1234567",
+    "customerId": "",
+    "driverLicense": "DLC001",
+    "role": "Driver",
+    "access": [],
+    "password": "123456",
+    "passwordHash": "0f42d79d4584a4faade2ead2e1b53a7b:a4539e6dfb447e4472e93fdbfbcd3316cd61d047c5a2d82be656586fe151dd06a6615182c6d37a77d7781f2aa5860bc898d60cb23883157eaea871f985cff884",
+    "createdAt": "2026-08-05T10:21:58.099Z",
+    "createdBy": "admin"
+  }
+]

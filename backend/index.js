@@ -1755,10 +1755,18 @@ function lastBillUnitPricesForCustomer(bills, customerName, products) {
     if (da !== db) return db.localeCompare(da);
     return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
   });
-  const bill = matches[0];
-  const prices = { billId: bill.id, date: bill.date, customerName: bill.customerName };
+  const latest = matches[0];
+  const prices = { billId: latest.id, date: latest.date, customerName: latest.customerName };
   for (const p of products) {
-    prices[p.unitPriceField] = bill[p.unitPriceField];
+    let unit = null;
+    for (const bill of matches) {
+      const n = Number(bill[p.unitPriceField]);
+      if (Number.isFinite(n) && n > 0) {
+        unit = n;
+        break;
+      }
+    }
+    prices[p.unitPriceField] = unit;
   }
   return prices;
 }

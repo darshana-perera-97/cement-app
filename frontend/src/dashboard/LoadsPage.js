@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { canEditDetails, getUsername } from '../auth';
 import { useBagProducts } from './BagProductsContext';
+import { productToBrandKey } from './brandTheme';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -48,16 +49,6 @@ const emptyForm = (brands) => ({
   marginPerBag: String(DEFAULT_MARGIN_PER_BAG),
   ...emptyBrandFields(brands),
 });
-
-/** Map distributor product name (e.g. "Tokyo 50KG") → brand key. */
-function productToBrandKey(product, brands) {
-  const p = String(product || '').toLowerCase();
-  if (!p) return null;
-  for (const b of brands) {
-    if (p.includes(b.key) || p.includes(b.label.toLowerCase())) return b.key;
-  }
-  return null;
-}
 
 function formatAmount(n) {
   const v = Number(n) || 0;
@@ -844,8 +835,9 @@ export default function LoadsPage() {
                   Purchase orders
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Select one or more POs. Vehicle, bags, cost, and cheque are filled from the selection
-                  (you can still edit them). Enter invoice no. and cut-off price per brand.
+                  Select one or more POs. Bags and cost are applied only to each PO&apos;s product.
+                  Vehicle and cheque are filled from the selection (you can still edit them). Enter
+                  invoice no. and cut-off price per product.
                 </p>
                 {selectablePurchaseOrders.length === 0 ? (
                   <p className="mt-3 text-sm text-amber-800">
@@ -857,8 +849,12 @@ export default function LoadsPage() {
                     {selectablePurchaseOrders.map((po) => {
                       const id = String(po.id);
                       const checked = selectedPoIds.includes(id);
+                      const productName = String(po.product || '').trim() || '—';
                       const brandKey = productToBrandKey(po.product, brands);
                       const brandLabel = brands.find((b) => b.key === brandKey)?.label;
+                      const showMappedBrand =
+                        brandLabel &&
+                        brandLabel.trim().toLowerCase() !== productName.toLowerCase();
                       return (
                         <label
                           key={id}
@@ -877,8 +873,8 @@ export default function LoadsPage() {
                             <span className="text-slate-400"> · </span>
                             <span className="tabular-nums text-slate-600">{po.date || '—'}</span>
                             <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                              {po.product || '—'}
-                              {brandLabel ? ` (${brandLabel})` : ''}
+                              {productName}
+                              {showMappedBrand ? ` (${brandLabel})` : ''}
                               {' · '}
                               {Number(po.quantity) || 0} bags
                               {' · '}
@@ -989,8 +985,9 @@ export default function LoadsPage() {
                   Cement bags, cost, invoice & cheque (per brand)
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Only brands from the selected POs are shown. Bags, cost, cheque, and converting date come
-                  from POs and stay editable. Enter <span className="font-medium text-slate-700">invoice no.</span> and{' '}
+                  Only the product(s) from the selected POs are shown. Bags, cost, cheque, and converting
+                  date come from those POs and stay editable. Enter{' '}
+                  <span className="font-medium text-slate-700">invoice no.</span> and{' '}
                   <span className="font-medium text-slate-700">cut-off price</span> (cut-off loads last
                   price when available).
                 </p>

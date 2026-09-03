@@ -703,30 +703,39 @@ function RightPanel() {
       </div>
       <div className="shrink-0 rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-900">Bag stock (live)</h2>
-          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600">
-            <span className="relative flex h-2 w-2">
+          <h2 className="text-xs font-medium text-slate-900">Bag stock (live)</h2>
+          <span className="flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-wide text-emerald-600">
+            <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
             </span>
             Live
           </span>
         </div>
-        <p className="mt-0.5 text-xs text-slate-500">Total bags on hand across all loads</p>
+        <p className="mt-0.5 text-[11px] font-normal text-slate-500">Total bags on hand across all loads</p>
         {stockLoading ? (
           <div className="mt-4 flex justify-center"><LoadingSpinner label="Loading stock…" size="sm" className="text-slate-400" /></div>
         ) : stockError ? (
-          <p className="mt-4 text-sm text-rose-600">{stockError}</p>
+          <p className="mt-4 text-xs font-normal text-rose-600">{stockError}</p>
         ) : (
-          <ul className="mt-4 space-y-3">
+          <ul className="mt-3 space-y-1.5">
             {(stockSummary?.brands || []).map((b) => (
               <li
                 key={b.key}
-                className="flex items-center justify-between gap-3 rounded-xl bg-slate-50/90 px-3 py-2.5 ring-1 ring-slate-100"
+                className="group relative flex items-center justify-between gap-2 rounded-lg bg-slate-50/90 px-2.5 py-1.5 ring-1 ring-slate-100"
               >
-                <span className="text-sm font-semibold text-slate-800">{b.label}</span>
-                <span className="font-mono text-sm font-bold tabular-nums text-indigo-700">
-                  {Number(b.bags).toLocaleString()} <span className="text-[10px] font-semibold text-slate-500">bags</span>
+                <span className="min-w-0 truncate text-[11px] font-normal leading-snug text-slate-700">
+                  {b.label}
+                </span>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none invisible absolute left-1.5 right-1.5 top-full z-30 mt-0.5 rounded-md bg-slate-800 px-2 py-1.5 text-[10px] font-normal leading-snug text-white opacity-0 shadow-lg ring-1 ring-black/10 group-hover:visible group-hover:opacity-100"
+                >
+                  {b.label}
+                </span>
+                <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-indigo-700">
+                  {Number(b.bags).toLocaleString()}{' '}
+                  <span className="text-[9px] font-normal text-slate-500">bags</span>
                 </span>
               </li>
             ))}

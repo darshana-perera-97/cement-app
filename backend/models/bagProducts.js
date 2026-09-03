@@ -79,8 +79,14 @@ async function getBagProducts() {
 
   const seen = new Map();
   for (const label of names) {
-    const key = productToKey(label);
-    if (!key || seen.has(key)) continue;
+    let key = productToKey(label);
+    if (!key) continue;
+    // Distinct catalog names must not collapse onto one legacy key
+    // (e.g. "Tokyo Cement …" and "Tokyo Superbond …" both used to become `tokyo`).
+    if (seen.has(key)) {
+      key = slugifyProduct(label);
+      if (!key || seen.has(key)) continue;
+    }
     seen.set(key, label);
   }
   return Array.from(seen.entries()).map(([key, label]) => ({

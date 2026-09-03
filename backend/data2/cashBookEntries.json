@@ -1,0 +1,152 @@
+[
+  {
+    "id": "cbe-1785758129857-ei8c5k17",
+    "date": "2026-08-01",
+    "category": "company_cheque",
+    "amount": 10000,
+    "description": "Cheque #SEY889988",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T11:55:29.858Z",
+    "chequeNumber": "SEY889988",
+    "chequeDate": "2026-08-03",
+    "amountToAdd": 10000,
+    "chequeDeposited": false,
+    "chequeDepositedAt": "",
+    "chequeDepositedBy": ""
+  },
+  {
+    "id": "cbe-1785758166418-f5vph6sp",
+    "date": "2026-07-28",
+    "category": "company_cheque",
+    "amount": 1000,
+    "description": "Cheque #SEY558874",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T11:56:06.418Z",
+    "chequeNumber": "SEY558874",
+    "chequeDate": "2026-08-02",
+    "amountToAdd": 1000,
+    "chequeDeposited": true,
+    "chequeDepositedAt": "2026-08-03T12:00:00.000Z",
+    "chequeDepositedBy": "admin",
+    "chequeDepositedBankAccountId": "bank-1785755195026-i6bfp8ss",
+    "chequeDepositedBankAccount": {
+      "id": "bank-1785755195026-i6bfp8ss",
+      "nickName": "Acc-2",
+      "bank": "BOC",
+      "accountNumber": "222222",
+      "accountType": "Current"
+    }
+  },
+  {
+    "id": "cbe-1785758638998-dahyweoz",
+    "date": "2026-07-31",
+    "category": "company_cheque",
+    "amount": 500,
+    "description": "Cheque #AMN123456",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T12:03:58.999Z",
+    "chequeNumber": "AMN123456",
+    "chequeDate": "2026-07-27",
+    "amountToAdd": 500,
+    "chequeDeposited": true,
+    "chequeDepositedAt": "2026-08-03T12:00:00.000Z",
+    "chequeDepositedBy": "admin",
+    "chequeDepositedBankAccountId": "bank-1785755195026-i6bfp8ss",
+    "chequeDepositedBankAccount": {
+      "id": "bank-1785755195026-i6bfp8ss",
+      "nickName": "Acc-2",
+      "bank": "BOC",
+      "accountNumber": "222222",
+      "accountType": "Current"
+    }
+  },
+  {
+    "id": "cbe-1785767447944-s1h2uusg",
+    "date": "2026-08-03",
+    "category": "bank_deposit",
+    "amount": 100,
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-03T14:30:47.944Z",
+    "bankAccountIds": [
+      "bank-1785755180610-65y3mtr5"
+    ],
+    "bankAccounts": [
+      {
+        "id": "bank-1785755180610-65y3mtr5",
+        "nickName": "Accc01",
+        "bank": "BOC",
+        "accountNumber": "111111",
+        "accountType": "Current"
+      }
+    ],
+    "depositType": "bank_deposit"
+  },
+  {
+    "id": "cbe-1785915311824-gfzga1ha",
+    "date": "2026-08-05",
+    "category": "bank_deposit",
+    "amount": 520,
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T07:35:11.824Z",
+    "bankAccountIds": [
+      "bank-1785755180610-65y3mtr5"
+    ],
+    "bankAccounts": [
+      {
+        "id": "bank-1785755180610-65y3mtr5",
+        "nickName": "Accc01",
+        "bank": "BOC",
+        "accountNumber": "111111",
+        "accountType": "Current"
+      }
+    ],
+    "depositType": "bank_deposit"
+  },
+  {
+    "id": "cbe-1785931786642-sknfk3ey",
+    "date": "2026-08-05",
+    "category": "salary",
+    "amount": 10000,
+    "description": "advance payment",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T12:09:46.642Z",
+    "staffUserId": "usr-1785754849588-zyyo1n96",
+    "staffName": "Driver-01"
+  },
+  {
+    "id": "cbe-1785931843415-wo01kvf8",
+    "date": "2026-08-05",
+    "category": "salary",
+    "amount": 10000,
+    "description": "salary",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T12:10:43.415Z",
+    "staffUserId": "usr-1785754799058-v5m8er1m",
+    "staffName": "Collector-01"
+  },
+  {
+    "id": "cbe-1787411171459-237l6gjt",
+    "date": "2026-08-22",
+    "category": "salary",
+    "amount": 100,
+    "description": "est",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:06:11.459Z",
+    "staffUserId": "usr-1785754799058-v5m8er1m",
+    "staffName": "Collector-01"
+  },
+  {
+    "id": "cbe-1787411194179-vqprqr3q",
+    "date": "2026-08-22",
+    "category": "fuel",
+    "amount": 110,
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:06:34.179Z",
+    "lorryId": "lorry-1785755387694-554kb6ye",
+    "vehicleNumber": "LA-9899",
+    "meterReading": 586595
+  }
+]

@@ -1,0 +1,106 @@
+[
+  {
+    "id": "bg-1785900534481-j6xqint3",
+    "date": "2026-08-05",
+    "amount": 50000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T03:28:54.481Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC"
+  },
+  {
+    "id": "bg-1785901107050-0wlt5ags",
+    "date": "2026-07-01",
+    "amount": 50000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T03:38:27.050Z",
+    "distributorId": "dist-1785900985119-vj6x4rzj",
+    "distributorName": "Tile Mottah Company"
+  },
+  {
+    "id": "bg-1785901123732-o1gpj7cv",
+    "date": "2026-08-05",
+    "amount": 10000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T03:38:43.732Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC"
+  },
+  {
+    "id": "bg-1785912322503-8g0dg015",
+    "date": "2026-08-05",
+    "amount": 200000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-05T06:45:22.503Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC"
+  },
+  {
+    "id": "bg-1787411582681-e6ore91c",
+    "date": "2026-08-22",
+    "amount": 10000,
+    "guaranteeType": "property",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:13:02.681Z",
+    "distributorId": "dist-1785900985119-vj6x4rzj",
+    "distributorName": "Tile Mottah Company",
+    "expireDate": "2027-07-22"
+  },
+  {
+    "id": "bg-1787411676750-cy4q9qz7",
+    "date": "2026-08-22",
+    "amount": 50000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:14:36.750Z",
+    "distributorId": "dist-1785900985119-vj6x4rzj",
+    "distributorName": "Tile Mottah Company",
+    "expireDate": "2027-08-22"
+  },
+  {
+    "id": "bg-1787411747792-fdgljrpr",
+    "date": "2026-08-22",
+    "amount": 5000,
+    "guaranteeType": "fixed_deposit",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:15:47.792Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC",
+    "expireDate": "2027-08-22"
+  },
+  {
+    "id": "bg-1787411791454-j60g5ldk",
+    "date": "2026-08-22",
+    "amount": 10000,
+    "guaranteeType": "property",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:16:31.454Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC",
+    "expireDate": "2027-08-22"
+  },
+  {
+    "id": "bg-1787412857249-cx71xtd4",
+    "date": "2026-08-22",
+    "amount": 1207040,
+    "guaranteeType": "property",
+    "description": "",
+    "recordedBy": "admin",
+    "createdAt": "2026-08-22T15:34:17.249Z",
+    "distributorId": "dist-1785755270692-4wcivnen",
+    "distributorName": "Tokyo Cement PLC",
+    "expireDate": "2027-08-22"
+  }
+]
