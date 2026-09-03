@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -54,7 +54,7 @@ function buildHead() {
   return [
     [
       'Shop name',
-      ...brands.map((b) => `${b.label} bags`),
+      ...brands.map((b) => `${formatBrandLabel(b) || b.label} bags`),
       'Total bags',
       'Monthly target',
       'Completed',

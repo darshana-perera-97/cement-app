@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { formatBrandLabel } from './brandTheme';
 
 export function displayText(value) {
   const text = value == null ? '' : String(value).trim();
@@ -69,7 +70,9 @@ export function BrandSectionShell({ brand, active, emptyText, children }) {
     <section
       className={`overflow-hidden rounded-xl ring-1 ${active ? `${brand.ring} ring-slate-100` : 'ring-slate-100 opacity-80'}`}
     >
-      <div className={`px-3 py-2 text-sm font-semibold ${brand.ledger.head}`}>{brand.label}</div>
+      <div className={`px-3 py-2 text-sm font-semibold ${brand.ledger.head}`}>
+        {formatBrandLabel(brand) || brand.label}
+      </div>
       {active ? children : <p className="bg-white px-3 py-2.5 text-sm text-slate-400">{emptyText}</p>}
     </section>
   );

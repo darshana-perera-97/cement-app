@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch, getDisplayName, isCollector, isManagerOrAdmin } from '../auth';
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
@@ -112,7 +112,7 @@ function buildMonthlyBillRows(bills, settledByBillId, from, to) {
         rowKey: `${bill.id || date}-${brand.key}`,
         date,
         shop,
-        bagType: brand.label,
+        bagType: formatBrandLabel(brand) || brand.label,
         brandKey: brand.key,
         bagCount,
         amount: brandLineFromBill(bill, brand.key),
@@ -422,7 +422,7 @@ function buildStockDistributionRows(loads, bills, brandKey = '') {
           date,
           shop,
           brandKey: b.key,
-          bagType: b.label,
+          bagType: formatBrandLabel(b) || b.label,
           bags: chunk.bags,
           perBagPrice,
           totalAmount,
@@ -603,7 +603,7 @@ function BrandBagSummary({ byBrand, total, loadCount, brandKey = '' }) {
           key={b.key}
           className={`rounded-xl bg-gradient-to-br ${b.accent} p-4 text-white shadow-md ring-1 ${b.ring}`}
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-white/85">{b.label}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-white/85">{formatBrandLabel(b) || b.label}</p>
           <p className="mt-1 text-2xl font-bold tabular-nums">{(byBrand[b.key] || 0).toLocaleString()}</p>
           <p className="mt-0.5 text-xs text-white/75">bags</p>
         </div>
@@ -629,7 +629,7 @@ function BrandRemainingBreakdown({ byBrand, brandKey = '' }) {
           <span
             className={`inline-flex rounded-md px-1.5 py-0.5 font-semibold ${b.iconBg || 'bg-slate-100 text-slate-700'}`}
           >
-            {b.label}
+            {formatBrandLabel(b) || b.label}
           </span>
           <span className="font-semibold tabular-nums text-slate-800">
             {(byBrand?.[b.key] || 0).toLocaleString()}
@@ -1304,7 +1304,7 @@ export default function ReportsPage() {
           date,
           shop,
           location,
-          bagType: brand.label,
+          bagType: formatBrandLabel(brand) || brand.label,
           bagCount,
         });
       }
@@ -2237,7 +2237,7 @@ export default function ReportsPage() {
               <option value="">All brands</option>
               {brands.map((b) => (
                 <option key={b.key} value={b.key}>
-                  {b.label}
+                  {formatBrandLabel(b) || b.label}
                 </option>
               ))}
             </select>
@@ -2437,7 +2437,7 @@ export default function ReportsPage() {
                 title={r.shop}
                 fields={[
                   ...brands.map((b) => ({
-                    label: b.label,
+                    label: formatBrandLabel(b) || b.label,
                     value: (r.byBrand[b.key] || 0).toLocaleString(),
                   })),
                   { label: 'Total bags', value: r.total.toLocaleString() },
@@ -2472,7 +2472,7 @@ export default function ReportsPage() {
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
                 {brands.map((b) => (
                   <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
-                    {b.label} bags
+                    {formatBrandLabel(b) || b.label} bags
                   </th>
                 ))}
                 <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
@@ -2593,7 +2593,7 @@ export default function ReportsPage() {
               <option value="">All brands</option>
               {brands.map((b) => (
                 <option key={b.key} value={b.key}>
-                  {b.label}
+                  {formatBrandLabel(b) || b.label}
                 </option>
               ))}
             </select>
@@ -3619,7 +3619,7 @@ export default function ReportsPage() {
             <option value="">All brands</option>
             {brands.map((b) => (
               <option key={b.key} value={b.key}>
-                {b.label}
+                {formatBrandLabel(b) || b.label}
               </option>
             ))}
           </select>
@@ -3689,7 +3689,7 @@ export default function ReportsPage() {
                       subtitle={r.location || '—'}
                       fields={[
                         ...visibleBrands.slice(0, 4).map((b) => ({
-                          label: b.label,
+                          label: formatBrandLabel(b) || b.label,
                           value: r[`${b.key}Bags`].toLocaleString(),
                         })),
                         { label: 'Total bags', value: r.totalBags.toLocaleString() },
@@ -3707,7 +3707,7 @@ export default function ReportsPage() {
                     <th className="whitespace-nowrap px-4 py-3">Location</th>
                     {visibleBrands.map((b) => (
                       <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
-                        {b.label}
+                        {formatBrandLabel(b) || b.label}
                       </th>
                     ))}
                     <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>

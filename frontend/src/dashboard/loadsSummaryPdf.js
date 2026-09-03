@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -74,7 +74,7 @@ function drawSectionTitle(doc, title, subtitle, startY) {
 function drawLoadsSummary(doc, loadsReport, startY) {
   const brands = getCachedBrands();
   const head = [['Bag type', 'Bags']];
-  const body = brands.map((b) => [b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
+  const body = brands.map((b) => [formatBrandLabel(b) || b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
   body.push(['Total bags', formatBags(loadsReport.total)]);
   body.push(['Loads', String(loadsReport.loadCount)]);
   body.push(['Total purchase amount', moneyCell(loadsReport.totalAmount)]);
@@ -100,7 +100,7 @@ function drawLoadsSummary(doc, loadsReport, startY) {
 
 function drawLoadDetailTable(doc, loadRows, startY) {
   const brands = getCachedBrands();
-  const head = [['Date', 'Stock ID', 'Vehicle', ...brands.map((b) => b.label), 'Total amount']];
+  const head = [['Date', 'Stock ID', 'Vehicle', ...brands.map((b) => formatBrandLabel(b) || b.label), 'Total amount']];
   const body =
     loadRows.length === 0
       ? [['—', '—', '—', ...brands.map(() => '0'), moneyCell(0)]]

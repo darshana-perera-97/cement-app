@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canEditDetails } from '../auth';
 import { getApiBase } from '../apiBase';
-import { getCachedBrands, productToBrandKey } from './brandTheme';
+import { getCachedBrands, productToBrandKey, formatBrandLabel } from './brandTheme';
 import { useBagProducts } from './BagProductsContext';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
@@ -235,7 +235,7 @@ function DistributionFilterModal({
                 <option value="">All bag types</option>
                 {brands.map((b) => (
                   <option key={b.key} value={b.key}>
-                    {b.label}
+                    {formatBrandLabel(b) || b.label}
                   </option>
                 ))}
               </select>
@@ -352,7 +352,7 @@ function buildDoorStockRows(loads, purchaseOrders, doorStockSettings, brands) {
         invoiceNumber,
         vehicleNumber,
         brandKey: b.key,
-        brandLabel: b.label,
+        brandLabel: formatBrandLabel(b) || b.label,
         quantity,
         tpRate,
         locationFrom: from,
@@ -461,7 +461,7 @@ function buildIncentiveRows(loads) {
         date: loadDate,
         stockId,
         brandKey: b.key,
-        brandLabel: b.label,
+        brandLabel: formatBrandLabel(b) || b.label,
         bags,
         totalCost,
         perBagCost,
@@ -630,7 +630,7 @@ function buildDistributionRows(loads, bills) {
           stockId: chunk.stockId,
           shop,
           brandKey: b.key,
-          brandLabel: b.label,
+          brandLabel: formatBrandLabel(b) || b.label,
           bags: chunk.bags,
           perBagPrice,
           invoiceNumber,
@@ -1017,7 +1017,9 @@ export default function IncentivePage() {
       dateTo: doorStockFilters.dateTo,
       brandKey: doorStockFilters.brand || '',
       brandLabel: doorStockFilters.brand
-        ? brandByKey[doorStockFilters.brand]?.label ?? doorStockFilters.brand
+        ? formatBrandLabel(brandByKey[doorStockFilters.brand]) ||
+          brandByKey[doorStockFilters.brand]?.label ||
+          doorStockFilters.brand
         : '',
     }),
     [doorStockFilters, brandByKey],
@@ -1050,7 +1052,9 @@ export default function IncentivePage() {
       search: incentiveFilters.search,
       stockId: incentiveFilters.stockId,
       brandLabel: incentiveFilters.brand
-        ? brandByKey[incentiveFilters.brand]?.label ?? incentiveFilters.brand
+        ? formatBrandLabel(brandByKey[incentiveFilters.brand]) ||
+          brandByKey[incentiveFilters.brand]?.label ||
+          incentiveFilters.brand
         : '',
     }),
     [incentiveFilters, brandByKey],
@@ -1064,7 +1068,9 @@ export default function IncentivePage() {
       shop: specialPriceFilters.shop,
       stockId: specialPriceFilters.stockId,
       brandLabel: specialPriceFilters.brand
-        ? brandByKey[specialPriceFilters.brand]?.label ?? specialPriceFilters.brand
+        ? formatBrandLabel(brandByKey[specialPriceFilters.brand]) ||
+          brandByKey[specialPriceFilters.brand]?.label ||
+          specialPriceFilters.brand
         : '',
     }),
     [specialPriceFilters, brandByKey],
@@ -1998,7 +2004,7 @@ export default function IncentivePage() {
             <option value="">All bag types</option>
             {brands.map((b) => (
               <option key={b.key} value={b.key}>
-                {b.label}
+                {formatBrandLabel(b) || b.label}
               </option>
             ))}
           </select>

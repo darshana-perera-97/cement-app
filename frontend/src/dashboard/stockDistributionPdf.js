@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -73,7 +73,7 @@ function drawSectionTitle(doc, title, subtitle, startY) {
 
 function drawSummaryTable(doc, remaining, inOut, brandKey, startY) {
   const brands = brandKey ? getCachedBrands().filter((b) => b.key === brandKey) : getCachedBrands();
-  const brandHead = brands.map((b) => b.label);
+  const brandHead = brands.map((b) => formatBrandLabel(b) || b.label);
 
   const head = [['Metric', ...brandHead, 'Total bags', 'Amount']];
   const brandStart = brands.map((b) => formatBags(remaining.byBrandStart?.[b.key] || 0));

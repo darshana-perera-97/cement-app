@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { doorStepNotesText, isPoCashPayment, poChequeBankLabel } from './poChequeDisplay';
+import { formatProductNameWithCode } from './brandTheme';
 
 const MARGIN = 16;
 const BLACK = [0, 0, 0];
@@ -220,7 +221,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     head: [['Descriptions', 'Price', 'Quantity', 'Amount(Rs:)']],
     body: [
       [
-        display(po.product),
+        display(formatProductNameWithCode(po.product) || po.product),
         formatPrice(po.unitPrice),
         String(Number(po.quantity) || 0),
         formatAmount(lineTotal),

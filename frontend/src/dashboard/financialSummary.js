@@ -1,4 +1,4 @@
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 import { chequePortion, getPaymentCheques } from './paymentCheques';
 import { inDateRange } from './tableToolbar';
 
@@ -47,7 +47,7 @@ export function buildFinancialLoadPurchaseRows(loads, from, to) {
         vehicle,
         chequeNumber: String(load[`${brand.key}Cheque`] ?? '').trim() || '—',
         invoiceNumber: String(load[`${brand.key}Invoice`] ?? '').trim() || '—',
-        bagType: brand.label,
+        bagType: formatBrandLabel(brand) || brand.label,
         bags,
         totalCost: Number(load[`${brand.key}Cost`]) || 0,
       });

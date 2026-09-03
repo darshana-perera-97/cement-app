@@ -17,6 +17,7 @@ import {
 import { getApiBase } from '../apiBase';
 import { depositQueueRowKey } from './paymentCheques';
 import { useBagProducts } from './BagProductsContext';
+import { brandBarColor } from './brandTheme';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -51,14 +52,6 @@ import {
   GUARANTEE_RENEWAL_WARN_DAYS,
   sortDistributorGuaranteeStatuses,
 } from './guaranteeStatus';
-
-/** Bar fills aligned with bag products — same hues as light theme, higher chroma for readability */
-const BRAND_BAR_COLORS = {
-  tokyo: '#a78bfa',
-  samudra: '#38bdf8',
-  atlas: '#fbbf24',
-  nippon: '#f472b6',
-};
 
 /** [0] pending · [1] payments — stronger tints for Pending vs collected donut */
 const DONUT_COLORS = ['#a78bfa', '#34d399'];
@@ -139,6 +132,56 @@ function enrichOverdueBillRow(row) {
 function overdueDaysFromBillDate(row) {
   if (row?.daysFromBillDate != null && row.daysFromBillDate !== '') return row.daysFromBillDate;
   return daysFromYmdToToday(row?.billDate);
+}
+
+function BagSalesTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const date = payload[0]?.payload?.date || label || '';
+  const rows = payload.filter((p) => Number(p.value) > 0);
+  return (
+    <div className="max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-lg">
+      <p className="text-[11px] font-semibold text-slate-800">{date}</p>
+      {rows.length === 0 ? (
+        <p className="mt-1 text-[11px] text-slate-500">No bag sales</p>
+      ) : (
+        <ul className="mt-1.5 space-y-1">
+          {rows.map((p) => (
+            <li key={p.dataKey} className="flex items-start gap-2 text-[11px]">
+              <span
+                className="mt-1 h-2 w-2 shrink-0 rounded-full"
+                style={{ background: p.color || p.fill }}
+              />
+              <span className="min-w-0 flex-1 leading-snug text-slate-700">{p.name}</span>
+              <span className="shrink-0 font-medium tabular-nums text-slate-900">
+                {Math.round(Number(p.value) || 0)} bags
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function BagSalesLegend({ brands, colorByKey }) {
+  if (!brands.length) return null;
+  return (
+    <ul className="mt-3 flex flex-wrap gap-x-2.5 gap-y-1.5">
+      {brands.map((b) => (
+        <li
+          key={b.key}
+          className="flex max-w-[11rem] items-center gap-1.5"
+          title={b.label}
+        >
+          <span
+            className="h-2 w-2 shrink-0 rounded-full ring-1 ring-black/5"
+            style={{ background: colorByKey[b.key] }}
+          />
+          <span className="truncate text-[10px] leading-tight text-slate-600">{b.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function DashboardStatAmount({ value, loading, valueClassName = 'text-slate-900', compact = false }) {
@@ -602,6 +645,25 @@ export default function AnalyticsPage() {
     };
   }, [cashSummary]);
 
+  const brandColorByKey = useMemo(() => {
+    const map = {};
+    brands.forEach((b, i) => {
+      map[b.key] = brandBarColor(i);
+    });
+    return map;
+  }, [brands]);
+
+  const bagSalesChartBrands = useMemo(() => {
+    const keys = new Set();
+    for (const row of bagSalesByDay) {
+      for (const b of brands) {
+        if (Number(row[b.key]) > 0) keys.add(b.key);
+      }
+    }
+    const active = brands.filter((b) => keys.has(b.key));
+    return active.length > 0 ? active : brands;
+  }, [bagSalesByDay, brands]);
+
   const filteredOverdueBills = useMemo(() => {
     return overdueBills.filter((row) =>
       rowMatchesQuery(overdueSearch, [
@@ -804,48 +866,42 @@ export default function AnalyticsPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <Card
           title="Bag sales by brand"
-          subtitle="Last 7 days · Stacked bags per day from credit bills (Tokyo, Samudra, Atlas, Nippon)"
+          subtitle="Last 7 days · Credit-bill bags stacked by product. Hover a bar for full names."
           className="lg:col-span-2"
         >
           {cashDashLoading ? (
             <div className="flex h-[240px] items-center justify-center text-sm text-slate-500"><LoadingSpinner /></div>
           ) : (
-            <div className="h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={bagSalesByDay} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: '#64748b' }}
-                    axisLine={false}
-                    tickLine={false}
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    formatter={(value) => `${Math.round(Number(value) || 0)} bags`}
-                    labelFormatter={(_, payload) =>
-                      payload?.[0]?.payload?.date ? String(payload[0].payload.date) : ''
-                    }
-                    contentStyle={{
-                      borderRadius: 12,
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 10px 40px -10px rgb(0 0 0 / 0.15)',
-                      fontSize: 12,
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {brands.map((b) => (
-                    <Bar
-                      key={b.key}
-                      dataKey={b.key}
-                      stackId="bags"
-                      name={b.label}
-                      fill={BRAND_BAR_COLORS[b.key]}
-                      maxBarSize={40}
+            <div>
+              <div className="h-[220px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={bagSalesByDay} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#64748b' }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
                     />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+                    <Tooltip
+                      content={<BagSalesTooltip />}
+                      cursor={{ fill: 'rgba(148, 163, 184, 0.12)' }}
+                    />
+                    {bagSalesChartBrands.map((b) => (
+                      <Bar
+                        key={b.key}
+                        dataKey={b.key}
+                        stackId="bags"
+                        name={b.label}
+                        fill={brandColorByKey[b.key]}
+                        maxBarSize={40}
+                      />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <BagSalesLegend brands={bagSalesChartBrands} colorByKey={brandColorByKey} />
             </div>
           )}
         </Card>

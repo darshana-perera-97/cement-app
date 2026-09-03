@@ -1,4 +1,4 @@
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 import {
   buildBillSettledDateLookup,
   isBillFullySettled,
@@ -143,7 +143,7 @@ export function buildSettledCollectionsRows(
         date: settledDate,
         invoiceNumber,
         shopName,
-        bagType: brand.label,
+        bagType: formatBrandLabel(brand) || brand.label,
         brandKey: brand.key,
         bagCount,
         amount: brandLineFromBill(bill, brand.key),
@@ -200,7 +200,7 @@ function prorateCollectionAcrossBrands(bill, collectedAmount) {
     if (bagCount <= 0) continue;
     brandLines.push({
       brandKey: brand.key,
-      bagType: brand.label,
+      bagType: formatBrandLabel(brand) || brand.label,
       bagCount,
       lineAmount: brandLineFromBill(bill, brand.key),
     });

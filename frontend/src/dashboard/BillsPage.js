@@ -3,6 +3,7 @@ import { getApiBase } from '../apiBase';
 import { authFetch, canEditDetails, getUsername } from '../auth';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import { useBagProducts } from './BagProductsContext';
+import { formatBrandLabel } from './brandTheme';
 import { downloadBillsInvoicesPdf } from './billsInvoicesPdf';
 import {
   BILL_INVOICE_NUMBER_PATTERN,
@@ -128,7 +129,28 @@ function fillLastPricesOnForm(form, brands, lastPrices, brandKey = null) {
   return next;
 }
 
-function BillSaleFormFields({ form, customers, brands, onChange, lastPrices = {}, isEdit = false }) {
+function applyAllLastPrices(form, brands, lastPrices) {
+  if (!lastPrices || typeof lastPrices !== 'object') return form;
+  let next = form;
+  for (const b of brands) {
+    const filled = formatUnitPrice(lastPrices[b.key]);
+    if (!filled) continue;
+    if (next === form) next = { ...form };
+    next[`${b.key}UnitPrice`] = filled;
+  }
+  return next;
+}
+
+function BillSaleFormFields({
+  form,
+  customers,
+  brands,
+  onChange,
+  lastPrices = {},
+  isEdit = false,
+  onLoadLastPrices,
+  loadingLastPrices = false,
+}) {
   return (
     <>
       <div className="grid gap-2.5 sm:grid-cols-2">
@@ -181,10 +203,25 @@ function BillSaleFormFields({ form, customers, brands, onChange, lastPrices = {}
         </label>
       </div>
       <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
-        <p className="mt-0.5 text-[10px] font-normal text-slate-400">
-          Price / bag fills from this customer&apos;s last credit sale when you enter bags. You can still edit it.
-        </p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
+            <p className="mt-0.5 text-[10px] font-normal text-slate-400">
+              Select a customer, then Load last prices to fill every product from the last unload / credit
+              sale. You can still edit prices.
+            </p>
+          </div>
+          {onLoadLastPrices ? (
+            <button
+              type="button"
+              onClick={onLoadLastPrices}
+              disabled={!form.customerId || loadingLastPrices}
+              className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loadingLastPrices ? 'Loading…' : 'Load last prices'}
+            </button>
+          ) : null}
+        </div>
         <div className="mt-2 space-y-2">
           {brands.map((b) => {
             const last = lastPrices[b.key];
@@ -193,9 +230,9 @@ function BillSaleFormFields({ form, customers, brands, onChange, lastPrices = {}
             <div key={b.key} className="grid grid-cols-1 items-end gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
               <span
                 className="min-w-0 truncate text-[11px] font-normal text-slate-700 sm:col-span-2 lg:col-span-1"
-                title={b.label}
+                title={formatBrandLabel(b) || b.label}
               >
-                {b.label}
+                {formatBrandLabel(b) || b.label}
               </span>
               <label className="text-[10px] text-slate-500">
                 Bags
@@ -240,6 +277,7 @@ export default function BillsPage() {
   const [form, setForm] = useState(() => emptyForm([]));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [loadingLastPrices, setLoadingLastPrices] = useState(false);
   const [detailBill, setDetailBill] = useState(null);
   const [editBill, setEditBill] = useState(null);
   const [customers, setCustomers] = useState([]);
@@ -423,6 +461,7 @@ export default function BillsPage() {
     setAddOpen(false);
     setSaveError(null);
     invoiceNumberTouched.current = false;
+    setLoadingLastPrices(false);
   };
 
   const handleFormChange = (field, value) => {
@@ -444,6 +483,43 @@ export default function BillsPage() {
       }
       return next;
     });
+  };
+
+  const handleLoadLastPrices = async () => {
+    const customerId = String(form.customerId || '').trim();
+    if (!customerId) {
+      setSaveError('Select a customer first.');
+      return;
+    }
+    setLoadingLastPrices(true);
+    setSaveError(null);
+    try {
+      const prices = { ...(lastPricesMap.get(customerId) || {}) };
+      try {
+        const res = await authFetch(
+          `${apiBase}/api/bills/last-unit-prices?customerId=${encodeURIComponent(customerId)}`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.found) {
+            for (const b of brands) {
+              const p = Number(data[`${b.key}UnitPrice`]);
+              if (Number.isFinite(p) && p > 0) prices[b.key] = p;
+            }
+          }
+        }
+      } catch {
+        // Use prices already loaded from credit bills on this page.
+      }
+      const hasAny = brands.some((b) => Number(prices[b.key]) > 0);
+      if (!hasAny) {
+        setSaveError('No previous unload prices found for this customer.');
+        return;
+      }
+      setForm((f) => applyAllLastPrices(f, brands, prices));
+    } finally {
+      setLoadingLastPrices(false);
+    }
   };
 
   const validateInvoiceNumber = (excludeBillId = null) => {
@@ -515,6 +591,7 @@ export default function BillsPage() {
   const closeBillEdit = () => {
     setEditBill(null);
     setSaveError(null);
+    setLoadingLastPrices(false);
   };
 
   const openBillEditFromDetail = () => {
@@ -680,7 +757,7 @@ export default function BillsPage() {
               fields={[
                 { label: 'Invoice #', value: r.invoiceNumber || '—' },
                 ...brands.slice(0, 4).map((b) => ({
-                  label: b.label,
+                  label: formatBrandLabel(b) || b.label,
                   value: String(r[`${b.key}Bags`] ?? 0),
                 })),
                 { label: 'Total', value: money(r.totalAmount) },
@@ -701,8 +778,23 @@ export default function BillsPage() {
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Stock</th>
               <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Customer</th>
               {brands.map((b) => (
-                <th key={b.key} className={`whitespace-nowrap px-2 py-2 text-center ${b.ledger.head}`}>
-                  {b.label}
+                <th
+                  key={b.key}
+                  className={`px-2 py-2 text-center ${b.ledger.head}`}
+                  title={formatBrandLabel(b) || b.label}
+                >
+                  {b.code ? (
+                    <>
+                      <span className="block font-mono text-[10px] font-semibold normal-case tracking-normal">
+                        {b.code}
+                      </span>
+                      <span className="mt-0.5 block max-w-[7.5rem] truncate text-[10px] font-normal normal-case leading-tight opacity-90">
+                        {b.label}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="block max-w-[7.5rem] truncate">{b.label}</span>
+                  )}
                   <span className="mt-0.5 block text-[10px] font-normal normal-case opacity-90">Bags</span>
                 </th>
               ))}
@@ -812,6 +904,8 @@ export default function BillsPage() {
                 brands={brands}
                 onChange={handleFormChange}
                 lastPrices={selectedLastPrices}
+                onLoadLastPrices={handleLoadLastPrices}
+                loadingLastPrices={loadingLastPrices}
               />
               <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
@@ -858,6 +952,8 @@ export default function BillsPage() {
                 onChange={handleFormChange}
                 lastPrices={selectedLastPrices}
                 isEdit
+                onLoadLastPrices={handleLoadLastPrices}
+                loadingLastPrices={loadingLastPrices}
               />
               <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button

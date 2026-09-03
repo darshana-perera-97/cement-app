@@ -25,6 +25,7 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { downloadPurchaseOrderPdf } from './purchaseOrderPdf';
 import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
+import { formatProductNameWithCode } from './brandTheme';
 
 const apiBase = getApiBase();
 
@@ -1095,7 +1096,7 @@ export default function PurchaseOrdersPage() {
                   ) : null
                 }
                 fields={[
-                  { label: 'Product', value: r.product || '—' },
+                  { label: 'Product', value: formatProductNameWithCode(r.product) || r.product || '—' },
                   { label: 'Amount', value: String(r.quantity ?? '—') },
                   { label: 'Payments', value: formatPoChequesList(r.cheques, bankAccounts) },
                 ]}
@@ -1180,7 +1181,7 @@ export default function PurchaseOrdersPage() {
                       ) : null}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{r.date || '—'}</td>
-                    <td className="px-3 py-2.5 text-slate-800">{r.product || '—'}</td>
+                    <td className="px-3 py-2.5 text-slate-800">{formatProductNameWithCode(r.product) || r.product || '—'}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
                       {Number(r.quantity) || 0}
                     </td>
@@ -1288,7 +1289,7 @@ export default function PurchaseOrdersPage() {
               {cancelTarget.product ? (
                 <>
                   {' '}
-                  for <span className="font-semibold text-slate-900">{cancelTarget.product}</span>
+                  for <span className="font-semibold text-slate-900">{formatProductNameWithCode(cancelTarget.product) || cancelTarget.product}</span>
                 </>
               ) : null}
               . Issued cheques for this order will be removed from bank balances, and cash payments will be
@@ -1467,7 +1468,7 @@ export default function PurchaseOrdersPage() {
                                 <option value="">Select…</option>
                                 {distributorProducts.map((p) => (
                                   <option key={p} value={p}>
-                                    {p}
+                                    {formatProductNameWithCode(p) || p}
                                   </option>
                                 ))}
                               </select>

@@ -15,6 +15,7 @@ import {
   formatMoney,
 } from './detailModalShared';
 import { useBagProducts } from './BagProductsContext';
+import { formatProductNameWithCode } from './brandTheme';
 import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
 import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment } from './poChequeDisplay';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
@@ -139,7 +140,7 @@ export function getRowDetailMeta(variant, row) {
               : row.chequeNumber
                 ? `#${row.chequeNumber}`
                 : row.accountLabel,
-            row.product,
+            formatProductNameWithCode(row.product) || row.product,
           ]
             .filter(Boolean)
             .join(' · ') || null,
@@ -794,7 +795,7 @@ function PurchaseOrderDetailContent({ row }) {
           value={displayText(row.distributionLocation)}
           className="col-span-2"
         />
-        <SummaryField label="Product" value={displayText(row.product)} className="col-span-2" />
+        <SummaryField label="Product" value={displayText(formatProductNameWithCode(row.product) || row.product)} className="col-span-2" />
         <SummaryField
           label="Amount"
           value={Number(row.quantity) || 0}
@@ -1041,7 +1042,7 @@ function PoChequeDetailContent({ row }) {
       <SummaryField label="Converting date" value={displayText(row.chequeDate)} />
       <SummaryField label="Cheque" value={chequeLabel} valueClassName="font-mono" className="col-span-2" />
       <SummaryField label="Bank account" value={displayText(row.accountLabel)} className="col-span-2" />
-      <SummaryField label="Product" value={displayText(row.product)} />
+      <SummaryField label="Product" value={displayText(formatProductNameWithCode(row.product) || row.product)} />
       <SummaryField label="PO id" value={displayText(row.poId)} valueClassName="font-mono text-xs" />
       <SummaryField
         label="Amount"

@@ -84,7 +84,47 @@ function formFromDistributor(d) {
 
 const emptyProductForm = () => ({
   name: '',
+  code: '',
 });
+
+function normalizeProductCode(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '')
+    .toUpperCase();
+}
+
+function suggestNextProductCode(products, excludeId = '') {
+  const skip = String(excludeId ?? '').trim();
+  let max = 0;
+  let prefix = 'P-';
+  let width = 4;
+  for (const p of Array.isArray(products) ? products : []) {
+    if (skip && String(p.id) === skip) continue;
+    const raw = normalizeProductCode(p.code);
+    if (!raw) continue;
+    const m = /^(.*?)(\d+)$/.exec(raw);
+    if (!m) continue;
+    const n = parseInt(m[2], 10);
+    if (!Number.isFinite(n) || n < max) continue;
+    max = n;
+    prefix = m[1] || 'P-';
+    width = Math.max(m[2].length, 1);
+  }
+  const taken = new Set(
+    (Array.isArray(products) ? products : [])
+      .filter((p) => !skip || String(p.id) !== skip)
+      .map((p) => normalizeProductCode(p.code).toLowerCase())
+      .filter(Boolean),
+  );
+  let nextNum = max + 1;
+  let next = `${prefix}${String(nextNum).padStart(width, '0')}`;
+  while (taken.has(next.toLowerCase())) {
+    nextNum += 1;
+    next = `${prefix}${String(nextNum).padStart(width, '0')}`;
+  }
+  return next;
+}
 
 const inputClass =
   'mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30';
@@ -557,7 +597,7 @@ export default function ShopPage() {
   const openProductModal = () => {
     setProductModalMode('add');
     setEditingProductId(null);
-    setProductForm(emptyProductForm());
+    setProductForm({ name: '', code: suggestNextProductCode(shopProducts) });
     setProductSaveError(null);
     setProductModalOpen(true);
   };
@@ -565,7 +605,10 @@ export default function ShopPage() {
   const openEditProductModal = (product) => {
     setProductModalMode('edit');
     setEditingProductId(product.id);
-    setProductForm({ name: product.name ?? '' });
+    setProductForm({
+      name: product.name ?? '',
+      code: normalizeProductCode(product.code) || suggestNextProductCode(shopProducts, product.id),
+    });
     setProductSaveError(null);
     setProductModalOpen(true);
   };
@@ -581,9 +624,36 @@ export default function ShopPage() {
     e.preventDefault();
     setProductSaving(true);
     setProductSaveError(null);
-    const payload = { name: productForm.name.trim() };
+    const payload = {
+      name: productForm.name.trim(),
+      code: normalizeProductCode(productForm.code),
+    };
     if (!payload.name) {
       setProductSaveError('Enter a product name.');
+      setProductSaving(false);
+      return;
+    }
+    if (!payload.code) {
+      setProductSaveError('Enter a product code.');
+      setProductSaving(false);
+      return;
+    }
+    const excludeId = productModalMode === 'edit' ? editingProductId : null;
+    const nameTaken = shopProducts.some(
+      (p) => p.name.toLowerCase() === payload.name.toLowerCase() && (!excludeId || p.id !== excludeId),
+    );
+    if (nameTaken) {
+      setProductSaveError('A product with this name already exists.');
+      setProductSaving(false);
+      return;
+    }
+    const codeTaken = shopProducts.some(
+      (p) =>
+        normalizeProductCode(p.code).toLowerCase() === payload.code.toLowerCase() &&
+        (!excludeId || p.id !== excludeId),
+    );
+    if (codeTaken) {
+      setProductSaveError('A product with this code already exists.');
       setProductSaving(false);
       return;
     }
@@ -979,9 +1049,10 @@ export default function ShopPage() {
         </div>
 
         <div className={scrollTableWrap}>
-          <table className="w-full min-w-[420px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[520px] border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3">Code</th>
                 <th className="px-4 py-3">Product name</th>
                 <th className="px-4 py-3 text-center">Actions</th>
               </tr>
@@ -989,19 +1060,22 @@ export default function ShopPage() {
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {loading ? (
                 <tr>
-                  <td colSpan={2} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={3} className="px-4 py-10 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : shopProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={2} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={3} className="px-4 py-10 text-center text-slate-500">
                     No products yet. Use &quot;Add product&quot; to create your catalog.
                   </td>
                 </tr>
               ) : (
                 shopProducts.map((p) => (
                   <tr key={p.id} className="hover:bg-slate-50/80">
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold tabular-nums text-indigo-800">
+                      {displayValue(p.code)}
+                    </td>
                     <td className="px-4 py-3 font-semibold text-slate-900">{displayValue(p.name)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-center">
                       <div className="inline-flex flex-wrap items-center justify-center gap-1">
@@ -1493,7 +1567,12 @@ export default function ShopPage() {
                             disabled={distSaving}
                             onChange={() => toggleDistProduct(name)}
                           />
-                          <span className="text-sm font-medium text-slate-800">{name}</span>
+                          <span className="min-w-0 text-sm font-medium text-slate-800">
+                            {p.code ? (
+                              <span className="mr-1.5 font-mono text-xs font-semibold text-indigo-700">{p.code}</span>
+                            ) : null}
+                            {name}
+                          </span>
                         </label>
                       );
                     })}
@@ -1550,6 +1629,27 @@ export default function ShopPage() {
                   {productSaveError}
                 </p>
               ) : null}
+              <label className="block text-sm font-medium text-slate-600">
+                Product code
+                <input
+                  type="text"
+                  required
+                  value={productForm.code}
+                  onChange={(e) =>
+                    setProductForm((f) => ({ ...f, code: normalizeProductCode(e.target.value) }))
+                  }
+                  className={`${inputClass} font-mono uppercase`}
+                  placeholder="P-0001"
+                  disabled={productSaving}
+                  autoComplete="off"
+                  maxLength={24}
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-400">
+                  {productModalMode === 'edit'
+                    ? 'Must be unique. You can keep or change the current code.'
+                    : 'Suggested from the last product code (+1). Must be unique — you can edit it.'}
+                </span>
+              </label>
               <label className="block text-sm font-medium text-slate-600">
                 Product name
                 <input
@@ -1760,7 +1860,13 @@ export default function ShopPage() {
 
       <RowDetailModal
         open={!!detailProduct}
-        row={detailProduct ? { name: detailProduct.name } : null}
+        row={
+          detailProduct
+            ? { code: detailProduct.code || '—', name: detailProduct.name }
+            : null
+        }
+        title="Product details"
+        subtitle={detailProduct?.code || null}
         onClose={() => setDetailProduct(null)}
       />
       <RowDetailModal

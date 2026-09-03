@@ -70,28 +70,44 @@ function labelForKey(key, fallbackLabel) {
   return fallbackLabel || LEGACY_LABELS[key] || key;
 }
 
+function formatProductLabel(product) {
+  const label = String(product?.label ?? '').trim();
+  const code = String(product?.code ?? '').trim();
+  if (code && label) return `${code} · ${label}`;
+  return code || label || '';
+}
+
 /** Unique bag products from shop catalog; falls back to distributor lists when catalog is empty. */
 async function getBagProducts() {
   const shop = await readShopData();
-  const catalogNames = (shop.products || []).map((p) => String(p.name ?? '').trim()).filter(Boolean);
+  const catalog = (shop.products || [])
+    .map((p) => ({
+      name: String(p.name ?? '').trim(),
+      code: String(p.code ?? '').trim(),
+    }))
+    .filter((p) => p.name);
 
-  const names = catalogNames.length > 0 ? catalogNames : await legacyProductNamesFromDistributors();
+  const items =
+    catalog.length > 0
+      ? catalog
+      : (await legacyProductNamesFromDistributors()).map((name) => ({ name, code: '' }));
 
   const seen = new Map();
-  for (const label of names) {
-    let key = productToKey(label);
+  for (const item of items) {
+    let key = productToKey(item.name);
     if (!key) continue;
     // Distinct catalog names must not collapse onto one legacy key
     // (e.g. "Tokyo Cement …" and "Tokyo Superbond …" both used to become `tokyo`).
     if (seen.has(key)) {
-      key = slugifyProduct(label);
+      key = slugifyProduct(item.name);
       if (!key || seen.has(key)) continue;
     }
-    seen.set(key, label);
+    seen.set(key, { label: item.name, code: item.code });
   }
-  return Array.from(seen.entries()).map(([key, label]) => ({
+  return Array.from(seen.entries()).map(([key, meta]) => ({
     key,
-    label,
+    label: meta.label,
+    code: meta.code,
     bagsField: bagsField(key),
     costField: costField(key),
     cutOffPriceField: cutOffPriceField(key),
@@ -179,8 +195,8 @@ function validateLoadBrandRefs(row, products, loadDate) {
   const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
   for (const p of products) {
     if (toNonNegNumber(row[p.bagsField]) >= 1) {
-      if (!row[p.invoiceField]) missingRefs.push(`${p.label} invoice number`);
-      if (!row[p.chequeField]) missingRefs.push(`${p.label} cheque number`);
+      if (!row[p.invoiceField]) missingRefs.push(`${formatProductLabel(p) || p.label} invoice number`);
+      if (!row[p.chequeField]) missingRefs.push(`${formatProductLabel(p) || p.label} cheque number`);
       const convertingDate = row[p.convertingDateField];
       if (!convertingDate || !YMD_RE.test(convertingDate)) {
         row[p.convertingDateField] = loadDate;
@@ -215,7 +231,7 @@ function sumBagFields(fields, products) {
 }
 
 function brandLabelsMap(products) {
-  return Object.fromEntries(products.map((p) => [p.key, p.label]));
+  return Object.fromEntries(products.map((p) => [p.key, formatProductLabel(p) || p.label]));
 }
 
 function totalBagsFromRecord(record, products) {
@@ -241,6 +257,7 @@ module.exports = {
   chequeField,
   convertingDateField,
   labelForKey,
+  formatProductLabel,
   getBagProducts,
   getBagProductKeys,
   emptyBrandMap,

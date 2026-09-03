@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getCachedBrands } from './brandTheme';
+import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
 
 const MARGIN = 16;
@@ -73,7 +73,7 @@ function buildBillLineItems(bill) {
     if (bags <= 0) continue;
     const unitPrice = Number(bill[`${brand.key}UnitPrice`]) || 0;
     items.push({
-      brandLabel: brand.label,
+      brandLabel: formatBrandLabel(brand) || brand.label,
       bags,
       unitPrice,
       amount: lineTotal(bags, unitPrice),

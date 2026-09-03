@@ -1,4 +1,4 @@
-import { getCachedBrands } from './brandTheme';
+import { formatBrandLabel, getCachedBrands } from './brandTheme';
 
 function todayYmdLocal() {
   const d = new Date();
@@ -21,7 +21,7 @@ export function buildStockChequeRows(loads) {
         chequeNumber,
         convertingDate: convertingDate && /^\d{4}-\d{2}-\d{2}$/.test(convertingDate) ? convertingDate : loadDate,
         amount: Number(load[`${b.key}Cost`]) || 0,
-        brand: b.label,
+        brand: formatBrandLabel(b) || b.label,
         stockId: String(load.stockId ?? '').trim(),
       });
     }

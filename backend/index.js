@@ -233,6 +233,7 @@ const {
   sumBagFields,
   brandLabelsMap,
   bagsField,
+  formatProductLabel,
 } = require('./models/bagProducts');
 const {
   readPurchaseOrders,
@@ -2130,10 +2131,10 @@ app.post('/api/unloads', async (req, res) => {
       const need = fields[p.bagsField];
       if (need <= 0) continue;
       if (available <= 0) {
-        stockErrors.push(`${p.label} is out of stock.`);
+        stockErrors.push(`${formatProductLabel(p) || p.label} is out of stock.`);
       } else if (need > available) {
         stockErrors.push(
-          `${p.label}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock (requested ${need.toLocaleString()}).`,
+          `${formatProductLabel(p) || p.label}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock (requested ${need.toLocaleString()}).`,
         );
       }
     }

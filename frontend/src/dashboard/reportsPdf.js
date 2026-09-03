@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { formatBrandLabel } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -72,7 +73,7 @@ function drawSectionTitle(doc, title, subtitle, startY) {
 
 function drawLoadsSummary(doc, loadsReport, visibleBrands, startY) {
   const head = [['Bag type', 'Bags']];
-  const body = visibleBrands.map((b) => [b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
+  const body = visibleBrands.map((b) => [formatBrandLabel(b) || b.label, formatBags(loadsReport.byBrand[b.key] || 0)]);
   body.push(['Total', formatBags(loadsReport.total)]);
   body.push(['Loads', String(loadsReport.loadCount)]);
 
@@ -96,7 +97,7 @@ function drawLoadsSummary(doc, loadsReport, visibleBrands, startY) {
 }
 
 function drawBagsPerShop(doc, shopRows, visibleBrands, shopTotals, startY) {
-  const brandCols = visibleBrands.map((b) => `${b.label} bags`);
+  const brandCols = visibleBrands.map((b) => `${formatBrandLabel(b) || b.label} bags`);
   const head = [['Shop', 'Location', ...brandCols, 'Total bags', 'Bills']];
   const filtered = shopRows.filter((r) => r.totalBags > 0);
 

@@ -1,4 +1,4 @@
-const { activeBagProductsOnRecord, totalBagsFromRecord } = require('./bagProducts');
+const { activeBagProductsOnRecord, totalBagsFromRecord, formatProductLabel } = require('./bagProducts');
 
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
@@ -40,7 +40,7 @@ function bagLines(record, products = []) {
     if (Number.isFinite(lineTotal) && lineTotal > 0) {
       detail += ` · ${formatMoney(lineTotal)}`;
     }
-    lines.push({ label: product.label, value: detail });
+    lines.push({ label: formatProductLabel(product) || product.label, value: detail });
   }
   return lines;
 }
@@ -50,7 +50,7 @@ function billBagLines(record, products = []) {
   const lines = [];
   for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
     lines.push({
-      label: product.label,
+      label: formatProductLabel(product) || product.label,
       value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
     });
   }
@@ -244,7 +244,7 @@ function unloadBagLines(record, products = []) {
   const lines = [];
   for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
     lines.push({
-      label: product.label,
+      label: formatProductLabel(product) || product.label,
       value: `${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`,
     });
   }

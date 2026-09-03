@@ -68,6 +68,37 @@ export const THEME_PALETTES = [
   },
 ];
 
+/** Distinct hex fills for charts — one per catalog product, cycled by index. */
+export const BRAND_BAR_PALETTE = [
+  '#7c3aed',
+  '#0284c7',
+  '#d97706',
+  '#e11d48',
+  '#059669',
+  '#c026d3',
+  '#2563eb',
+  '#ea580c',
+  '#4f46e5',
+  '#0d9488',
+  '#db2777',
+  '#65a30d',
+  '#9333ea',
+  '#0891b2',
+  '#b45309',
+  '#be123c',
+  '#047857',
+  '#1d4ed8',
+  '#c2410c',
+  '#6d28d9',
+  '#15803d',
+  '#0369a1',
+];
+
+export function brandBarColor(keyOrIndex, index = 0) {
+  const i = typeof keyOrIndex === 'number' ? keyOrIndex : index;
+  return BRAND_BAR_PALETTE[Math.abs(i) % BRAND_BAR_PALETTE.length];
+}
+
 function slugifyProductName(name) {
   return (
     String(name || '')
@@ -99,6 +130,23 @@ export function productToBrandKey(product, brands) {
   return null;
 }
 
+export function formatBrandLabel(brand) {
+  const label = String(brand?.label ?? '').trim();
+  const code = String(brand?.code ?? '').trim();
+  if (code && label) return `${code} · ${label}`;
+  return code || label || '';
+}
+
+/** Resolve a stored product name (e.g. on a PO) to `CODE · name` when the catalog has a code. */
+export function formatProductNameWithCode(productName, brands = getCachedBrands()) {
+  const raw = String(productName ?? '').trim();
+  if (!raw) return '';
+  const key = productToBrandKey(raw, brands);
+  if (!key) return raw;
+  const brand = brands.find((b) => b.key === key);
+  return brand ? formatBrandLabel(brand) || raw : raw;
+}
+
 /** Build themed brand rows from `/api/bag-products` payload. */
 export function buildBrands(products) {
   const list = Array.isArray(products) ? products : [];
@@ -107,6 +155,7 @@ export function buildBrands(products) {
     return {
       key: p.key,
       label: p.label,
+      code: String(p.code ?? '').trim(),
       bagsField: p.bagsField || `${p.key}Bags`,
       costField: p.costField || `${p.key}Cost`,
       cutOffPriceField: p.cutOffPriceField || `${p.key}CutOffPrice`,

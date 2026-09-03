@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { getCachedBrands } from './brandTheme';
+import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
 import {
   purchaserTaxAddress,
@@ -48,7 +48,7 @@ function buildBillLineItems(bill) {
     const unitPrice = Number(bill[`${brand.key}UnitPrice`]) || 0;
     items.push({
       reference: String(bill.stockId ?? '').trim() || '—',
-      description: brand.label,
+      description: formatBrandLabel(brand) || brand.label,
       quantity: bags,
       unitPrice,
       amountExVat: lineTotal(bags, unitPrice),

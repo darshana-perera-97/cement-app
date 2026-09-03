@@ -152,11 +152,65 @@ function normalizeBankAccounts(list) {
   return list.map((row, index) => normalizeBankAccount(row, `bank-${index}`));
 }
 
+function normalizeProductCode(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '')
+    .toUpperCase();
+}
+
+function productCodeKey(value) {
+  return normalizeProductCode(value).toLowerCase();
+}
+
+/** Next code after the highest existing trailing number (e.g. P-0006 → P-0007). */
+function suggestNextProductCode(products, excludeId = '') {
+  const skip = String(excludeId ?? '').trim();
+  let max = 0;
+  let prefix = 'P-';
+  let width = 4;
+  for (const p of Array.isArray(products) ? products : []) {
+    if (skip && String(p.id) === skip) continue;
+    const raw = normalizeProductCode(p.code);
+    if (!raw) continue;
+    const m = /^(.*?)(\d+)$/.exec(raw);
+    if (!m) continue;
+    const n = parseInt(m[2], 10);
+    if (!Number.isFinite(n) || n < max) continue;
+    max = n;
+    prefix = m[1] || 'P-';
+    width = Math.max(m[2].length, 1);
+  }
+  let next = `${prefix}${String(max + 1).padStart(width, '0')}`;
+  const taken = new Set(
+    (Array.isArray(products) ? products : [])
+      .filter((p) => !skip || String(p.id) !== skip)
+      .map((p) => productCodeKey(p.code))
+      .filter(Boolean),
+  );
+  while (taken.has(productCodeKey(next))) {
+    max += 1;
+    next = `${prefix}${String(max + 1).padStart(width, '0')}`;
+  }
+  return next;
+}
+
+function isProductCodeTaken(products, code, excludeId = '') {
+  const key = productCodeKey(code);
+  if (!key) return false;
+  const skip = String(excludeId ?? '').trim();
+  return (Array.isArray(products) ? products : []).some((p) => {
+    if (skip && String(p.id) === skip) return false;
+    return productCodeKey(p.code) === key;
+  });
+}
+
 function normalizeProduct(row, fallbackId) {
   const id = String(row?.id ?? fallbackId ?? '').trim();
   return {
     id: id || `prod-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: String(row?.name ?? '').trim(),
+    code: normalizeProductCode(row?.code ?? row?.productCode),
     createdAt: String(row?.createdAt ?? '').trim() || new Date().toISOString(),
   };
 }
@@ -242,16 +296,17 @@ async function seedProductsFromDistributors() {
       const key = name.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      rows.push(
-        normalizeProduct(
-          {
-            id: `prod-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-            name,
-            createdAt: new Date().toISOString(),
-          },
-          null,
-        ),
-      );
+          rows.push(
+            normalizeProduct(
+              {
+                id: `prod-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+                name,
+                code: `P-${String(rows.length + 1).padStart(4, '0')}`,
+                createdAt: new Date().toISOString(),
+              },
+              null,
+            ),
+          );
     }
   }
   return rows;
@@ -265,7 +320,18 @@ async function readShopData() {
     if (seeded.length > 0) {
       next = { ...next, products: seeded };
       await writeShopData(next);
+      return next;
     }
+  }
+  const missingCodes = next.products.some((p) => !normalizeProductCode(p.code));
+  if (missingCodes) {
+    const products = next.products.map((p) => ({ ...p }));
+    for (const p of products) {
+      if (normalizeProductCode(p.code)) continue;
+      p.code = suggestNextProductCode(products);
+    }
+    next = { ...next, products };
+    await writeShopData(next);
   }
   return next;
 }
@@ -350,19 +416,28 @@ async function deleteBankAccount(id) {
   return { shop };
 }
 
-function validateProductFields(body) {
+function validateProductFields(body, { requireCode = true } = {}) {
   const name = String(body.name ?? '').trim();
   if (!name) return { error: 'Product name is required' };
-  return { name };
+  let code = normalizeProductCode(body.code ?? body.productCode);
+  if (!code && requireCode) return { error: 'Product code is required' };
+  if (code && !/^[A-Z0-9][A-Z0-9._-]*$/.test(code)) {
+    return { error: 'Product code can use letters, numbers, . _ -' };
+  }
+  return { name, code };
 }
 
 async function addProduct(body) {
-  const fields = validateProductFields(body);
-  if (fields.error) return { error: fields.error };
-
   const shop = await readShopData();
-  const duplicate = shop.products.some((p) => p.name.toLowerCase() === fields.name.toLowerCase());
-  if (duplicate) return { error: 'A product with this name already exists' };
+  const fields = validateProductFields(body, { requireCode: false });
+  if (fields.error) return { error: fields.error };
+  if (!fields.code) fields.code = suggestNextProductCode(shop.products);
+
+  const duplicateName = shop.products.some((p) => p.name.toLowerCase() === fields.name.toLowerCase());
+  if (duplicateName) return { error: 'A product with this name already exists' };
+  if (isProductCodeTaken(shop.products, fields.code)) {
+    return { error: 'A product with this code already exists' };
+  }
 
   const row = normalizeProduct(
     {
@@ -387,11 +462,15 @@ async function updateProduct(id, body) {
 
   const fields = validateProductFields({ ...shop.products[idx], ...body });
   if (fields.error) return { error: fields.error };
+  if (!fields.code) fields.code = suggestNextProductCode(shop.products, productId);
 
-  const duplicate = shop.products.some(
+  const duplicateName = shop.products.some(
     (p, i) => i !== idx && p.name.toLowerCase() === fields.name.toLowerCase(),
   );
-  if (duplicate) return { error: 'A product with this name already exists' };
+  if (duplicateName) return { error: 'A product with this name already exists' };
+  if (isProductCodeTaken(shop.products, fields.code, productId)) {
+    return { error: 'A product with this code already exists' };
+  }
 
   const updated = normalizeProduct(
     {
@@ -441,6 +520,9 @@ module.exports = {
   deleteBankAccount,
   normalizeProduct,
   normalizeProducts,
+  normalizeProductCode,
+  suggestNextProductCode,
+  isProductCodeTaken,
   validateProductFields,
   addProduct,
   updateProduct,

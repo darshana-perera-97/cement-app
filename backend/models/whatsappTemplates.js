@@ -1,4 +1,4 @@
-const { activeBagProductsOnRecord, totalBagsFromRecord } = require('./bagProducts');
+const { activeBagProductsOnRecord, totalBagsFromRecord, formatProductLabel } = require('./bagProducts');
 
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
@@ -23,7 +23,7 @@ function formatDate(ymd) {
 function billBagLines(record, hideFinancialDetails = false, products = []) {
   const lines = [];
   for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
-    let line = `• ${product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
+    let line = `• ${formatProductLabel(product) || product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`;
     if (!hideFinancialDetails) {
       const unitPrice = Number(record[product.unitPriceField]);
       const lineTotal = Number(record[`${product.key}Line`]);
@@ -212,7 +212,7 @@ function buildChequeReturnWhatsApp({ customer, payment, cheque, remainingAmount,
 function unloadBagLines(record, products = []) {
   const lines = [];
   for (const { product, bags } of activeBagProductsOnRecord(record, products)) {
-    lines.push(`• ${product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
+    lines.push(`• ${formatProductLabel(product) || product.label}: ${bags.toLocaleString()} bag${bags === 1 ? '' : 's'}`);
   }
   return lines;
 }
