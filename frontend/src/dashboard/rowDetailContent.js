@@ -412,6 +412,7 @@ function BillDetailContent({ row }) {
           className="col-span-2 bg-indigo-50 ring-indigo-100"
         />
       </SummaryGrid>
+      {row.note ? <NoteBlock value={row.note} /> : null}
       <BrandSections title="Bags sold">
         {brands.map((b) => {
           const bags = Number(row[`${b.key}Bags`]) || 0;

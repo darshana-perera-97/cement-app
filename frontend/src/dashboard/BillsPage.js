@@ -46,6 +46,7 @@ function emptyForm(brands) {
     date: new Date().toISOString().slice(0, 10),
     customerId: '',
     invoiceNumber: '',
+    note: '',
   };
   for (const b of brands) {
     f[`${b.key}Bags`] = '';
@@ -61,6 +62,7 @@ function formFromBill(bill, customers, brands) {
     date: String(bill.date ?? '').trim() || new Date().toISOString().slice(0, 10),
     customerId: match?.id ?? '',
     invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
+    note: String(bill.note ?? '').trim(),
   };
   for (const b of brands) {
     const bags = bill[`${b.key}Bags`];
@@ -264,7 +266,38 @@ function BillSaleFormFields({
           })}
         </div>
       </div>
+      <label className="block text-xs font-medium text-slate-600">
+        Note (optional)
+        <textarea
+          rows={2}
+          value={form.note ?? ''}
+          onChange={(e) => onChange('note', e.target.value)}
+          className="mt-1 w-full resize-y rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+          placeholder="e.g. Delivery remarks, special instructions…"
+        />
+      </label>
     </>
+  );
+}
+
+function billNoteText(row) {
+  return String(row?.note ?? '').trim();
+}
+
+function BillRowNoteTooltip({ hover }) {
+  if (!hover?.text) return null;
+  const pad = 12;
+  const maxW = 288;
+  const left = Math.max(pad, Math.min(hover.x + 14, window.innerWidth - maxW - pad));
+  const top = Math.min(hover.y + 18, window.innerHeight - 80);
+  return (
+    <div
+      role="tooltip"
+      className="pointer-events-none fixed z-[200] max-w-xs whitespace-pre-wrap break-words rounded-lg bg-slate-800 px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white shadow-lg ring-1 ring-black/10"
+      style={{ left, top }}
+    >
+      {hover.text}
+    </div>
   );
 }
 
@@ -289,6 +322,7 @@ export default function BillsPage() {
   const [loads, setLoads] = useState([]);
   const [unloads, setUnloads] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [hoverNote, setHoverNote] = useState(null);
   const invoiceNumberTouched = useRef(false);
 
   const loadCustomers = useCallback(async () => {
@@ -392,6 +426,7 @@ export default function BillsPage() {
           r.customerName,
           r.invoiceNumber,
           r.enteredBy,
+          r.note,
           String(r.totalAmount ?? ''),
           ...bagParts,
         ]);
@@ -545,6 +580,7 @@ export default function BillsPage() {
       date: form.date,
       customerName: String(selected.name || '').trim(),
       invoiceNumber: normalizeBillInvoiceNumber(form.invoiceNumber),
+      note: String(form.note ?? '').trim(),
     };
     for (const b of brands) {
       body[`${b.key}Bags`] = form[`${b.key}Bags`];
@@ -761,6 +797,7 @@ export default function BillsPage() {
                   value: String(r[`${b.key}Bags`] ?? 0),
                 })),
                 { label: 'Total', value: money(r.totalAmount) },
+                ...(billNoteText(r) ? [{ label: 'Note', value: billNoteText(r) }] : []),
               ]}
               onClick={() => setDetailBill(r)}
             />
@@ -825,11 +862,24 @@ export default function BillsPage() {
             ) : (
               pagedRows.map((r) => {
                 const rowLine = 'border-b border-slate-100/90';
+                const note = billNoteText(r);
+                const showNote = (e) => setHoverNote({ text: note, x: e.clientX, y: e.clientY });
                 return (
                   <tr
                     key={r.id}
-                    {...detailRowAttrs(() => setDetailBill(r))}
-                    aria-label={`Credit bill ${r.customerName || ''}`}
+                    {...detailRowAttrs(() => {
+                      setHoverNote(null);
+                      setDetailBill(r);
+                    })}
+                    title={note ? undefined : 'Click to view full row'}
+                    aria-label={
+                      note
+                        ? `Credit bill ${r.customerName || ''}. Note: ${note}`
+                        : `Credit bill ${r.customerName || ''}`
+                    }
+                    onMouseEnter={note ? showNote : undefined}
+                    onMouseMove={note ? showNote : undefined}
+                    onMouseLeave={note ? () => setHoverNote(null) : undefined}
                   >
                     <td
                       className={`whitespace-nowrap px-3 py-3 font-medium ${rowLine} bg-slate-50/70 tabular-nums ${stickyFirstTd}`}
@@ -847,7 +897,15 @@ export default function BillsPage() {
                       {r.stockId || '—'}
                     </td>
                     <td className={`max-w-[180px] px-3 py-3 font-medium text-slate-900 ${rowLine} bg-slate-50/70`}>
-                      <span className="line-clamp-2">{r.customerName}</span>
+                      <span className="line-clamp-2">
+                        {r.customerName}
+                        {note ? (
+                          <span
+                            className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-400 align-middle"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </span>
                     </td>
                     {brands.map((b) => (
                       <td
@@ -993,6 +1051,7 @@ export default function BillsPage() {
           ) : null
         }
       />
+      <BillRowNoteTooltip hover={hoverNote} />
     </div>
   );
 }

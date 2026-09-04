@@ -3818,6 +3818,7 @@ app.post('/api/bills', async (req, res) => {
     }
     const keys = products.map((p) => p.key);
     const stockId = stockIdFromBody || inferStockIdForBillBags(stocks, bills, fields, keys);
+    const note = String(body.note ?? '').trim();
 
     const row = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -3826,6 +3827,7 @@ app.post('/api/bills', async (req, res) => {
       stockId,
       invoiceNumber: parsedInvoice.invoiceNumber,
       ...fields,
+      note,
       enteredBy,
       createdAt: new Date().toISOString(),
     };
@@ -3938,6 +3940,7 @@ app.patch('/api/bills/:id', async (req, res) => {
       customerName,
       invoiceNumber: parsedInvoice.invoiceNumber,
       ...fields,
+      note: String(body.note ?? '').trim(),
       updatedBy,
       updatedAt: new Date().toISOString(),
     };

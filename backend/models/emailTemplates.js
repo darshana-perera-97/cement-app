@@ -147,6 +147,7 @@ function buildBillEmail({ customer, bill, remainingAmount, company, hideFinancia
       rows.push({ label: 'Bill total', value: formatMoney(billTotal) });
     }
   }
+  if (bill.note) rows.push({ label: 'Note', value: bill.note });
 
   return {
     subject: `Credit sale · ${customer.name}`,

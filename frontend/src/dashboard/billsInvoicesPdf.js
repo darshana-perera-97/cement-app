@@ -35,6 +35,62 @@ function formatDisplayDate(value) {
   return s;
 }
 
+/** Print stamp matching typical invoice footers, e.g. 04/09/2026 10:08:41PM */
+function formatPrintTimestamp(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  const hh = String(hours).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} ${hh}:${minutes}:${seconds}${ampm}`;
+}
+
+function drawInvoiceAcknowledgement(doc, startY, generatedAt) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const contentWidth = pageWidth - MARGIN * 2;
+  let y = startY + 4;
+
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...BLACK);
+  const ack = 'Received the above goods in correct quantity and in good condition.';
+  const ackLines = doc.splitTextToSize(ack, contentWidth);
+  doc.text(ackLines, MARGIN, y);
+  y += ackLines.length * 5 + 16;
+
+  const colW = contentWidth / 2;
+  const lineW = Math.min(72, colW - 8);
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.35);
+  doc.line(MARGIN, y, MARGIN + lineW, y);
+  doc.line(MARGIN + colW, y, MARGIN + colW + lineW, y);
+  y += 5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('Customer Signature & Rubber Stamp', MARGIN, y);
+  doc.text('Approved By', MARGIN + colW, y);
+  y += 8;
+
+  const stamp = formatPrintTimestamp(generatedAt);
+  if (stamp) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text(stamp, MARGIN, y);
+    doc.setTextColor(...BLACK);
+    y += 4;
+  }
+  return y;
+}
+
 function underlineText(doc, text, x, y, options = {}) {
   doc.text(text, x, y, options);
   const w = doc.getTextWidth(text);
@@ -205,7 +261,7 @@ function sumInvoiceDiscountForBill(promotions, billId) {
   return Math.round(sum * 100) / 100;
 }
 
-function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups) {
+function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups, generatedAt) {
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;
   let y = drawLetterhead(doc, opts, 16);
@@ -321,9 +377,11 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
     margin: { left: MARGIN, right: MARGIN },
   });
 
-  y = (doc.lastAutoTable?.finalY || y) + 10;
+  y = (doc.lastAutoTable?.finalY || y) + 8;
+  y = drawInvoiceAcknowledgement(doc, y, generatedAt);
 
   if (opts.deliveryNote) {
+    y += 6;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...MUTED);
@@ -365,19 +423,8 @@ export function downloadBillsInvoicesPdf(bills, opts = {}) {
 
   list.forEach((bill, index) => {
     if (index > 0) doc.addPage();
-    renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups);
+    renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups, generatedAt);
   });
-
-  const pageCount = doc.internal.getNumberOfPages();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  for (let i = 1; i <= pageCount; i++) {
-    doc.setPage(i);
-    doc.setTextColor(100, 116, 139);
-    doc.text(`Page ${i} of ${pageCount}`, MARGIN, pageHeight - 8);
-    doc.setTextColor(0, 0, 0);
-  }
 
   const { dateFrom = '', dateTo = '' } = opts;
   const rangeSlug =

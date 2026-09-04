@@ -33,6 +33,57 @@ function formatDisplayDate(value) {
   return s;
 }
 
+/** Print stamp matching typical invoice footers, e.g. 04/09/2026 10:08:41PM */
+function formatPrintTimestamp(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  const hh = String(hours).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} ${hh}:${minutes}:${seconds}${ampm}`;
+}
+
+function drawInvoiceAcknowledgement(doc, startY, generatedAt) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const contentWidth = pageWidth - MARGIN * 2;
+  let y = startY + 4;
+
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  const ack = 'Received the above goods in correct quantity and in good condition.';
+  const ackLines = doc.splitTextToSize(ack, contentWidth);
+  doc.text(ackLines, MARGIN, y);
+  y += ackLines.length * 5 + 16;
+
+  const colW = contentWidth / 2;
+  const lineW = Math.min(72, colW - 8);
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.35);
+  doc.line(MARGIN, y, MARGIN + lineW, y);
+  doc.line(MARGIN + colW, y, MARGIN + colW + lineW, y);
+  y += 5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text('Customer Signature & Rubber Stamp', MARGIN, y);
+  doc.text('Approved By', MARGIN + colW, y);
+  y += 8;
+
+  const stamp = formatPrintTimestamp(generatedAt);
+  if (stamp) {
+    doc.setFontSize(8);
+    doc.text(stamp, MARGIN, y);
+  }
+}
+
 function lineTotal(bags, unitPrice) {
   const b = Number(bags) || 0;
   const u = Number(unitPrice) || 0;
@@ -343,6 +394,7 @@ function renderTaxInvoicePage(doc, bill, opts) {
   );
   y += 12;
   drawLabeledField(doc, 'Mode of Payment:', modeOfPayment, MARGIN, y, contentWidth, 10);
+  drawInvoiceAcknowledgement(doc, y + 10, opts.generatedAt instanceof Date ? opts.generatedAt : new Date());
 }
 
 /**

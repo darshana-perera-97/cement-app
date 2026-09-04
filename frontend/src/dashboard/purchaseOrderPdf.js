@@ -3,9 +3,18 @@ import autoTable from 'jspdf-autotable';
 import { doorStepNotesText, isPoCashPayment, poChequeBankLabel } from './poChequeDisplay';
 import { formatProductNameWithCode } from './brandTheme';
 
-const MARGIN = 16;
+const MARGIN = 10;
 const BLACK = [0, 0, 0];
 const MUTED = [40, 40, 40];
+const FONT = {
+  shop: 16,
+  header: 10.5,
+  title: 14,
+  section: 12,
+  body: 11,
+  table: 11,
+};
+const LINE = 4.8;
 
 function display(v) {
   const s = String(v ?? '').trim();
@@ -76,7 +85,7 @@ function underlineText(doc, text, x, y, options = {}) {
 }
 
 /**
- * Download a single-page Purchase Order PDF in ORDER REQUEST letterhead format.
+ * Download a single-page A5 Purchase Order PDF in ORDER REQUEST letterhead format.
  * @param {object} po
  * @param {{
  *   shopName?: string,
@@ -114,60 +123,62 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   ).trim();
   const driverLicense = String(opts.driverLicense || po.driverLicense || '').trim();
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;
 
-  let y = 16;
+  let y = 10;
 
   // ——— Header / letterhead ———
   doc.setFont('times', 'bold');
-  doc.setFontSize(22);
+  doc.setFontSize(FONT.shop);
   doc.setTextColor(...BLACK);
-  doc.text(shopName, MARGIN, y);
-  y += 7;
+  const shopLines = doc.splitTextToSize(shopName, contentWidth);
+  doc.text(shopLines, MARGIN, y);
+  y += shopLines.length * 5.6;
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
+  doc.setFontSize(FONT.header);
   doc.setTextColor(...MUTED);
 
   if (registrationNo) {
     doc.text(`( Reg. No: ${registrationNo} )`, MARGIN, y);
-    y += 5;
+    y += LINE;
   }
 
   const addressParts = [addressLine1, addressLine2].filter(Boolean);
   if (addressParts.length > 0) {
-    const addr = addressParts.join(', ');
-    doc.text(addr, MARGIN, y);
-    y += 5;
+    const addrLines = doc.splitTextToSize(addressParts.join(', '), contentWidth);
+    doc.text(addrLines, MARGIN, y);
+    y += addrLines.length * LINE;
   }
 
   if (email) {
     doc.text(`E-Mail : ${email}`, MARGIN, y);
-    y += 5;
+    y += LINE;
   }
 
   if (contactNumber) {
     doc.text(`Tele : ${contactNumber}`, MARGIN, y);
-    y += 5;
+    y += LINE;
   }
 
   y += 1;
   doc.setFont('helvetica', 'italic');
-  doc.setFontSize(9.5);
+  doc.setFontSize(FONT.header);
   doc.setTextColor(...BLACK);
-  doc.text(dealerTagline, MARGIN, y);
-  y += 5;
+  const tagLines = doc.splitTextToSize(dealerTagline, contentWidth);
+  doc.text(tagLines, MARGIN, y);
+  y += tagLines.length * LINE;
 
   doc.setDrawColor(...BLACK);
   doc.setLineWidth(0.5);
   doc.line(MARGIN, y, pageWidth - MARGIN, y);
-  y += 8;
+  y += 5.5;
 
   // ——— Meta: Dealer Code / Order NO / Title / Date ———
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(FONT.body);
   doc.setTextColor(...BLACK);
 
   const orderNo = orderNumberDisplay(po.poNumber);
@@ -175,45 +186,47 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
 
   doc.text(`Dealer Code : ${display(dealerCode)}`, MARGIN, y);
   doc.text(`Order NO : ${orderNo}`, pageWidth - MARGIN, y, { align: 'right' });
-  y += 7;
+  y += 6;
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
+  doc.setFontSize(FONT.title);
   underlineText(doc, 'ORDER REQUEST', pageWidth / 2, y, { align: 'center' });
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(FONT.body);
   doc.text(`DATE : ${orderDate}`, pageWidth - MARGIN, y, { align: 'right' });
-  y += 10;
+  y += 7;
 
   // ——— Recipient ———
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(FONT.body);
   doc.text('The Manager ,', MARGIN, y);
-  y += 5;
+  y += LINE;
   doc.setFont('helvetica', 'bold');
-  doc.text(display(distributorName).toUpperCase(), MARGIN, y);
-  y += 5;
+  const nameLines = doc.splitTextToSize(display(distributorName).toUpperCase(), contentWidth);
+  doc.text(nameLines, MARGIN, y);
+  y += nameLines.length * LINE;
   doc.setFont('helvetica', 'normal');
   if (distributorLocation) {
-    doc.text(distributorLocation, MARGIN, y);
-    y += 5;
+    const locLines = doc.splitTextToSize(distributorLocation, contentWidth);
+    doc.text(locLines, MARGIN, y);
+    y += locLines.length * LINE;
   }
-  y += 3;
+  y += 2.5;
 
   doc.text('Dear Sir,', MARGIN, y);
-  y += 5.5;
+  y += 5;
   const intro =
     'Please be kindly enough to issue these products. Details of the Vehicle and products are given bellow. Thank You.';
   const introLines = doc.splitTextToSize(intro, contentWidth);
   doc.text(introLines, MARGIN, y);
-  y += introLines.length * 5 + 6;
+  y += introLines.length * LINE + 4;
 
   // ——— Product Details ———
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(FONT.section);
   underlineText(doc, 'Product Details', MARGIN, y);
-  y += 4;
+  y += 3.5;
 
   const lineTotal = po.lineTotal ?? po.totalAmount;
   autoTable(doc, {
@@ -230,11 +243,11 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     theme: 'grid',
     styles: {
       font: 'helvetica',
-      fontSize: 10,
+      fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
       lineWidth: 0.35,
-      cellPadding: 2.5,
+      cellPadding: 1.8,
       valign: 'middle',
     },
     headStyles: {
@@ -251,13 +264,13 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     },
     margin: { left: MARGIN, right: MARGIN },
   });
-  y = (doc.lastAutoTable?.finalY || y) + 10;
+  y = (doc.lastAutoTable?.finalY || y) + 5.5;
 
   // ——— Payment Details ———
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(FONT.section);
   underlineText(doc, 'PAYMENT DETAILS', MARGIN, y);
-  y += 4;
+  y += 3.5;
 
   const cheques = Array.isArray(po.cheques) ? po.cheques : [];
   const paymentBody =
@@ -281,11 +294,11 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     theme: 'grid',
     styles: {
       font: 'helvetica',
-      fontSize: 10,
+      fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
       lineWidth: 0.35,
-      cellPadding: 2.5,
+      cellPadding: 1.8,
       valign: 'middle',
     },
     headStyles: {
@@ -302,13 +315,13 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     },
     margin: { left: MARGIN, right: MARGIN },
   });
-  y = (doc.lastAutoTable?.finalY || y) + 10;
+  y = (doc.lastAutoTable?.finalY || y) + 5.5;
 
   // ——— Vehicle Details ———
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(FONT.section);
   underlineText(doc, 'VEHICAL DETAILS', MARGIN, y);
-  y += 4;
+  y += 3.5;
 
   const vehicleLines = [
     `Driver Name : ${display(po.driverName).toUpperCase()}`,
@@ -322,28 +335,28 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     theme: 'grid',
     styles: {
       font: 'helvetica',
-      fontSize: 10,
+      fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
       lineWidth: 0.35,
-      cellPadding: { top: 2.8, bottom: 2.8, left: 4, right: 4 },
+      cellPadding: { top: 2, bottom: 2, left: 3, right: 3 },
     },
     columnStyles: {
-      0: { cellWidth: contentWidth * 0.55 },
+      0: { cellWidth: contentWidth * 0.85 },
     },
     margin: { left: MARGIN, right: MARGIN },
-    tableWidth: contentWidth * 0.55,
+    tableWidth: contentWidth * 0.85,
   });
-  y = (doc.lastAutoTable?.finalY || y) + 10;
+  y = (doc.lastAutoTable?.finalY || y) + 5.5;
 
   const notesText = doorStepNotesText(po);
   if (notesText) {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
+    doc.setFontSize(FONT.section);
     underlineText(doc, 'NOTES', MARGIN, y);
-    y += 6;
+    y += 5;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
+    doc.setFontSize(FONT.body);
     const noteLines = doc.splitTextToSize(notesText, contentWidth);
     doc.text(noteLines, MARGIN, y);
   }
