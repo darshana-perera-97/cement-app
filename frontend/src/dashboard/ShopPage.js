@@ -963,7 +963,7 @@ export default function ShopPage() {
         </div>
 
         <div className={scrollTableWrap}>
-          <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Nick name</th>
@@ -1049,7 +1049,7 @@ export default function ShopPage() {
         </div>
 
         <div className={scrollTableWrap}>
-          <table className="w-full min-w-[520px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[520px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Code</th>
@@ -1134,7 +1134,7 @@ export default function ShopPage() {
         ) : null}
 
         <div className={scrollTableWrap}>
-          <table className="w-full min-w-[420px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[420px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Name</th>
@@ -1212,7 +1212,7 @@ export default function ShopPage() {
         ) : null}
 
         <div className={scrollTableWrap}>
-          <table className="w-full min-w-[420px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[420px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Lorry number</th>

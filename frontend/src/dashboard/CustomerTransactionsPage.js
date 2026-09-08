@@ -586,7 +586,7 @@ export default function CustomerTransactionsPage() {
             {loading ? (
               <p className="px-4 py-12 text-center text-sm text-slate-500"><LoadingSpinner label="Loading activity…" /></p>
             ) : (
-              <table className="w-full min-w-[520px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[520px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>

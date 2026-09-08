@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_DEV_API_URL, getApiBase } from './apiBase';
-import { isAuthed, setAuth, getFirstAllowedDashboardPath } from './auth';
+import { isAuthed, setAuth, setDriverAuth, getPostLoginPath } from './auth';
 import { shopNameInitials, useShopName } from './shopConfig';
 
 const apiBase = getApiBase();
@@ -16,7 +16,7 @@ function Login() {
 
   useEffect(() => {
     if (isAuthed()) {
-      navigate(getFirstAllowedDashboardPath(), { replace: true });
+      navigate(getPostLoginPath(), { replace: true });
     }
   }, [navigate]);
 
@@ -60,8 +60,12 @@ function Login() {
         setError('Server did not return an auth token. Update the backend and sign in again.');
         return;
       }
-      setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess);
-      navigate(getFirstAllowedDashboardPath(), { replace: true });
+      if (String(data.staffRole || '').trim() === 'Driver') {
+        setDriverAuth(resolvedUser, token, data.name);
+      } else {
+        setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess);
+      }
+      navigate(getPostLoginPath(), { replace: true });
     } catch {
       setError(
         `Could not reach the server. Is the backend running at ${DEFAULT_DEV_API_URL}?`

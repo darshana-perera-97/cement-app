@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Footer from './Footer';
 import Login from './Login';
-import { getFirstAllowedDashboardPath, isAuthed } from './auth';
+import { getFirstAllowedDashboardPath, getPostLoginPath, isAuthed, isDriverAuthed } from './auth';
 import { useDocumentTitle } from './seo';
 import DashboardLayout from './dashboard/DashboardLayout';
 import DashboardAccessRoute from './dashboard/DashboardAccessRoute';
@@ -29,6 +29,9 @@ import { BagProductsProvider } from './dashboard/BagProductsContext';
 function ProtectedRoute({ children }) {
   if (!isAuthed()) {
     return <Navigate to="/login" replace />;
+  }
+  if (isDriverAuthed()) {
+    return <Navigate to="/unloads" replace />;
   }
   return children;
 }
@@ -206,7 +209,7 @@ function AppRoutes() {
       </Route>
       <Route
         path="/"
-        element={<Navigate to={isAuthed() ? getFirstAllowedDashboardPath() : '/login'} replace />}
+        element={<Navigate to={isAuthed() ? getPostLoginPath() : '/login'} replace />}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

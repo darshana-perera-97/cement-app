@@ -154,7 +154,7 @@ export default function CustomerChequesPanel({
               : `No ${tab} cheques.`}
           </p>
         ) : (
-          <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`px-4 py-3 ${stickyFirstTh}`}>Cheque</th>

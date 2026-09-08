@@ -479,7 +479,7 @@ export default function CashBookChequeDepositModal({ open, onClose, onSaved, ban
                   </ul>
 
                   <div className={`mt-2 hidden max-h-64 overflow-y-auto overscroll-contain sm:block ${scrollTableWrap}`}>
-                    <table className="w-full min-w-[540px] border-separate border-spacing-0 text-left text-sm">
+                    <table className="w-full min-w-[540px] data-table border-separate border-spacing-0 text-left text-sm">
                       <thead className={stickyThead}>
                         <tr className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                           <th className="w-10 px-2 py-2">

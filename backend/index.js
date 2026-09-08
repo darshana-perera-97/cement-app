@@ -1575,6 +1575,7 @@ app.post('/api/login', async (req, res) => {
         managerAccess: userRole === 'Manager' ? getEffectiveManagerAccess(u.access) : undefined,
         token: signToken(u.username, 'staff'),
         username: u.username,
+        name: String(u.name || '').trim() || u.username,
       });
     }
     return res.status(401).json({ error: 'Invalid username or password' });

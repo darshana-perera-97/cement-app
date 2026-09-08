@@ -1773,7 +1773,7 @@ export default function ReportsPage() {
                 )}
               </div>
               <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[600px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[600px] data-table border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -1861,7 +1861,7 @@ export default function ReportsPage() {
                 )}
               </div>
               <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -1972,7 +1972,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 ${scrollTableWrap}`}>
-          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Days to settle</th>
@@ -2007,7 +2007,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-6 ${scrollTableWrap}`}>
-          <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[1100px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -2127,7 +2127,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -2299,7 +2299,7 @@ export default function ReportsPage() {
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
           <table
-            className="w-full border-separate border-spacing-0 text-left text-sm"
+            className="w-full data-table border-separate border-spacing-0 text-left text-sm"
             style={{ minWidth: `${220 + dailyBagsReport.daysInMonth * 36 + 64}px` }}
           >
             <thead className={stickyThead}>
@@ -2466,7 +2466,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
@@ -2702,7 +2702,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[780px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[780px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>StockID</th>
@@ -2901,7 +2901,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
@@ -3138,7 +3138,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[880px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[880px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -3235,7 +3235,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -3344,7 +3344,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -3471,7 +3471,7 @@ export default function ReportsPage() {
         </div>
 
         <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -3700,7 +3700,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -3799,7 +3799,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[480px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -3879,7 +3879,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[480px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
@@ -3971,7 +3971,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Payment date</th>
@@ -4051,7 +4051,7 @@ export default function ReportsPage() {
               )}
             </div>
             <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[880px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[880px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Cheque date</th>

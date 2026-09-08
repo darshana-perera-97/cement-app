@@ -769,7 +769,7 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[760px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -1224,7 +1224,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
             </p>
           ) : (
             <div className={`mt-4 ${scrollTableWrap}`}>
-              <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className={`px-4 py-3 ${stickyFirstTh}`}>Customer</th>
@@ -1397,7 +1397,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -1940,7 +1940,7 @@ function BankGuaranteePanel({ refreshToken, onBooksChanged }) {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[820px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>

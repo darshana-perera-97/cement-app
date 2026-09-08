@@ -6,6 +6,9 @@ function Footer() {
   const { pathname } = useLocation();
   const shopName = useShopName();
   const dashboard = pathname.startsWith('/dashboard');
+  if (pathname === '/unloads' || pathname.startsWith('/unloads/')) {
+    return null;
+  }
 
   return (
     <footer

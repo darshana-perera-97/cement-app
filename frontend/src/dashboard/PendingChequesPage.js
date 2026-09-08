@@ -123,7 +123,7 @@ function IncomingChequeSection({ rows, search }) {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               <th className={`px-3 py-3 ${stickyFirstTh}`}>Customer</th>
@@ -225,7 +225,7 @@ function OutgoingPoChequeSection({ rows, search }) {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               <th className={`px-3 py-3 ${stickyFirstTh}`}>Product</th>

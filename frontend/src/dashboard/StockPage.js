@@ -256,7 +256,7 @@ export default function StockPage() {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyTheadTransparent}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th rowSpan={2} className={`whitespace-nowrap px-3 py-3 align-bottom ${stickyFirstThTransparent}`}>

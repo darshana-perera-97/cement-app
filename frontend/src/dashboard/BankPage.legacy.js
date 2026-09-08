@@ -354,7 +354,7 @@ export default function BankPage() {
             )}
           </div>
           <div className={`hidden sm:block ${scrollTableWrap}`}>
-            <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
               <thead className={stickyThead}>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -557,7 +557,7 @@ export default function BankPage() {
             )}
           </div>
           <div className={`hidden sm:block ${scrollTableWrap}`}>
-            <table className="w-full min-w-[560px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[560px] data-table border-separate border-spacing-0 text-left text-sm">
               <thead className={stickyThead}>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Cheque date</th>

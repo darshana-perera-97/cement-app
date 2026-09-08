@@ -107,12 +107,22 @@ export function ModalBackdrop({ onClose, className = '' }) {
 }
 
 /**
+ * Shared table class: layout + `data-table` hook for the responsive type scale
+ * in `index.css` (phone 11px → tablet 12–12.5px → laptop 13px → desktop 14–15px).
+ */
+export const dataTableClass =
+  'data-table w-full border-separate border-spacing-0 text-left text-sm';
+
+export const dataTableHeadRow =
+  'text-xs font-semibold uppercase tracking-wide text-slate-500';
+
+/**
  * Wrapper for data tables: vertical + horizontal scroll with a max height so
  * `position: sticky` on `<thead>` keeps headers visible while scrolling rows.
  * Use with `hidden sm:block` — phones use {@link MobileRowCard} lists instead.
  */
 export const scrollTableWrap =
-  'max-h-[min(70vh,40rem)] overflow-auto rounded-[20px] bg-white shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:max-h-[min(75vh,40rem)]';
+  'data-table-wrap max-h-[min(70vh,40rem)] overflow-auto rounded-[20px] bg-white shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:max-h-[min(75vh,40rem)]';
 
 /** Apply to `<thead>` (sticky within {@link scrollTableWrap}). */
 export const stickyThead =
@@ -137,6 +147,24 @@ export const stickyFirstTd =
 
 export const stickyFirstTdMuted =
   'sticky left-0 z-[11] bg-slate-50/95 shadow-[2px_0_4px_-2px_rgba(15,23,42,0.06)]';
+
+/**
+ * Two-column sticky pair (e.g. Date + customer). Keep the first-column width
+ * in sync with `left-[8rem]` on the second column.
+ */
+export const stickyDateColWidth = 'w-[8rem] min-w-[8rem] max-w-[8rem] overflow-hidden';
+
+export const stickyFirstOfPairTh =
+  'sticky left-0 z-[14] bg-slate-50';
+
+export const stickyFirstOfPairTd =
+  'sticky left-0 z-[12] bg-white';
+
+export const stickySecondTh =
+  'sticky left-[8rem] z-[13] bg-slate-50 shadow-[2px_0_4px_-2px_rgba(15,23,42,0.08)]';
+
+export const stickySecondTd =
+  'sticky left-[8rem] z-[11] bg-white shadow-[2px_0_4px_-2px_rgba(15,23,42,0.06)]';
 
 /** Mobile-only list wrapper (`sm:hidden`). Pair with `hidden sm:block` + scrollTableWrap. */
 export const mobileCardList =
@@ -163,7 +191,7 @@ export function MobileRowCard({
   className = '',
 }) {
   const shellClass =
-    `rounded-2xl bg-white p-4 shadow-md shadow-slate-200/30 ring-1 ring-slate-100 ${
+    `mobile-row-card rounded-2xl bg-white p-3.5 shadow-md shadow-slate-200/30 ring-1 ring-slate-100 sm:p-4 ${
       onClick ? 'cursor-pointer transition hover:ring-indigo-200/80' : ''
     } ${className}`.trim();
 
@@ -186,9 +214,9 @@ export function MobileRowCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-slate-900">{title}</p>
+          <p className="truncate text-[13px] font-semibold leading-snug text-slate-900 sm:text-sm">{title}</p>
           {subtitle ? (
-            <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-slate-500">{subtitle}</p>
+            <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500 sm:text-xs">{subtitle}</p>
           ) : null}
         </div>
         {badge ? <div className="shrink-0">{badge}</div> : null}
@@ -197,10 +225,10 @@ export function MobileRowCard({
         <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
           {fields.map((f, i) => (
             <div key={`${f.label}-${i}`} className="min-w-0">
-              <dt className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+              <dt className="text-[10px] font-medium uppercase tracking-wide text-slate-400 sm:text-[11px]">
                 {f.label}
               </dt>
-              <dd className="mt-0.5 break-words text-sm font-medium tabular-nums text-slate-800">
+              <dd className="mt-0.5 break-words text-[13px] font-medium tabular-nums leading-snug text-slate-800 sm:text-sm">
                 {f.value ?? '—'}
               </dd>
             </div>
@@ -302,7 +330,7 @@ export function TablePaginationBar({
     <div
       className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${className}`.trim()}
     >
-      <p className="text-xs tabular-nums text-slate-500">
+      <p className="text-[11px] tabular-nums text-slate-500 sm:text-xs">
         {totalCount === 0
           ? 'No rows on this page.'
           : `${from}–${to} of ${totalCount.toLocaleString()}`}

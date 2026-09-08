@@ -1175,7 +1175,7 @@ export default function MessagesPage() {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[760px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`px-4 py-3 ${stickyFirstTh}`}>Sent</th>
@@ -1337,7 +1337,7 @@ export default function MessagesPage() {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[760px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`px-4 py-3 ${stickyFirstTh}`}>Sent</th>

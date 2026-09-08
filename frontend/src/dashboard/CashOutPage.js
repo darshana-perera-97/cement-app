@@ -122,7 +122,7 @@ export default function CashOutPage() {
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[420px] border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[420px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Converting date</th>
@@ -233,7 +233,7 @@ export default function CashOutPage() {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>

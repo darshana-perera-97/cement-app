@@ -298,7 +298,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
       ) : (
         <>
           <div className={`mt-5 ${scrollTableWrap}`}>
-            <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
               <thead className={stickyThead}>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Days bucket</th>
@@ -336,7 +336,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
           </div>
 
           <div className={`mt-6 ${scrollTableWrap}`}>
-            <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[1100px] data-table border-separate border-spacing-0 text-left text-sm">
               <thead className={stickyThead}>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>

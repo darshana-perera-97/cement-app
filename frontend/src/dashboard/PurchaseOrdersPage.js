@@ -1133,7 +1133,7 @@ export default function PurchaseOrdersPage() {
         </div>
 
         <div className={`${scrollTableWrap} hidden md:block`}>
-          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+          <table className="data-table min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead className={stickyThead}>
               <tr>
                 <th className={`whitespace-nowrap px-4 py-3 font-semibold text-slate-600 ${stickyFirstTh}`}>

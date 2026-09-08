@@ -374,7 +374,7 @@ export function OverdueBillsTable({ rows, totalLoadedCount, defaultPageSize = 10
         )}
       </div>
       <div className={`-mx-1 hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               <th className={`pb-3 pl-1 pr-3 ${stickyFirstTh}`}>Customer</th>
@@ -1185,7 +1185,7 @@ export default function AnalyticsPage() {
               </div>
 
               <div className={`hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[38rem] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[38rem] data-table border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`px-3 py-2 ${stickyFirstTh}`}>Distributor</th>
@@ -1448,7 +1448,7 @@ export default function AnalyticsPage() {
               ))}
           </div>
           <div className={`hidden sm:block ${scrollTableWrap}`}>
-            <table className="w-full min-w-[640px] border-separate border-spacing-0 text-left text-sm">
+            <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
               <thead className={stickyThead}>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   <th className={`px-3 py-3 ${stickyFirstTh}`}>Customer</th>

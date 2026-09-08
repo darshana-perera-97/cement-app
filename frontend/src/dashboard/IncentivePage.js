@@ -1259,7 +1259,7 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1100px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -1478,7 +1478,7 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[1480px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1480px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -1716,7 +1716,7 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[960px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[960px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -1878,7 +1878,7 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -2064,7 +2064,7 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[1200px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1200px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Invoice date</th>

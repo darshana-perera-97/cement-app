@@ -54,6 +54,12 @@ export function getFirstAllowedDashboardPath() {
   return '/dashboard/analytics';
 }
 
+/** After sign-in (or visiting /), send drivers to the unloads portal. */
+export function getPostLoginPath() {
+  if (isDriverAuthed()) return '/unloads';
+  return getFirstAllowedDashboardPath();
+}
+
 export function setAuth(username, role, token, staffRole, managerAccess) {
   sessionStorage.setItem(AUTH_KEY, '1');
   if (username != null && String(username).trim()) {

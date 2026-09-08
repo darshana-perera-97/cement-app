@@ -23,8 +23,11 @@ import {
   mobileCardList,
   rowMatchesQuery,
   scrollTableWrap,
-  stickyFirstTd,
-  stickyFirstThTransparent,
+  stickyDateColWidth,
+  stickyFirstOfPairTd,
+  stickyFirstOfPairTh,
+  stickySecondTd,
+  stickySecondTh,
   stickyTheadTransparent,
   useTablePagination,
   modalPanelClass3xl,
@@ -805,15 +808,21 @@ export default function BillsPage() {
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[960px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[960px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyTheadTransparent}>
             <tr className="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <th className={`whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom ${stickyFirstThTransparent}`}>
+              <th
+                className={`whitespace-nowrap px-3 py-3 align-bottom ${stickyDateColWidth} ${stickyFirstOfPairTh}`}
+              >
                 Date
               </th>
-              <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Invoice #</th>
-              <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Stock</th>
-              <th className="whitespace-nowrap bg-slate-50/95 px-3 py-3 align-bottom">Customer</th>
+              <th
+                className={`min-w-[10rem] max-w-[11.25rem] px-3 py-3 align-bottom ${stickySecondTh}`}
+              >
+                Customer
+              </th>
+              <th className="whitespace-nowrap bg-slate-50 px-3 py-3 align-bottom">Invoice #</th>
+              <th className="whitespace-nowrap bg-slate-50 px-3 py-3 align-bottom">Stock</th>
               {brands.map((b) => (
                 <th
                   key={b.key}
@@ -882,21 +891,13 @@ export default function BillsPage() {
                     onMouseLeave={note ? () => setHoverNote(null) : undefined}
                   >
                     <td
-                      className={`whitespace-nowrap px-3 py-3 font-medium ${rowLine} bg-slate-50/70 tabular-nums ${stickyFirstTd}`}
+                      className={`whitespace-nowrap px-3 py-3 font-medium tabular-nums ${rowLine} ${stickyDateColWidth} ${stickyFirstOfPairTd}`}
                     >
                       {r.date}
                     </td>
                     <td
-                      className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-slate-50/70`}
+                      className={`min-w-[10rem] max-w-[180px] overflow-hidden px-3 py-3 font-medium text-slate-900 ${rowLine} ${stickySecondTd}`}
                     >
-                      {r.invoiceNumber || '—'}
-                    </td>
-                    <td
-                      className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-slate-50/70`}
-                    >
-                      {r.stockId || '—'}
-                    </td>
-                    <td className={`max-w-[180px] px-3 py-3 font-medium text-slate-900 ${rowLine} bg-slate-50/70`}>
                       <span className="line-clamp-2">
                         {r.customerName}
                         {note ? (
@@ -906,6 +907,16 @@ export default function BillsPage() {
                           />
                         ) : null}
                       </span>
+                    </td>
+                    <td
+                      className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-white`}
+                    >
+                      {r.invoiceNumber || '—'}
+                    </td>
+                    <td
+                      className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-white`}
+                    >
+                      {r.stockId || '—'}
                     </td>
                     {brands.map((b) => (
                       <td
