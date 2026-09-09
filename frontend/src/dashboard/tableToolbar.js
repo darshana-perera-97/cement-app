@@ -108,7 +108,7 @@ export function ModalBackdrop({ onClose, className = '' }) {
 
 /**
  * Shared table class: layout + `data-table` hook for the responsive type scale
- * in `index.css` (phone 11px → tablet 12–12.5px → laptop 13px → desktop 14–15px).
+ * in `index.css` (phone 10px → tablet 11–11.5px → laptop 12px → desktop 13–13.5px).
  */
 export const dataTableClass =
   'data-table w-full border-separate border-spacing-0 text-left text-sm';
@@ -214,9 +214,9 @@ export function MobileRowCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-semibold leading-snug text-slate-900 sm:text-sm">{title}</p>
+          <p className="truncate text-[12px] font-semibold leading-snug text-slate-900 sm:text-sm">{title}</p>
           {subtitle ? (
-            <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500 sm:text-xs">{subtitle}</p>
+            <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-slate-500 sm:text-xs">{subtitle}</p>
           ) : null}
         </div>
         {badge ? <div className="shrink-0">{badge}</div> : null}
@@ -225,10 +225,10 @@ export function MobileRowCard({
         <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
           {fields.map((f, i) => (
             <div key={`${f.label}-${i}`} className="min-w-0">
-              <dt className="text-[10px] font-medium uppercase tracking-wide text-slate-400 sm:text-[11px]">
+              <dt className="text-[9px] font-medium uppercase tracking-wide text-slate-400 sm:text-[10px]">
                 {f.label}
               </dt>
-              <dd className="mt-0.5 break-words text-[13px] font-medium tabular-nums leading-snug text-slate-800 sm:text-sm">
+              <dd className="mt-0.5 break-words text-[12px] font-medium tabular-nums leading-snug text-slate-800 sm:text-sm">
                 {f.value ?? '—'}
               </dd>
             </div>

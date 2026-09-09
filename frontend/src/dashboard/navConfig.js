@@ -137,6 +137,11 @@ export const DASHBOARD_NAV = [
     icon: 'user',
   },
   {
+    to: '/dashboard/settings',
+    label: 'Settings',
+    icon: 'settings',
+  },
+  {
     to: '/dashboard/incentive',
     label: 'Incentive',
     icon: 'incentive',

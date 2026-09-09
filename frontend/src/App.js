@@ -24,7 +24,9 @@ import ShopPage from './dashboard/ShopPage';
 import OverdueBillsPage from './dashboard/OverdueBillsPage';
 import PendingChequesPage from './dashboard/PendingChequesPage';
 import UnloadsPage from './UnloadsPage';
+import SettingsPage from './dashboard/SettingsPage';
 import { BagProductsProvider } from './dashboard/BagProductsContext';
+import { PrinterProvider } from './printer/PrinterProvider';
 
 function ProtectedRoute({ children }) {
   if (!isAuthed()) {
@@ -182,6 +184,7 @@ function AppRoutes() {
           }
         />
         <Route path="users" element={<UsersPage />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route
           path="overdue-bills"
           element={
@@ -218,11 +221,13 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <AppRoutes />
+    <PrinterProvider>
+      <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <AppRoutes />
+        </div>
+        <Footer />
       </div>
-      <Footer />
-    </div>
+    </PrinterProvider>
   );
 }

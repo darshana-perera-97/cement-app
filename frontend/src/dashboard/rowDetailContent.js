@@ -107,6 +107,11 @@ export function getRowDetailMeta(variant, row) {
         title: 'Overdue bill',
         subtitle: row.customerName || null,
       };
+    case 'pendingBill':
+      return {
+        title: Number(row.daysOverdue) > 0 ? 'Overdue bill' : 'Pending bill',
+        subtitle: row.customerName || null,
+      };
     case 'bankDaily':
       return {
         title: 'Daily bank summary',
@@ -185,6 +190,8 @@ export function RowDetailContent({ variant, row }) {
       return <LedgerDayDetailContent row={row} />;
     case 'overdueBill':
       return <OverdueBillDetailContent row={row} />;
+    case 'pendingBill':
+      return <PendingBillDetailContent row={row} />;
     case 'bankDaily':
       return <BankDailyDetailContent row={row} />;
     case 'bankCheque':
@@ -984,6 +991,53 @@ function OverdueBillDetailContent({ row }) {
           value={formatMoney(row.outstandingAmount)}
           className="col-span-2 bg-rose-50 ring-rose-100"
           valueClassName="font-semibold text-rose-800 tabular-nums"
+        />
+      </SummaryGrid>
+      {row.details ? <NoteBlock label="Bill details" value={row.details} /> : null}
+    </>
+  );
+}
+
+function PendingBillDetailContent({ row }) {
+  const daysFromBillDate = daysFromBillDateForRow(row);
+  const overdue = Number(row.daysOverdue) > 0;
+  const outstandingTone = overdue
+    ? 'col-span-2 bg-rose-50 ring-rose-100'
+    : 'col-span-2 bg-amber-50 ring-amber-100';
+  const outstandingValueTone = overdue
+    ? 'font-semibold text-rose-800 tabular-nums'
+    : 'font-semibold text-amber-900 tabular-nums';
+
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2" />
+        <SummaryField label="Bill date" value={displayText(row.billDate)} />
+        <SummaryField label="Due date" value={displayText(row.dueDate)} />
+        {overdue ? (
+          <SummaryField
+            label="Days overdue"
+            value={row.daysOverdue ?? '—'}
+            valueClassName="font-semibold text-rose-700 tabular-nums"
+          />
+        ) : (
+          <SummaryField
+            label="Days until due"
+            value={row.daysLeftUntilDue ?? 0}
+            valueClassName="font-semibold text-amber-800 tabular-nums"
+          />
+        )}
+        <SummaryField
+          label="Days from bill date"
+          value={daysFromBillDate ?? '—'}
+          valueClassName="tabular-nums"
+        />
+        <SummaryField label="Bill total" value={formatMoney(row.billTotal)} />
+        <SummaryField
+          label="Remaining"
+          value={formatMoney(row.outstandingAmount)}
+          className={outstandingTone}
+          valueClassName={outstandingValueTone}
         />
       </SummaryGrid>
       {row.details ? <NoteBlock label="Bill details" value={row.details} /> : null}

@@ -12,6 +12,7 @@ import { shopNameInitials, useShopName } from './shopConfig';
 import { formatBrandLabel } from './dashboard/brandTheme';
 import { useBagProducts } from './dashboard/BagProductsContext';
 import { LoadingSpinner, rowMatchesQuery } from './dashboard/tableToolbar';
+import { PrinterStatusButton, usePrinter } from './printer/PrinterProvider';
 
 const apiBase = getApiBase();
 const SEARCH_PRODUCT_THRESHOLD = 8;
@@ -658,6 +659,7 @@ function RecentUnloadsList({ recent, recentLoading, bagBrands }) {
 function UnloadsWorkspace() {
   const { brands: bagBrands } = useBagProducts();
   const shopName = useShopName();
+  const { requestAutoPrint } = usePrinter();
   const driverLabel = getDisplayName();
   const [summaryBrands, setSummaryBrands] = useState([]);
   const [stockLoading, setStockLoading] = useState(true);
@@ -902,6 +904,7 @@ function UnloadsWorkspace() {
       setProductQuery('');
       setProductFilter('in-stock');
       await Promise.all([loadStock(), loadRecent()]);
+      requestAutoPrint('unload', data);
     } catch {
       setSaveError('Network error. Try again.');
     } finally {
@@ -970,13 +973,16 @@ function UnloadsWorkspace() {
             <p className="truncate text-[11px] text-slate-500 sm:text-sm">Admin session</p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={handleSignOut}
-          className="inline-flex min-h-11 shrink-0 touch-manipulation items-center rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 active:scale-[0.98] sm:px-4"
-        >
-          Sign out
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <PrinterStatusButton />
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="inline-flex min-h-11 shrink-0 touch-manipulation items-center rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 active:scale-[0.98] sm:px-4"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <StockStrip

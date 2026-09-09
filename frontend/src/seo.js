@@ -28,6 +28,7 @@ function titleForPath(pathname, brand) {
     { test: (p) => p === '/dashboard/promotions', title: `Promotions — ${brand}` },
     { test: (p) => p === '/dashboard/messages', title: `Messages — ${brand}` },
     { test: (p) => p === '/dashboard/users', title: `Users — ${brand}` },
+    { test: (p) => p === '/dashboard/settings', title: `Settings — ${brand}` },
     { test: (p) => p === '/dashboard/incentive', title: `Incentive — ${brand}` },
   ];
   const rule = rules.find((r) => r.test(normalized));

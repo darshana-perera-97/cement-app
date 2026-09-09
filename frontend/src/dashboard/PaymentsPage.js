@@ -24,6 +24,7 @@ import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { getPaymentCheques } from './paymentCheques';
+import { usePrinter } from '../printer/PrinterProvider';
 
 const apiBase = getApiBase();
 
@@ -38,6 +39,7 @@ function money(n) {
 export default function PaymentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedCustomerPrefill = useRef(false);
+  const { requestAutoPrint } = usePrinter();
   const [rows, setRows] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -369,7 +371,10 @@ export default function PaymentsPage() {
       <RecordPaymentModal
         open={modalOpen}
         onClose={closeModal}
-        onSaved={load}
+        onSaved={async (row) => {
+          await load();
+          if (!editPayment) requestAutoPrint('cashCollection', row);
+        }}
         prefillCustomerId={modalCustomerId}
         editPayment={editPayment}
       />
@@ -377,7 +382,10 @@ export default function PaymentsPage() {
       <CollectorSeparateBillSettlementModal
         open={separateBillModalOpen}
         onClose={closeSeparateBillModal}
-        onSaved={load}
+        onSaved={async (row) => {
+          await load();
+          requestAutoPrint('cashCollection', row);
+        }}
         prefillCustomerId={modalCustomerId}
       />
 

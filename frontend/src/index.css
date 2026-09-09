@@ -13,14 +13,14 @@
 
   /**
    * Data-table type scale (phone → tablet → laptop → desktop).
-   * Higher specificity than Tailwind `text-sm` / `text-xs` on the table itself.
+   * Pixel values so table text stays independent of the html root size.
    * Nested `text-[10px]` labels and button classes keep their own size.
    */
   table.text-sm,
   table.data-table,
   .data-table-wrap table {
-    --dt-body: 0.6875rem; /* 11px phones */
-    --dt-head: 0.625rem; /* 10px */
+    --dt-body: 10px;
+    --dt-head: 10px;
     font-size: var(--dt-body);
     line-height: 1.35;
   }
@@ -37,8 +37,8 @@
     table.text-sm,
     table.data-table,
     .data-table-wrap table {
-      --dt-body: 0.75rem; /* 12px */
-      --dt-head: 0.6875rem; /* 11px */
+      --dt-body: 11px;
+      --dt-head: 10px;
       line-height: 1.4;
     }
   }
@@ -48,8 +48,8 @@
     table.text-sm,
     table.data-table,
     .data-table-wrap table {
-      --dt-body: 0.78125rem; /* 12.5px */
-      --dt-head: 0.6875rem; /* 11px */
+      --dt-body: 11.5px;
+      --dt-head: 10px;
     }
   }
 
@@ -58,8 +58,8 @@
     table.text-sm,
     table.data-table,
     .data-table-wrap table {
-      --dt-body: 0.8125rem; /* 13px */
-      --dt-head: 0.75rem; /* 12px */
+      --dt-body: 12px;
+      --dt-head: 11px;
     }
   }
 
@@ -68,8 +68,8 @@
     table.text-sm,
     table.data-table,
     .data-table-wrap table {
-      --dt-body: 0.875rem; /* 14px */
-      --dt-head: 0.75rem; /* 12px */
+      --dt-body: 13px;
+      --dt-head: 11px;
     }
   }
 
@@ -78,8 +78,8 @@
     table.text-sm,
     table.data-table,
     .data-table-wrap table {
-      --dt-body: 0.9375rem; /* 15px */
-      --dt-head: 0.8125rem; /* 13px */
+      --dt-body: 13.5px;
+      --dt-head: 12px;
     }
   }
 }
@@ -89,6 +89,29 @@
   *::before,
   *::after {
     box-sizing: border-box;
+  }
+
+  /* Slightly tighter UI type on every device (Tailwind rem sizes follow this). */
+  html {
+    font-size: 14px; /* phones */
+  }
+
+  @media (min-width: 768px) {
+    html {
+      font-size: 14.5px; /* tablets */
+    }
+  }
+
+  @media (min-width: 1024px) {
+    html {
+      font-size: 15px; /* laptops */
+    }
+  }
+
+  @media (min-width: 1280px) {
+    html {
+      font-size: 15.5px; /* desktops */
+    }
   }
 
   body {

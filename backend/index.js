@@ -49,6 +49,10 @@ const {
   normalizeNotificationSettings,
   normalizeTimeHHMM,
 } = require('./models/notificationSettingsStore');
+const {
+  readPrinterSettings,
+  writePrinterSettings,
+} = require('./models/printerSettingsStore');
 const { startOverdueReminderScheduler } = require('./models/overdueReminderService');
 const { readCompanyData, writeCompanyData } = require('./models/companyDataStore');
 const { readShopData, writeShopData, normalizeShopData, addBankAccount, updateBankAccount, deleteBankAccount, addProduct, updateProduct, deleteProduct, updateDoorStockTransportSettings } = require('./models/shopDataStore');
@@ -347,6 +351,33 @@ app.put('/api/shop/door-stock-transport-settings', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save door step transport settings' });
+  }
+});
+
+app.get('/api/printer-settings', async (req, res) => {
+  try {
+    const settings = await readPrinterSettings();
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load printer settings' });
+  }
+});
+
+app.put('/api/printer-settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to change printer settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can change printer settings' });
+  }
+  try {
+    const settings = await writePrinterSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save printer settings' });
   }
 });
 

@@ -7,6 +7,7 @@ import { DASHBOARD_NAV } from './navConfig';
 import { NavIcon } from './NavIcon';
 import { LoadingSpinner } from './tableToolbar';
 import { BagProductsProvider } from './BagProductsContext';
+import { PrinterStatusButton } from '../printer/PrinterProvider';
 
 function formatLkr(n) {
   return new Intl.NumberFormat(undefined, {
@@ -310,7 +311,7 @@ export default function DashboardLayout() {
   }, []);
 
   const navItems = DASHBOARD_NAV.filter((item) => {
-    if (item.to === '/dashboard/users') return isAdmin();
+    if (item.to === '/dashboard/users' || item.to === '/dashboard/settings') return isAdmin();
     if (isAdmin()) return true;
     if (getStaffRole() === 'Manager') {
       return item.accessKey ? hasDashboardAccess(item.accessKey) : false;
@@ -548,6 +549,7 @@ export default function DashboardLayout() {
                 state={whatsappStatus.state}
                 connected={whatsappStatus.connected}
               />
+              <PrinterStatusButton />
               <div className="relative hidden min-w-0 sm:block sm:max-w-[14rem] md:max-w-[16rem] lg:max-w-[18rem]">
                 <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

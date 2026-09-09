@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
 import { authFetch, getUsername, isManagerOrAdmin } from '../auth';
+import { usePrinter } from '../printer/PrinterProvider';
 import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
@@ -152,6 +153,7 @@ function LastPricesPopup({ open, preview, brands, onApply, onClose }) {
 
 export default function RequestsPage() {
   const { brands } = useBagProducts();
+  const { requestAutoPrint } = usePrinter();
   const allowed = isManagerOrAdmin();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -309,6 +311,8 @@ export default function RequestsPage() {
         }
         closeApprove();
         await load();
+        if (data?.payment) requestAutoPrint('cashCollection', data.payment);
+        else if (data?.id && data?.amount != null) requestAutoPrint('cashCollection', data);
         return;
       }
       const payload = { enteredBy: getUsername() };
@@ -327,6 +331,7 @@ export default function RequestsPage() {
       }
       closeApprove();
       await load();
+      if (data?.bill) requestAutoPrint('billGenerate', data.bill);
     } catch {
       setSaveError('Network error');
     } finally {

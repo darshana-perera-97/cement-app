@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch, canEditDetails, getUsername } from '../auth';
+import { usePrinter } from '../printer/PrinterProvider';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel } from './brandTheme';
@@ -306,6 +307,7 @@ function BillRowNoteTooltip({ hover }) {
 
 export default function BillsPage() {
   const { brands } = useBagProducts();
+  const { requestAutoPrint } = usePrinter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -620,6 +622,7 @@ export default function BillsPage() {
       }
       await load();
       closeAdd();
+      requestAutoPrint('billGenerate', data);
     } catch {
       setSaveError('Could not reach the server.');
     } finally {

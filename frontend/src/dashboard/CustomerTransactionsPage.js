@@ -21,6 +21,7 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import CustomerProfilePanel from './CustomerProfilePanel';
 import CustomerChequesPanel from './CustomerChequesPanel';
+import CustomerPendingBillsPanel from './CustomerPendingBillsPanel';
 import CustomerInvoicesModal from './CustomerInvoicesModal';
 import CustomerLedgerModal from './CustomerLedgerModal';
 import CustomerTaxModal from './CustomerTaxModal';
@@ -28,6 +29,7 @@ import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { CollectorSelectField, useCollectors } from './useCollectors';
+import { usePrinter } from '../printer/PrinterProvider';
 
 const apiBase = getApiBase();
 
@@ -42,6 +44,7 @@ const KIND_FILTERS = [
 const PROFILE_SECTIONS = [
   { id: 'activity', label: 'Activity' },
   { id: 'cheques', label: 'Cheques' },
+  { id: 'pending-bills', label: 'Pending Bills' },
 ];
 
 const DEFAULT_OVERDUE_DAYS = 14;
@@ -186,6 +189,7 @@ function CustomerHeaderSkeleton() {
 
 export default function CustomerTransactionsPage() {
   const { customerId } = useParams();
+  const { requestAutoPrint } = usePrinter();
   const [searchParams, setSearchParams] = useSearchParams();
   const [customer, setCustomer] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -468,6 +472,14 @@ export default function CustomerTransactionsPage() {
           loading={paymentsLoading}
           canMarkReturn={canEditDetails()}
           onUpdated={load}
+        />
+      ) : null}
+
+      {customer && profileSection === 'pending-bills' ? (
+        <CustomerPendingBillsPanel
+          customer={customer}
+          payments={payments}
+          loading={paymentsLoading}
         />
       ) : null}
 
@@ -914,7 +926,10 @@ export default function CustomerTransactionsPage() {
       <RecordPaymentModal
         open={recordPaymentOpen}
         onClose={() => setRecordPaymentOpen(false)}
-        onSaved={load}
+        onSaved={async (row) => {
+          await load();
+          requestAutoPrint('cashCollection', row);
+        }}
         prefillCustomerId={customerId || ''}
         lockCustomer
         customerName={customer?.name || ''}
@@ -923,7 +938,10 @@ export default function CustomerTransactionsPage() {
       <CollectorSeparateBillSettlementModal
         open={separateBillModalOpen}
         onClose={() => setSeparateBillModalOpen(false)}
-        onSaved={load}
+        onSaved={async (row) => {
+          await load();
+          requestAutoPrint('cashCollection', row);
+        }}
         prefillCustomerId={customerId || ''}
         lockCustomer
         customerName={customer?.name || ''}
