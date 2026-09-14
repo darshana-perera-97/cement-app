@@ -269,7 +269,7 @@ export default function SettingsPage() {
           <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
             <h2 className="text-sm font-bold text-slate-900">Printer connection</h2>
             <p className="mt-1 text-sm text-slate-500">
-              When enabled, allowed users see a Bluetooth printer indicator next to WhatsApp and can scan nearby printers.
+              When enabled, allowed users see a Bluetooth printer indicator next to WhatsApp. The last printer this browser used reconnects automatically when the app is open.
             </p>
             <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
               <input
@@ -284,7 +284,7 @@ export default function SettingsPage() {
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-slate-900">Enable Bluetooth printer</span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
-                  Allow pairing with an 80mm XPrinter over Bluetooth from this browser. Printing only happens when a printer is connected.
+                  Allow pairing with an 80mm XPrinter over Bluetooth from this browser. After the first scan, that printer reconnects automatically when the system and this app are on.
                 </span>
               </span>
             </label>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canEditDetails } from '../auth';
 import { getApiBase } from '../apiBase';
 import { getCachedBrands, productToBrandKey, formatBrandLabel } from './brandTheme';
+import { poLineItems } from './poItems';
 import { useBagProducts } from './BagProductsContext';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
@@ -337,8 +338,8 @@ function buildDoorStockRows(loads, purchaseOrders, doorStockSettings, brands) {
       const quantity = Number(load[`${b.key}Bags`]) || 0;
       if (quantity <= 0) continue;
 
-      const matchingPo = doorStockPos.find(
-        (po) => productToBrandKey(po.product, brands) === b.key,
+      const matchingPo = doorStockPos.find((po) =>
+        poLineItems(po).some((line) => productToBrandKey(line.product, brands) === b.key),
       );
       const poFrom = String(
         matchingPo?.distributionLocation ?? doorStockPos[0]?.distributionLocation ?? '',

@@ -1,3 +1,4 @@
+import { poLineItems } from './poItems';
 import { buildChequeTableRows, depositQueueRowKey } from './paymentCheques';
 
 export const GUARANTEE_RENEWAL_WARN_DAYS = 30;
@@ -26,12 +27,14 @@ export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = toNonNegMoney(c.amount);
       if (!bankAccountId || amount <= 0) continue;
+      const paymentType =
+        String(c.paymentType ?? '').trim().toLowerCase() === 'bank_transfer' ? 'bank_transfer' : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
       const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       const distributorId = String(po.distributorId ?? '').trim();
@@ -39,11 +42,15 @@ export function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
       rows.push({
         bankAccountId,
         amount,
+        paymentType,
         chequeNumber,
         chequeDate,
         poId,
         batchId: batchId || undefined,
-        product: String(po.product ?? '').trim() || undefined,
+        product: poLineItems(po)
+          .map((item) => item.product)
+          .filter(Boolean)
+          .join(', ') || undefined,
         source: 'purchase_order',
         ...(distributorId ? { distributorId } : {}),
         ...(distributorName ? { distributorName } : {}),

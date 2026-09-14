@@ -248,6 +248,126 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotio
   return settledByBillId;
 }
 
+/**
+ * Payment id → invoices this payment applied to (opening balance included), with remaining after it posted.
+ */
+function mapPaymentAffectedInvoices(customer, bills, payments, promotions = []) {
+  const byPaymentId = new Map();
+  if (!customer) return byPaymentId;
+
+  const nameKey = normalizeCustomerName(customer.name);
+  const custBills = sortBillsChronological(
+    (Array.isArray(bills) ? bills : []).filter(
+      (b) => normalizeCustomerName(b.customerName) === nameKey,
+    ),
+  );
+  const billById = new Map(custBills.map((b) => [String(b.id ?? '').trim(), b]));
+  const paidByBillId = new Map();
+  for (const b of custBills) {
+    const id = String(b.id ?? '').trim();
+    if (id) paidByBillId.set(id, 0);
+  }
+
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  let pastPaid = 0;
+  const openingId = openingBalanceBillId(customer.id);
+  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
+
+  const custPayments = (Array.isArray(payments) ? payments : [])
+    .filter((p) => p.customerId === customer.id)
+    .sort(comparePaymentsChronological);
+
+  const snapshotOpening = (toward) => {
+    const remaining = roundMoney(Math.max(0, pastOwed - pastPaid));
+    return {
+      billId: openingId,
+      invoiceNumber: 'Opening',
+      date: openingBalanceBillDate(customer),
+      details: 'Opening balance',
+      billTotal: pastOwed,
+      appliedAmount: roundMoney(toward),
+      remainingAfter: remaining,
+      settled: remaining <= 0.009,
+    };
+  };
+
+  const snapshotBill = (billId, toward) => {
+    const bill = billById.get(billId);
+    const total = effectiveBillTotal(bill, promotions);
+    const paid = paidByBillId.get(billId) || 0;
+    const remaining = roundMoney(Math.max(0, total - paid));
+    return {
+      billId,
+      invoiceNumber: String(bill?.invoiceNumber ?? '').trim(),
+      date: String(bill?.date ?? '').trim(),
+      billTotal: total,
+      appliedAmount: roundMoney(toward),
+      remainingAfter: remaining,
+      settled: remaining <= 0.009,
+    };
+  };
+
+  for (const p of custPayments) {
+    const credit = paymentCreditToCustomer(p);
+    if (credit <= 0) continue;
+    const hits = [];
+
+    const explicit = getPaymentBillCashAllocations(p);
+    if (explicit.length > 0) {
+      for (const { billId, cashAmount } of explicit) {
+        if (openingId && billId === openingId) {
+          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
+          const toward = Math.min(room, cashAmount);
+          pastPaid = roundMoney(pastPaid + toward);
+          paidByBillId.set(openingId, pastPaid);
+          if (toward > 0) hits.push(snapshotOpening(toward));
+          continue;
+        }
+        if (!paidByBillId.has(billId)) continue;
+        const bill = billById.get(billId);
+        const total = effectiveBillTotal(bill, promotions);
+        const current = paidByBillId.get(billId) || 0;
+        const room = Math.max(0, roundMoney(total - current));
+        const toward = Math.min(room, cashAmount);
+        paidByBillId.set(billId, roundMoney(current + toward));
+        if (toward > 0) hits.push(snapshotBill(billId, toward));
+      }
+    } else {
+      let remaining = credit;
+      const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
+      pastPaid = roundMoney(pastPaid + towardPast);
+      if (openingId) paidByBillId.set(openingId, pastPaid);
+      remaining = roundMoney(remaining - towardPast);
+      if (towardPast > 0) hits.push(snapshotOpening(towardPast));
+
+      for (const bill of custBills) {
+        if (remaining <= 0) break;
+        const id = String(bill.id ?? '').trim();
+        if (!id) continue;
+        const total = effectiveBillTotal(bill, promotions);
+        const current = paidByBillId.get(id) || 0;
+        const room = Math.max(0, roundMoney(total - current));
+        const toward = Math.min(room, remaining);
+        paidByBillId.set(id, roundMoney(current + toward));
+        remaining = roundMoney(remaining - toward);
+        if (toward > 0) hits.push(snapshotBill(id, toward));
+      }
+    }
+
+    const pid = String(p.id ?? '').trim();
+    if (pid && hits.length) byPaymentId.set(pid, hits);
+  }
+
+  return byPaymentId;
+}
+
+function listPaymentAffectedInvoices(customer, bills, payments, paymentId, promotions = []) {
+  const targetId = String(paymentId ?? '').trim();
+  if (!targetId) return [];
+  const map = mapPaymentAffectedInvoices(customer, bills, payments, promotions);
+  return map.get(targetId) || [];
+}
+
 /** Signed balance: opening past bill + credit bills − payments − promotion credits (negative = overpaid). */
 function computeRawBalance(customer, bills, payments, promotions = []) {
   const nameKey = normalizeCustomerName(customer.name);
@@ -293,6 +413,8 @@ module.exports = {
   getPaymentBillCashAllocations,
   computeBillPaymentAllocation,
   buildSettledDateByBillIdForCustomer,
+  listPaymentAffectedInvoices,
+  mapPaymentAffectedInvoices,
   effectiveBillTotal,
   openingBalanceBillId,
   isOpeningBalanceBillId,

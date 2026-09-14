@@ -1,8 +1,8 @@
 import { formatBrandLabel, getCachedBrands } from './brandTheme';
 import {
   buildBillSettledDateLookup,
-  isBillFullySettled,
   listCustomerBillPaymentAllocations,
+  paymentCreditToCustomer,
 } from './pendingBills';
 import { inDateRange } from './tableToolbar';
 
@@ -22,13 +22,6 @@ export const DEFAULT_COLLECTOR_COMMISSION_RATES = Object.fromEntries(
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
-}
-
-function normalizeCustomerName(s) {
-  return String(s ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
 }
 
 function daysBetweenYmd(fromYmd, toYmd) {
@@ -93,98 +86,163 @@ export function normalizeCollectorCommissionRates(raw) {
   return out;
 }
 
+function normalizeRecorderKey(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function paymentMatchesRecordedByKeys(payment, recordedByKeys) {
+  if (!Array.isArray(recordedByKeys) || recordedByKeys.length === 0) return false;
+  const by = normalizeRecorderKey(payment?.recordedBy);
+  if (!by) return false;
+  return recordedByKeys.includes(by);
+}
+
+function recorderDisplayName(recordedBy, staff = []) {
+  const raw = String(recordedBy ?? '').trim();
+  if (!raw) return '—';
+  const key = normalizeRecorderKey(raw);
+  const user = (staff || []).find((u) => {
+    const keys = [u.username, u.nic].map(normalizeRecorderKey).filter(Boolean);
+    return keys.includes(key);
+  });
+  return String(user?.name ?? '').trim() || raw;
+}
+
 /**
- * Settled invoice lines for collections / commission reports.
- * Only fully settled bills (zero outstanding) are included.
+ * Collection lines recorded by a collector, manager, or admin.
+ * Includes every approved payment allocated to an invoice (full or partial).
+ * Amount is the collected portion; days are from bill date to payment date.
  */
 export function buildSettledCollectionsRows(
   customers,
   bills,
   settledByBillId,
   payments,
-  { from, to, collectorUserId = '' } = {},
+  { from, to, recordedByKeys = null, staff = [] } = {},
 ) {
-  const customerByNk = new Map();
-  for (const c of customers || []) {
-    const nk = normalizeCustomerName(c.name);
-    if (nk) customerByNk.set(nk, c);
+  const keys = Array.isArray(recordedByKeys)
+    ? recordedByKeys.map(normalizeRecorderKey).filter(Boolean)
+    : null;
+  const settledLookup = settledByBillId instanceof Map ? settledByBillId : new Map();
+  const allocsByPaymentId = new Map();
+
+  for (const cust of customers || []) {
+    const allocations = listCustomerBillPaymentAllocations(cust, bills, payments);
+    for (const alloc of allocations) {
+      const pid = String(alloc.paymentId ?? '').trim();
+      if (!pid) continue;
+      if (!allocsByPaymentId.has(pid)) allocsByPaymentId.set(pid, []);
+      allocsByPaymentId.get(pid).push({ ...alloc, customer: cust });
+    }
   }
-  const collectorFilter = String(collectorUserId ?? '').trim();
+
   const rows = [];
-  const brands = getCachedBrands();
+  let rowSeq = 0;
 
-  for (const bill of bills || []) {
-    const billId = String(bill.id ?? '').trim();
-    const settledDate = billId ? settledByBillId.get(billId) || '' : '';
-    if (!settledDate || !/^\d{4}-\d{2}-\d{2}$/.test(settledDate)) continue;
-    if (!isBillFullySettled(bill, customers, bills, payments)) continue;
-    if (from && to && !inDateRange(settledDate, from, to)) continue;
+  const pushShareRows = ({ payment, alloc, shopName, collectorName }) => {
+    const paymentDate = String(alloc.paymentDate || payment?.date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) return;
+    if (from && to && !inDateRange(paymentDate, from, to)) return;
 
-    const shopName = String(bill.customerName ?? '').trim() || '—';
-    const nk = normalizeCustomerName(bill.customerName);
-    const cust = customerByNk.get(nk);
-    if (collectorFilter && String(cust?.collectorUserId ?? '') !== collectorFilter) continue;
-
-    const billDate = String(bill.date ?? '').slice(0, 10);
-    const invoiceNumber = String(bill.invoiceNumber ?? '').trim() || '—';
-    const billAmount = round2(bill.totalAmount);
-    const daysToSettle = daysBetweenYmd(billDate, settledDate);
-    const collectorName = String(cust?.collectorName ?? '').trim() || '—';
+    const bill = alloc.bill;
+    const billId = String(bill?.id ?? '').trim();
+    const billDate = String(bill?.date ?? '').slice(0, 10);
+    const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+    const billAmount = round2(bill?.totalAmount);
+    const settledDate = billId ? settledLookup.get(billId) || '' : '';
+    const daysToSettle = billDate ? daysBetweenYmd(billDate, paymentDate) : 0;
     const commissionBucket = commissionBucketForDays(daysToSettle);
+    const brandShares = prorateCollectionAcrossBrands(bill, alloc.amount);
 
-    let anyBrand = false;
-    for (const brand of brands) {
-      const bagCount = Number(bill[brand.bagsField]) || 0;
-      if (bagCount <= 0) continue;
-      anyBrand = true;
+    for (const share of brandShares) {
+      if (share.amount <= 0) continue;
+      rowSeq += 1;
       rows.push({
-        rowKey: `${billId}-${brand.key}`,
+        rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${rowSeq}`,
+        paymentId: alloc.paymentId,
         billId,
-        date: settledDate,
+        date: paymentDate,
         invoiceNumber,
         shopName,
-        bagType: formatBrandLabel(brand) || brand.label,
-        brandKey: brand.key,
-        bagCount,
-        amount: brandLineFromBill(bill, brand.key),
+        bagType: share.bagType,
+        brandKey: share.brandKey,
+        bagCount: share.bagCount,
+        amount: share.amount,
         billDate,
         settledDate,
         daysToSettle,
         billAmount,
-        collectorUserId: String(cust?.collectorUserId ?? ''),
+        collectorUserId: String(alloc.customer?.collectorUserId ?? ''),
         collectorName,
+        recordedBy: String(payment?.recordedBy ?? '').trim(),
         commissionBucket,
+        isPartial: !settledDate,
+      });
+    }
+  };
+
+  for (const p of payments || []) {
+    if (keys && !paymentMatchesRecordedByKeys(p, keys)) continue;
+    const credit = paymentCreditToCustomer(p);
+    if (credit <= 0) continue;
+    const paymentDate = String(p.date ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) continue;
+    if (from && to && !inDateRange(paymentDate, from, to)) continue;
+
+    const pid = String(p.id ?? '').trim();
+    const allocs = (pid && allocsByPaymentId.get(pid)) || [];
+    const shopNameFallback = String(p.customerName ?? '').trim() || '—';
+    const collectorName = recorderDisplayName(p.recordedBy, staff);
+
+    let allocated = 0;
+    for (const alloc of allocs) {
+      allocated = round2(allocated + alloc.amount);
+      const cust = alloc.customer;
+      pushShareRows({
+        payment: p,
+        alloc: { ...alloc, paymentDate },
+        shopName: String(cust?.name ?? p.customerName ?? '').trim() || '—',
+        collectorName,
       });
     }
 
-    if (!anyBrand) {
+    const leftover = round2(credit - allocated);
+    if (leftover > 0) {
+      rowSeq += 1;
       rows.push({
-        rowKey: `${billId}-total`,
-        billId,
-        date: settledDate,
-        invoiceNumber,
-        shopName,
+        rowKey: `${pid || paymentDate}-unallocated-${rowSeq}`,
+        paymentId: pid,
+        billId: '',
+        date: paymentDate,
+        invoiceNumber: '—',
+        shopName: shopNameFallback,
         bagType: '—',
         brandKey: '',
         bagCount: 0,
-        amount: billAmount,
-        billDate,
-        settledDate,
-        daysToSettle,
-        billAmount,
-        collectorUserId: String(cust?.collectorUserId ?? ''),
+        amount: leftover,
+        billDate: '',
+        settledDate: '',
+        daysToSettle: null,
+        billAmount: leftover,
+        collectorUserId: '',
         collectorName,
-        commissionBucket,
+        recordedBy: String(p.recordedBy ?? '').trim(),
+        commissionBucket: null,
+        isPartial: true,
       });
     }
   }
 
   rows.sort((a, b) => {
-    const bySettled = a.settledDate.localeCompare(b.settledDate);
-    if (bySettled !== 0) return bySettled;
+    const byDate = a.date.localeCompare(b.date);
+    if (byDate !== 0) return byDate;
     const byShop = a.shopName.localeCompare(b.shopName);
     if (byShop !== 0) return byShop;
-    return a.invoiceNumber.localeCompare(b.invoiceNumber);
+    const byInvoice = a.invoiceNumber.localeCompare(b.invoiceNumber);
+    if (byInvoice !== 0) return byInvoice;
+    return (a.brandKey || '').localeCompare(b.brandKey || '');
   });
 
   return rows;

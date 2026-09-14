@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { clearAuth, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole, authFetch } from '../auth';
+import { clearAuth, getDisplayName, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole, authFetch } from '../auth';
 import { getApiBase } from '../apiBase';
 import { shopNameInitials, useShopName } from '../shopConfig';
 import { DASHBOARD_NAV } from './navConfig';
@@ -98,6 +98,127 @@ const WHATSAPP_STATE_LABELS = {
   disconnected: 'Disconnected',
   auth_failure: 'Auth failed',
 };
+
+function profileField(label, value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0 text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="min-w-0 break-all text-right text-sm font-semibold text-slate-900">{text}</dd>
+    </div>
+  );
+}
+
+function UserAccountMenu({ userInitial, signedInName, roleLabel, onSignOut }) {
+  const [open, setOpen] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch(`${getApiBase()}/api/me`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setProfile(data);
+      } catch {
+        /* keep session values */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const displayName = String(profile?.name || signedInName).trim() || 'Signed in';
+  const username = String(profile?.username || getUsername()).trim();
+  const role =
+    profile?.role === 'admin'
+      ? 'Administrator'
+      : String(profile?.staffRole || roleLabel).trim() || roleLabel;
+  const contact = String(profile?.contact || '').trim();
+  const nic = String(profile?.nic || '').trim();
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label="Open account menu"
+        title={displayName}
+        className={`flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-[10px] font-bold text-white transition hover:brightness-110 sm:ml-0.5 sm:h-9 sm:w-9 sm:text-xs ${
+          open ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-white' : ''
+        }`}
+      >
+        {userInitial}
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Account"
+          className="absolute right-0 top-full z-50 mt-2 w-[17.5rem] overflow-hidden rounded-2xl bg-white shadow-xl shadow-slate-300/40 ring-1 ring-slate-200"
+        >
+          <div className="flex items-center gap-3 bg-gradient-to-br from-indigo-50 to-violet-50 px-4 py-3">
+            <div
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white"
+              aria-hidden
+            >
+              {userInitial}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-900" title={displayName}>
+                {displayName}
+              </p>
+              <p className="truncate text-xs text-slate-500">{role}</p>
+            </div>
+          </div>
+          <dl className="space-y-2.5 px-4 py-3">
+            {profileField('Username', username)}
+            {profileField('Contact', contact)}
+            {profileField('NIC', nic)}
+          </dl>
+          <div className="border-t border-slate-100 px-3 py-3">
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-50 px-3 py-2.5 text-sm font-semibold text-rose-700 ring-1 ring-rose-100 transition hover:bg-rose-100"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l3 3m0 0l-3 3m3-3H3.75"
+                />
+              </svg>
+              Log out
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function WhatsAppNavStatus({ enabled, state, connected }) {
   const label = !enabled
@@ -322,7 +443,7 @@ export default function DashboardLayout() {
     if (item.to === '/dashboard/requests') return isManagerOrAdmin();
     return true;
   });
-  const signedInName = getUsername().trim() || 'Signed in';
+  const signedInName = getDisplayName().trim() || getUsername().trim() || 'Signed in';
   const userInitial = signedInName.charAt(0).toUpperCase() || '?';
   const roleLabel = isAdmin()
     ? 'Administrator'
@@ -562,7 +683,7 @@ export default function DashboardLayout() {
                   className="w-full rounded-full border-0 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 shadow-md shadow-slate-200/50 ring-1 ring-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                 />
               </div>
-              <div className="flex items-center gap-0.5 rounded-full border border-slate-100 bg-white p-0.5 shadow-md shadow-slate-200/50 sm:gap-1 sm:p-1">
+              <div className="relative z-10 flex items-center gap-0.5 overflow-visible rounded-full border border-slate-100 bg-white p-0.5 shadow-md shadow-slate-200/50 sm:gap-1 sm:p-1">
                 <button
                   type="button"
                   className="hidden h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-50 hover:text-slate-800 sm:flex"
@@ -581,9 +702,12 @@ export default function DashboardLayout() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
                   </svg>
                 </button>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-[10px] font-bold text-white sm:ml-0.5 sm:h-9 sm:w-9 sm:text-xs">
-                  A
-                </div>
+                <UserAccountMenu
+                  userInitial={userInitial}
+                  signedInName={signedInName}
+                  roleLabel={roleLabel}
+                  onSignOut={signOut}
+                />
               </div>
             </div>
           </div>

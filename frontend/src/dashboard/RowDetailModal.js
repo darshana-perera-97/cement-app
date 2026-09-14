@@ -19,7 +19,8 @@ export default function RowDetailModal({
   const meta = variant ? getRowDetailMeta(variant, row) : { title: 'Details', subtitle: null };
   const finalTitle = title ?? meta.title;
   const finalSubtitle = subtitle ?? meta.subtitle;
-  const panelSizeClassName = variant === 'incentive' ? 'max-w-3xl' : 'max-w-lg';
+  const panelSizeClassName =
+    variant === 'incentive' || variant === 'purchaseOrder' ? 'max-w-3xl' : 'max-w-lg';
 
   return (
     <DetailModalShell

@@ -49,15 +49,39 @@ function isPendingRequest(row) {
   return s !== 'approved' && s !== 'rejected';
 }
 
+function bankAccountOptionLabel(a) {
+  const nick = String(a.nickName ?? '').trim() || 'Account';
+  const detail = [a.bank, a.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+  return detail ? `${nick} — ${detail}` : nick;
+}
+
+function bankAccountSnapLabel(snap, fallbackId = '') {
+  if (snap && typeof snap === 'object') {
+    const nick = String(snap.nickName ?? '').trim();
+    const detail = [snap.bank, snap.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+    if (nick && detail) return `${nick} — ${detail}`;
+    return nick || detail || fallbackId || '—';
+  }
+  return fallbackId || '—';
+}
+
 function paymentRequestSummary(row) {
   const parts = [];
   const cdm = cdmPortion(row);
   const online = onlineTransferPortion(row);
   if (cdm > 0) {
-    parts.push(`CDM ${money(cdm)}${row.cdmNumber ? ` · ${row.cdmNumber}` : ''}`);
+    const bank = bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId);
+    parts.push(
+      `CDM ${money(cdm)}${row.cdmNumber ? ` · ${row.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+    );
   }
   if (online > 0) {
-    parts.push(`Online ${money(online)}${row.onlineTransferReference ? ` · ${row.onlineTransferReference}` : ''}`);
+    const bank = bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId);
+    parts.push(
+      `Online ${money(online)}${row.onlineTransferReference ? ` · ${row.onlineTransferReference}` : ''}${
+        bank !== '—' ? ` · ${bank}` : ''
+      }`,
+    );
   }
   const cheques = getPaymentCheques(row);
   if (cheques.length > 0) {
@@ -78,16 +102,20 @@ function paymentApprovalBreakdown(row) {
   if (cash > 0) lines.push({ label: 'Cash', value: money(cash) });
   const cdm = cdmPortion(row);
   if (cdm > 0) {
+    const bank = bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId);
     lines.push({
       label: 'CDM deposit',
-      value: `${money(cdm)}${row.cdmNumber ? ` · #${row.cdmNumber}` : ''}`,
+      value: `${money(cdm)}${row.cdmNumber ? ` · #${row.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     });
   }
   const online = onlineTransferPortion(row);
   if (online > 0) {
+    const bank = bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId);
     lines.push({
       label: 'Online transfer',
-      value: `${money(online)}${row.onlineTransferReference ? ` · ref ${row.onlineTransferReference}` : ''}`,
+      value: `${money(online)}${row.onlineTransferReference ? ` · ref ${row.onlineTransferReference}` : ''}${
+        bank !== '—' ? ` · ${bank}` : ''
+      }`,
     });
   }
   for (const c of getPaymentCheques(row)) {
@@ -168,17 +196,27 @@ export default function RequestsPage() {
   const [loadingLast, setLoadingLast] = useState(false);
   const [rejectingId, setRejectingId] = useState(null);
   const [detailRow, setDetailRow] = useState(null);
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [approveCdmBankAccountId, setApproveCdmBankAccountId] = useState('');
+  const [approveOnlineBankAccountId, setApproveOnlineBankAccountId] = useState('');
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [unloadRes, paymentRes] = await Promise.all([
+      const [unloadRes, paymentRes, shopRes] = await Promise.all([
         authFetch(`${apiBase}/api/unload-requests?status=pending`),
         authFetch(`${apiBase}/api/payment-requests?status=pending`),
+        authFetch(`${apiBase}/api/shop`),
       ]);
       if (!unloadRes.ok) throw new Error('Failed to load requests');
       const unloadData = await unloadRes.json();
       const paymentData = paymentRes.ok ? await paymentRes.json() : [];
+      if (shopRes.ok) {
+        const shopData = await shopRes.json();
+        setBankAccounts(Array.isArray(shopData?.bankAccounts) ? shopData.bankAccounts : []);
+      } else {
+        setBankAccounts([]);
+      }
       const combined = [
         ...(Array.isArray(unloadData) ? unloadData : []).map((r) => normalizeRequestRow(r, 'unload')),
         ...(Array.isArray(paymentData) ? paymentData : []).map((r) => normalizeRequestRow(r, 'payment')),
@@ -233,6 +271,8 @@ export default function RequestsPage() {
       setPriceForm({});
       setLastPreview(null);
       setLastPopupOpen(false);
+      setApproveCdmBankAccountId(String(row.cdmBankAccountId ?? '').trim());
+      setApproveOnlineBankAccountId(String(row.onlineTransferBankAccountId ?? '').trim());
       return;
     }
     setPriceForm(emptyPriceForm(row, brands));
@@ -296,12 +336,28 @@ export default function RequestsPage() {
     setSaveError(null);
     try {
       if (approveRow.requestKind === 'payment') {
+        const cdm = cdmPortion(approveRow);
+        const online = onlineTransferPortion(approveRow);
+        if (cdm > 0 && !String(approveCdmBankAccountId).trim()) {
+          setSaveError('Select a bank account for CDM deposit.');
+          setSaving(false);
+          return;
+        }
+        if (online > 0 && !String(approveOnlineBankAccountId).trim()) {
+          setSaveError('Select a bank account for online transfer.');
+          setSaving(false);
+          return;
+        }
         const res = await authFetch(
           `${apiBase}/api/payment-requests/${encodeURIComponent(approveRow.id)}/approve`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ approvedBy: getUsername() }),
+            body: JSON.stringify({
+              approvedBy: getUsername(),
+              cdmBankAccountId: String(approveCdmBankAccountId).trim(),
+              onlineTransferBankAccountId: String(approveOnlineBankAccountId).trim(),
+            }),
           },
         );
         const data = await res.json().catch(() => ({}));
@@ -531,7 +587,7 @@ export default function RequestsPage() {
               <>
                 <h2 className="text-lg font-bold text-slate-900">Approve payment?</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Review the payment evidence below. Approving will credit the customer account.
+                  Review the payment evidence below. Approving will credit the customer and the selected bank account.
                 </p>
 
                 <dl className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm">
@@ -569,16 +625,58 @@ export default function RequestsPage() {
                   </ul>
                 </div>
 
-                {approveRow.cdmNumber ? (
+                {cdmPortion(approveRow) > 0 ? (
                   <div className="mt-3 rounded-xl bg-sky-50 px-3 py-2.5 text-sm ring-1 ring-sky-100">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">CDM evidence</p>
-                    <p className="mt-1 font-mono text-sky-950">{approveRow.cdmNumber}</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">CDM deposit</p>
+                    {approveRow.cdmNumber ? (
+                      <p className="mt-1 font-mono text-sky-950">{approveRow.cdmNumber}</p>
+                    ) : null}
+                    <label className="mt-2 block text-xs font-medium text-sky-800">
+                      Credit to bank account <span className="text-rose-600">*</span>
+                      <select
+                        required
+                        value={approveCdmBankAccountId}
+                        onChange={(e) => setApproveCdmBankAccountId(e.target.value)}
+                        className="mt-1 w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-sky-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        disabled={bankAccounts.length === 0}
+                      >
+                        <option value="">
+                          {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                        </option>
+                        {bankAccounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {bankAccountOptionLabel(a)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 ) : null}
-                {approveRow.onlineTransferReference ? (
+                {onlineTransferPortion(approveRow) > 0 ? (
                   <div className="mt-3 rounded-xl bg-teal-50 px-3 py-2.5 text-sm ring-1 ring-teal-100">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Transfer reference</p>
-                    <p className="mt-1 font-mono text-teal-950">{approveRow.onlineTransferReference}</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Online transfer</p>
+                    {approveRow.onlineTransferReference ? (
+                      <p className="mt-1 font-mono text-teal-950">{approveRow.onlineTransferReference}</p>
+                    ) : null}
+                    <label className="mt-2 block text-xs font-medium text-teal-800">
+                      Credit to bank account <span className="text-rose-600">*</span>
+                      <select
+                        required
+                        value={approveOnlineBankAccountId}
+                        onChange={(e) => setApproveOnlineBankAccountId(e.target.value)}
+                        className="mt-1 w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-teal-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        disabled={bankAccounts.length === 0}
+                      >
+                        <option value="">
+                          {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                        </option>
+                        {bankAccounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {bankAccountOptionLabel(a)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 ) : null}
                 {approveRow.note ? (

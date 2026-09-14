@@ -19,6 +19,7 @@ import {
   stickyThead,
   useTablePagination,
   modalPanelClass,
+  modalPanelClassMd,
   modalPanelClass4xl,
   ModalBackdrop,
 } from './tableToolbar';
@@ -26,6 +27,15 @@ import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { downloadPurchaseOrderPdf } from './purchaseOrderPdf';
 import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
 import { formatProductNameWithCode } from './brandTheme';
+import {
+  groupSharedPurchaseOrders,
+  pdfProductLines,
+  poLineItems,
+  poProductSummary,
+  poSelectionIds,
+  poTotalAmount,
+  poTotalQuantity,
+} from './poItems';
 
 const apiBase = getApiBase();
 
@@ -100,6 +110,30 @@ function isPaymentLineCash(line) {
   return String(line?.paymentType ?? 'cheque').trim().toLowerCase() === 'cash';
 }
 
+function isPaymentLineBankTransfer(line) {
+  return String(line?.paymentType ?? '').trim().toLowerCase() === 'bank_transfer';
+}
+
+const BANK_ACCOUNT_TYPES = ['Savings', 'Current', 'Fixed deposit', 'Other'];
+
+function emptyBankAccountForm() {
+  return {
+    nickName: '',
+    bank: '',
+    accountNumber: '',
+    accountType: 'Savings',
+  };
+}
+
+function formFromBankAccount(a) {
+  return {
+    nickName: a?.nickName ?? '',
+    bank: a?.bank ?? '',
+    accountNumber: a?.accountNumber ?? '',
+    accountType: BANK_ACCOUNT_TYPES.includes(a?.accountType) ? a.accountType : 'Savings',
+  };
+}
+
 function paymentLineHasChequeFields(line) {
   if (isPaymentLineCash(line)) return false;
   return Boolean(
@@ -150,7 +184,11 @@ function parsePaymentRows(rows, labelPrefix = 'Payment', validBankAccountIds = n
   const bankIds = validBankAccountIds instanceof Set ? validBankAccountIds : null;
   for (let i = 0; i < rows.length; i++) {
     const line = rows[i];
-    const paymentType = isPaymentLineCash(line) ? 'cash' : 'cheque';
+    const paymentType = isPaymentLineCash(line)
+      ? 'cash'
+      : isPaymentLineBankTransfer(line)
+        ? 'bank_transfer'
+        : 'cheque';
     const amountRaw = String(line.amount || '').trim();
 
     if (paymentType === 'cash') {
@@ -171,6 +209,42 @@ function parsePaymentRows(rows, labelPrefix = 'Payment', validBankAccountIds = n
     const chequeDate = String(line.chequeDate || '').trim();
     const bankAccountId = String(line.bankAccountId || '').trim();
     if (!chequeNumber && !chequeDate && !amountRaw && !bankAccountId) continue;
+
+    if (paymentType === 'bank_transfer') {
+      if (!chequeDate || !/^\d{4}-\d{2}-\d{2}$/.test(chequeDate)) {
+        return { ok: false, error: `${labelPrefix} ${i + 1}: enter a valid transfer date.`, cheques: [] };
+      }
+      if (!amountRaw) {
+        return { ok: false, error: `${labelPrefix} ${i + 1}: enter an amount.`, cheques: [] };
+      }
+      const amount = Number(amountRaw) || 0;
+      if (amount <= 0) {
+        return {
+          ok: false,
+          error: `${labelPrefix} ${i + 1}: amount must be greater than 0.`,
+          cheques: [],
+        };
+      }
+      if (!bankAccountId) {
+        return {
+          ok: false,
+          error: `${labelPrefix} ${i + 1}: select a bank account for this transfer.`,
+          cheques: [],
+        };
+      }
+      if (bankIds && !bankIds.has(bankAccountId)) {
+        return {
+          ok: false,
+          error: `${labelPrefix} ${i + 1}: select a valid bank account from Shop.`,
+          cheques: [],
+        };
+      }
+      const entry = { paymentType: 'bank_transfer', chequeDate, amount, bankAccountId };
+      if (chequeNumber) entry.chequeNumber = chequeNumber;
+      cheques.push(entry);
+      continue;
+    }
+
     if (!chequeNumber) {
       return { ok: false, error: `${labelPrefix} ${i + 1}: enter a cheque number.`, cheques: [] };
     }
@@ -214,9 +288,11 @@ function PaymentLineFields({
   canRemove,
   onFieldChange,
   onRemove,
+  onManageBankAccount,
   compact = false,
 }) {
   const isCash = isPaymentLineCash(line);
+  const isBankTransfer = isPaymentLineBankTransfer(line);
   const rowClass = compact
     ? 'flex flex-nowrap items-end gap-2 overflow-x-auto'
     : 'grid gap-2 sm:grid-cols-12 sm:items-end';
@@ -231,6 +307,56 @@ function PaymentLineFields({
   const cashAmountClass = compact
     ? `block min-w-[6rem] shrink-0 text-sm flex-[2]`
     : `block text-sm ${canRemove ? 'sm:col-span-9' : 'sm:col-span-10'}`;
+  const bankAccountSelect = (
+    <label className={bankClass}>
+      <span className="flex items-center justify-between gap-1 text-xs font-medium text-slate-500">
+        <span>Bank account</span>
+        {isBankTransfer && onManageBankAccount ? (
+          <span className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onManageBankAccount('add')}
+              className="rounded px-1 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => onManageBankAccount('edit')}
+              disabled={!line.bankAccountId}
+              className="rounded px-1 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Update
+            </button>
+          </span>
+        ) : null}
+      </span>
+      <select
+        title={
+          isBankTransfer
+            ? 'Deducted from this account on the transfer date.'
+            : 'Pending until converting date; then deducted from balance.'
+        }
+        value={line.bankAccountId || ''}
+        onChange={(e) => onFieldChange('bankAccountId', e.target.value)}
+        className={`${filterControl} mt-1 max-w-full`}
+        disabled={bankAccounts.length === 0}
+      >
+        <option value="">
+          {bankAccounts.length === 0
+            ? isBankTransfer
+              ? 'No accounts — tap Add'
+              : 'No accounts — add under Shop'
+            : 'Select account…'}
+        </option>
+        {bankAccounts.map((a) => (
+          <option key={a.id} value={a.id}>
+            {bankAccountOptionLabel(a)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   return (
     <div
       className={`${rowClass} rounded-lg bg-white p-2 ring-1 ring-slate-200/70`}
@@ -244,6 +370,7 @@ function PaymentLineFields({
         >
           <option value="cheque">Cheque</option>
           <option value="cash">Cash</option>
+          <option value="bank_transfer">Bank Transfer</option>
         </select>
       </label>
       {isCash ? (
@@ -261,27 +388,47 @@ function PaymentLineFields({
             className={`${filterControl} mt-1`}
           />
         </label>
+      ) : isBankTransfer ? (
+        <>
+          {bankAccountSelect}
+          <label className={chequeNumClass}>
+            <span className="text-xs font-medium text-slate-500">Reference {idx + 1}</span>
+            <input
+              type="text"
+              value={line.chequeNumber}
+              onChange={(e) => onFieldChange('chequeNumber', e.target.value)}
+              placeholder="Optional"
+              title="Optional bank transfer reference"
+              className={`${filterControl} mt-1`}
+            />
+          </label>
+          <label className={dateClass}>
+            <span className="text-xs font-medium text-slate-500">Transfer date</span>
+            <input
+              type="date"
+              value={line.chequeDate}
+              onChange={(e) => onFieldChange('chequeDate', e.target.value)}
+              title="Deducted from the selected account on this date."
+              className={`${filterControl} mt-1`}
+            />
+          </label>
+          <label className={amountClass}>
+            <span className="text-xs font-medium text-slate-500">Amount</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              value={line.amount}
+              onChange={(e) => onFieldChange('amount', e.target.value)}
+              placeholder="0.00"
+              className={`${filterControl} mt-1`}
+            />
+          </label>
+        </>
       ) : (
         <>
-          <label className={bankClass}>
-            <span className="text-xs font-medium text-slate-500">Bank account</span>
-            <select
-              title="Pending until converting date; then deducted from balance."
-              value={line.bankAccountId || ''}
-              onChange={(e) => onFieldChange('bankAccountId', e.target.value)}
-              className={`${filterControl} mt-1 max-w-full`}
-              disabled={bankAccounts.length === 0}
-            >
-              <option value="">
-                {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
-              </option>
-              {bankAccounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {bankAccountOptionLabel(a)}
-                </option>
-              ))}
-            </select>
-          </label>
+          {bankAccountSelect}
           <label className={chequeNumClass}>
             <span className="text-xs font-medium text-slate-500">Cheque number {idx + 1}</span>
             <input
@@ -367,6 +514,10 @@ export default function PurchaseOrdersPage() {
   const [shopDetails, setShopDetails] = useState({ shopName: '' });
   const [lorryNumbers, setLorryNumbers] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [bankAccountModal, setBankAccountModal] = useState(null);
+  const [bankForm, setBankForm] = useState(emptyBankAccountForm);
+  const [bankSaving, setBankSaving] = useState(false);
+  const [bankSaveError, setBankSaveError] = useState(null);
 
   const validBankAccountIds = useMemo(
     () => new Set(bankAccounts.map((a) => a.id).filter(Boolean)),
@@ -419,6 +570,29 @@ export default function PurchaseOrdersPage() {
       setBankAccounts([]);
     }
   }, []);
+
+  const openBankAccountModal = ({ mode, itemKey = null, chequeKey, accountId = '' }) => {
+    if (mode === 'edit') {
+      const account = bankAccounts.find((a) => a.id === accountId);
+      if (!account) return;
+      setBankForm(formFromBankAccount(account));
+    } else {
+      setBankForm(emptyBankAccountForm());
+    }
+    setBankSaveError(null);
+    setBankAccountModal({
+      mode,
+      itemKey: itemKey || null,
+      chequeKey,
+      accountId: accountId || null,
+    });
+  };
+
+  const closeBankAccountModal = () => {
+    if (bankSaving) return;
+    setBankAccountModal(null);
+    setBankSaveError(null);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -509,30 +683,34 @@ export default function PurchaseOrdersPage() {
     }
   }, []);
 
+  const displayRows = useMemo(() => groupSharedPurchaseOrders(rows), [rows]);
+
   const filteredRows = useMemo(() => {
-    return rows.filter((r) => {
+    return displayRows.filter((r) => {
       if (!inDateRange(r.date, dateFrom, dateTo)) return false;
       if (distributorFilter && r.distributorId !== distributorFilter) return false;
       const chequeParts = (Array.isArray(r.cheques) ? r.cheques : []).flatMap((c) => [
         c.chequeNumber,
         c.chequeDate,
       ]);
+      const productParts = poLineItems(r).map((item) => item.product);
       return rowMatchesQuery(search, [
         r.date,
         r.poNumber,
         r.distributorName,
         r.product,
+        ...productParts,
         r.vehicleNumber,
         r.driverName,
         r.createdBy,
         r.cancelled ? 'cancelled' : '',
-        String(r.quantity ?? ''),
+        String(poTotalQuantity(r)),
         String(r.unitPrice ?? ''),
-        String(r.lineTotal ?? r.totalAmount ?? ''),
+        String(poTotalAmount(r)),
         ...chequeParts,
       ]);
     });
-  }, [rows, search, dateFrom, dateTo, distributorFilter]);
+  }, [displayRows, search, dateFrom, dateTo, distributorFilter]);
 
   const pagination = useTablePagination(filteredRows.length, [
     search,
@@ -557,8 +735,11 @@ export default function PurchaseOrdersPage() {
   };
 
   const closeModal = () => {
+    if (bankSaving) return;
     setModalOpen(false);
     setSaveError(null);
+    setBankAccountModal(null);
+    setBankSaveError(null);
   };
 
   const applyLastPriceToItem = (item, product, prices) => {
@@ -688,6 +869,9 @@ export default function PurchaseOrdersPage() {
         if (field === 'paymentType' && value === 'cash') {
           next = { ...next, chequeNumber: '', bankAccountId: '', amountManual: false };
         }
+        if (field === 'paymentType' && value === 'bank_transfer') {
+          next = { ...next, chequeDate: next.chequeDate || todayYmdLocal() };
+        }
         return next;
       }),
     }));
@@ -718,6 +902,9 @@ export default function PurchaseOrdersPage() {
             if (field === 'paymentType' && value === 'cash') {
               next = { ...next, chequeNumber: '', bankAccountId: '', amountManual: false };
             }
+            if (field === 'paymentType' && value === 'bank_transfer') {
+              next = { ...next, chequeDate: next.chequeDate || todayYmdLocal() };
+            }
             return next;
           }),
         };
@@ -745,6 +932,56 @@ export default function PurchaseOrdersPage() {
         return { ...item, cheques: cheques.length > 0 ? cheques : [newChequeLine()] };
       }),
     }));
+  };
+
+  const applyBankAccountIdToLine = (itemKey, chequeKey, accountId) => {
+    if (itemKey) {
+      handleItemChequeChange(itemKey, chequeKey, 'bankAccountId', accountId);
+      return;
+    }
+    handleChequeChange(chequeKey, 'bankAccountId', accountId);
+  };
+
+  const handleBankAccountSubmit = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!bankAccountModal) return;
+    setBankSaving(true);
+    setBankSaveError(null);
+    const payload = {
+      nickName: bankForm.nickName.trim(),
+      bank: bankForm.bank.trim(),
+      accountNumber: bankForm.accountNumber.trim(),
+      accountType: bankForm.accountType,
+    };
+    try {
+      const isEdit = bankAccountModal.mode === 'edit' && bankAccountModal.accountId;
+      const res = await fetch(
+        isEdit
+          ? `${apiBase}/api/shop/bank-accounts/${encodeURIComponent(bankAccountModal.accountId)}`
+          : `${apiBase}/api/shop/bank-accounts`,
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBankSaveError(data.error || 'Save failed');
+        return;
+      }
+      await loadBankAccounts();
+      const selectedId = String(data.id ?? bankAccountModal.accountId ?? '').trim();
+      if (selectedId) {
+        applyBankAccountIdToLine(bankAccountModal.itemKey, bankAccountModal.chequeKey, selectedId);
+      }
+      setBankAccountModal(null);
+    } catch {
+      setBankSaveError('Could not reach the server');
+    } finally {
+      setBankSaving(false);
+    }
   };
 
   const handleDriverSelect = (driverId) => {
@@ -814,7 +1051,7 @@ export default function PurchaseOrdersPage() {
     }
 
     if (formHasChequePayments(form) && bankAccounts.length === 0) {
-      setSaveError('Add at least one bank account under Shop before recording cheque payments.');
+      setSaveError('Add at least one bank account under Shop before recording cheque or bank transfer payments.');
       return;
     }
 
@@ -849,7 +1086,7 @@ export default function PurchaseOrdersPage() {
           return;
         }
         if (parsed.cheques.length === 0) {
-          setSaveError(`Product ${i + 1}: enter at least one payment (cheque or cash).`);
+          setSaveError(`Product ${i + 1}: enter at least one payment (cheque, cash, or bank transfer).`);
           return;
         }
         entry.cheques = parsed.cheques;
@@ -869,7 +1106,7 @@ export default function PurchaseOrdersPage() {
         return;
       }
       if (parsed.cheques.length === 0) {
-        setSaveError('Enter at least one payment for the whole order (cheque or cash).');
+        setSaveError('Enter at least one payment for the whole order (cheque, cash, or bank transfer).');
         return;
       }
       cheques = parsed.cheques;
@@ -937,6 +1174,7 @@ export default function PurchaseOrdersPage() {
             .toLowerCase(),
       );
 
+    const items = pdfProductLines(po, rows);
     downloadPurchaseOrderPdf(po, {
       ...shopDetails,
       shopName: shopDetails.shopName || DEFAULT_SHOP_NAME,
@@ -944,6 +1182,7 @@ export default function PurchaseOrdersPage() {
       distributorLocation: po.distributionLocation || distributorPrimaryLocation(distributor),
       driverLicense: driver?.driverLicense || driver?.nic || '',
       bankAccounts,
+      items,
     });
   };
 
@@ -969,20 +1208,23 @@ export default function PurchaseOrdersPage() {
     setCancelBusy(true);
     setCancelError(null);
     try {
-      const res = await authFetch(`${apiBase}/api/purchase-orders/${encodeURIComponent(cancelTarget.id)}/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cancelledBy: username }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setCancelError(data.error || 'Could not cancel purchase order');
-        return;
+      const ids = poSelectionIds(cancelTarget);
+      for (const id of ids) {
+        const res = await authFetch(`${apiBase}/api/purchase-orders/${encodeURIComponent(id)}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cancelledBy: username }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setCancelError(data.error || 'Could not cancel purchase order');
+          await load();
+          return;
+        }
       }
       await load();
-      const cancelledPo = data.po || { ...cancelTarget, cancelled: true };
-      if (detailRow?.id === cancelTarget.id) {
-        setDetailRow(cancelledPo);
+      if (ids.includes(String(detailRow?.id || '')) || detailRow?.id === cancelTarget.id) {
+        setDetailRow({ ...cancelTarget, cancelled: true });
       }
       setCancelTarget(null);
     } catch {
@@ -998,7 +1240,8 @@ export default function PurchaseOrdersPage() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-slate-500">
-          Create purchase orders by distributor and product. Each product line generates its own PO.
+          Create purchase orders by distributor and product. With one payment for the whole order, all
+          items are saved as a single PO.
         </p>
         <button
           type="button"
@@ -1018,7 +1261,7 @@ export default function PurchaseOrdersPage() {
       <TableFiltersBar
         hint={
           !loading && rows.length > 0
-            ? `Showing ${filteredRows.length} of ${rows.length} PO${rows.length === 1 ? '' : 's'}`
+            ? `Showing ${filteredRows.length} of ${displayRows.length} PO${displayRows.length === 1 ? '' : 's'}`
             : null
         }
       >
@@ -1096,8 +1339,8 @@ export default function PurchaseOrdersPage() {
                   ) : null
                 }
                 fields={[
-                  { label: 'Product', value: formatProductNameWithCode(r.product) || r.product || '—' },
-                  { label: 'Amount', value: String(r.quantity ?? '—') },
+                  { label: 'Product', value: poProductSummary(r) },
+                  { label: 'Amount', value: String(poTotalQuantity(r) || '—') },
                   { label: 'Payments', value: formatPoChequesList(r.cheques, bankAccounts) },
                 ]}
                 actions={
@@ -1181,9 +1424,9 @@ export default function PurchaseOrdersPage() {
                       ) : null}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-700">{r.date || '—'}</td>
-                    <td className="px-3 py-2.5 text-slate-800">{formatProductNameWithCode(r.product) || r.product || '—'}</td>
+                    <td className="px-3 py-2.5 text-slate-800">{poProductSummary(r)}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
-                      {Number(r.quantity) || 0}
+                      {poTotalQuantity(r)}
                     </td>
                     <td className="max-w-[220px] px-3 py-2.5 text-xs text-slate-600">
                       <span className="line-clamp-2" title={formatPoChequesList(r.cheques, bankAccounts)}>
@@ -1244,7 +1487,14 @@ export default function PurchaseOrdersPage() {
 
       <RowDetailModal
         open={!!detailRow}
-        row={detailRow}
+        row={
+          detailRow
+            ? {
+                ...detailRow,
+                batchItems: poLineItems(detailRow).length > 1 ? poLineItems(detailRow) : null,
+              }
+            : detailRow
+        }
         onClose={() => setDetailRow(null)}
         variant="purchaseOrder"
         actions={
@@ -1286,10 +1536,10 @@ export default function PurchaseOrdersPage() {
             <p className="mt-2 text-sm text-slate-600">
               This will cancel{' '}
               <span className="font-semibold text-slate-900">{cancelTarget.poNumber || 'this PO'}</span>
-              {cancelTarget.product ? (
+              {poProductSummary(cancelTarget) !== '—' ? (
                 <>
                   {' '}
-                  for <span className="font-semibold text-slate-900">{formatProductNameWithCode(cancelTarget.product) || cancelTarget.product}</span>
+                  for <span className="font-semibold text-slate-900">{poProductSummary(cancelTarget)}</span>
                 </>
               ) : null}
               . Issued cheques for this order will be removed from bank balances, and cash payments will be
@@ -1336,7 +1586,10 @@ export default function PurchaseOrdersPage() {
                 New purchase order sheet
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Each product line becomes a separate PO. Logged in as {getUsername() || '—'}.
+                {form.chequePerProduct
+                  ? 'Each product line becomes a separate PO with its own payment(s).'
+                  : 'All products are listed in one table, then payment details for the whole order.'}{' '}
+                Logged in as {getUsername() || '—'}.
                 {loadingPrices ? ' Loading last invoice prices…' : ''}
               </p>
             </div>
@@ -1407,7 +1660,7 @@ export default function PurchaseOrdersPage() {
                     <h3 className="text-sm font-semibold text-slate-800">Payment mode</h3>
                     <p className="mt-1 text-xs text-slate-500">
                       Some distributors take one payment for the whole order; others need separate payment
-                      per product. Use cheque or cash on each line.
+                      per product. Use cheque, cash, or bank transfer on each line.
                     </p>
                   </div>
                   <label className="inline-flex cursor-pointer items-start gap-2.5 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200/80">
@@ -1447,10 +1700,106 @@ export default function PurchaseOrdersPage() {
                   <p className="mt-3 text-sm text-amber-700">
                     This distributor has no products. Add products under Shop → Distributors first.
                   </p>
+                ) : !form.chequePerProduct ? (
+                  <div className="mt-3 overflow-x-auto rounded-xl bg-white ring-1 ring-slate-200/80">
+                    <table className="min-w-[640px] w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2.5">Product</th>
+                          <th className="w-28 px-3 py-2.5">Amount</th>
+                          <th className="w-44 px-3 py-2.5">Invoice price / unit</th>
+                          <th className="w-32 px-3 py-2.5 text-right">Line total</th>
+                          <th className="w-10 px-2 py-2.5">
+                            <span className="sr-only">Remove</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {form.items.map((item, idx) => {
+                          const lineTotal = itemLineTotal(item);
+                          return (
+                            <tr key={item.key}>
+                              <td className="px-3 py-2 align-top">
+                                <select
+                                  value={item.product}
+                                  onChange={(e) => handleItemChange(item.key, 'product', e.target.value)}
+                                  className={filterControl}
+                                  aria-label={`Product ${idx + 1}`}
+                                >
+                                  <option value="">Select…</option>
+                                  {distributorProducts.map((p) => (
+                                    <option key={p} value={p}>
+                                      {formatProductNameWithCode(p) || p}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-2 align-top">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  inputMode="decimal"
+                                  value={item.quantity}
+                                  onChange={(e) => handleItemChange(item.key, 'quantity', e.target.value)}
+                                  placeholder="0"
+                                  className={filterControl}
+                                  aria-label={`Amount ${idx + 1}`}
+                                />
+                              </td>
+                              <td className="px-3 py-2 align-top">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  inputMode="decimal"
+                                  value={item.unitPrice}
+                                  onChange={(e) => handleItemChange(item.key, 'unitPrice', e.target.value)}
+                                  placeholder="0.00"
+                                  className={filterControl}
+                                  aria-label={`Invoice price / unit ${idx + 1}`}
+                                />
+                                {item.priceFromLast ? (
+                                  <p className="mt-1 text-[11px] font-medium text-indigo-600">Last price</p>
+                                ) : null}
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2 text-right align-middle text-sm font-semibold tabular-nums text-slate-900">
+                                {money(lineTotal)}
+                              </td>
+                              <td className="px-2 py-2 align-middle">
+                                {form.items.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeItemLine(item.key)}
+                                    className="rounded-lg p-1.5 text-red-600 hover:bg-red-50"
+                                    title="Remove product line"
+                                    aria-label="Remove product line"
+                                  >
+                                    ×
+                                  </button>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-slate-200 bg-slate-50/80">
+                          <td colSpan={3} className="px-3 py-2.5 text-right text-sm text-slate-600">
+                            Total invoice amount
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-sm font-semibold tabular-nums text-slate-900">
+                            {money(itemsTotalPreview)}
+                          </td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
                 ) : (
                   <div className="mt-3 space-y-3">
                     {form.items.map((item, idx) => {
-                      const lineTotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                      const lineTotal = itemLineTotal(item);
                       const itemCheques = Array.isArray(item.cheques) ? item.cheques : [];
                       return (
                         <div
@@ -1538,38 +1887,44 @@ export default function PurchaseOrdersPage() {
                             </div>
                           </div>
 
-                          {form.chequePerProduct ? (
-                            <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  Payment(s) for this product
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={() => addItemChequeLine(item.key)}
-                                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                                >
-                                  Add payment
-                                </button>
-                              </div>
-                              <div className="mt-2 space-y-2">
-                                {itemCheques.map((c, cIdx) => (
-                                  <PaymentLineFields
-                                    key={c.key}
-                                    line={c}
-                                    idx={cIdx}
-                                    bankAccounts={bankAccounts}
-                                    canRemove={itemCheques.length > 1}
-                                    compact
-                                    onFieldChange={(field, value) =>
-                                      handleItemChequeChange(item.key, c.key, field, value)
-                                    }
-                                    onRemove={() => removeItemChequeLine(item.key, c.key)}
-                                  />
-                                ))}
-                              </div>
+                          <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Payment(s) for this product
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => addItemChequeLine(item.key)}
+                                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                              >
+                                Add payment
+                              </button>
                             </div>
-                          ) : null}
+                            <div className="mt-2 space-y-2">
+                              {itemCheques.map((c, cIdx) => (
+                                <PaymentLineFields
+                                  key={c.key}
+                                  line={c}
+                                  idx={cIdx}
+                                  bankAccounts={bankAccounts}
+                                  canRemove={itemCheques.length > 1}
+                                  compact
+                                  onFieldChange={(field, value) =>
+                                    handleItemChequeChange(item.key, c.key, field, value)
+                                  }
+                                  onRemove={() => removeItemChequeLine(item.key, c.key)}
+                                  onManageBankAccount={(mode) =>
+                                    openBankAccountModal({
+                                      mode,
+                                      itemKey: item.key,
+                                      chequeKey: c.key,
+                                      accountId: c.bankAccountId,
+                                    })
+                                  }
+                                />
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
@@ -1589,7 +1944,7 @@ export default function PurchaseOrdersPage() {
                     <div>
                       <h3 className="text-sm font-semibold text-slate-800">Payments (whole order)</h3>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Same payment(s) will be attached to every product PO from this sheet.
+                        One payment section for the products listed above.
                       </p>
                     </div>
                     <button
@@ -1610,6 +1965,13 @@ export default function PurchaseOrdersPage() {
                         canRemove={form.cheques.length > 1}
                         onFieldChange={(field, value) => handleChequeChange(c.key, field, value)}
                         onRemove={() => removeChequeLine(c.key)}
+                        onManageBankAccount={(mode) =>
+                          openBankAccountModal({
+                            mode,
+                            chequeKey: c.key,
+                            accountId: c.bankAccountId,
+                          })
+                        }
                       />
                     ))}
                   </div>
@@ -1707,6 +2069,111 @@ export default function PurchaseOrdersPage() {
                   className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60"
                 >
                   {saving ? <LoadingSpinner label="Generating POs…" size="sm" /> : 'Generate purchase order(s)'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {bankAccountModal ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="po-bank-account-modal-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={closeBankAccountModal}
+          />
+          <div className={modalPanelClassMd}>
+            <h2 id="po-bank-account-modal-title" className="text-lg font-bold text-slate-900">
+              {bankAccountModal.mode === 'edit' ? 'Update bank account' : 'Add bank account'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {bankAccountModal.mode === 'edit'
+                ? 'Changes apply to this shop account everywhere it is used.'
+                : 'Saved with your shop details. It will be selected on this payment line.'}
+            </p>
+            <form className="mt-5 space-y-4" onSubmit={handleBankAccountSubmit}>
+              {bankSaveError ? (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">
+                  {bankSaveError}
+                </p>
+              ) : null}
+              <label className="block text-sm font-medium text-slate-600">
+                Nick name
+                <input
+                  type="text"
+                  required
+                  value={bankForm.nickName}
+                  onChange={(e) => setBankForm((f) => ({ ...f, nickName: e.target.value }))}
+                  className={`${filterControl} mt-1`}
+                  placeholder="e.g. Main counter"
+                  disabled={bankSaving}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Bank
+                <input
+                  type="text"
+                  required
+                  value={bankForm.bank}
+                  onChange={(e) => setBankForm((f) => ({ ...f, bank: e.target.value }))}
+                  className={`${filterControl} mt-1`}
+                  placeholder="e.g. Commercial Bank"
+                  disabled={bankSaving}
+                  autoComplete="organization"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Account number
+                <input
+                  type="text"
+                  required
+                  value={bankForm.accountNumber}
+                  onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))}
+                  className={`${filterControl} mt-1 font-mono`}
+                  placeholder="Account number"
+                  disabled={bankSaving}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Account type
+                <select
+                  required
+                  value={bankForm.accountType}
+                  onChange={(e) => setBankForm((f) => ({ ...f, accountType: e.target.value }))}
+                  className={`${filterControl} mt-1`}
+                  disabled={bankSaving}
+                >
+                  {BANK_ACCOUNT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeBankAccountModal}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  disabled={bankSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={bankSaving}
+                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:brightness-[1.03] disabled:opacity-60"
+                >
+                  {bankSaving ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>

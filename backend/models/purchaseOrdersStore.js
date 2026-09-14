@@ -59,13 +59,27 @@ function bankAccountSnapshot(account) {
 }
 
 function normalizePaymentType(item) {
-  const t = String(item?.paymentType ?? '').trim().toLowerCase();
+  const t = String(item?.paymentType ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (t === 'cash') return 'cash';
+  if (t === 'bank_transfer' || t === 'banktransfer' || t === 'transfer') return 'bank_transfer';
   return 'cheque';
 }
 
 function isPoCashPayment(c) {
   return normalizePaymentType(c) === 'cash';
+}
+
+function isPoBankTransferPayment(c) {
+  return normalizePaymentType(c) === 'bank_transfer';
+}
+
+function attachBankAccountFields(entry, item) {
+  const bankAccountId = String(item.bankAccountId ?? '').trim();
+  if (bankAccountId) entry.bankAccountId = bankAccountId;
+  const snap = item.bankAccount;
+  if (snap && typeof snap === 'object' && String(snap.id ?? '').trim()) {
+    entry.bankAccount = bankAccountSnapshot(snap);
+  }
 }
 
 function parseCheques(raw) {
@@ -85,15 +99,23 @@ function parseCheques(raw) {
 
     const chequeNumber = String(item.chequeNumber ?? '').trim();
     const chequeDate = String(item.chequeDate ?? '').trim().slice(0, 10);
-    if (!chequeNumber && !chequeDate && amount <= 0) continue;
+    const bankAccountId = String(item.bankAccountId ?? '').trim();
+
+    if (paymentType === 'bank_transfer') {
+      if (!chequeNumber && !chequeDate && amount <= 0 && !bankAccountId) continue;
+      const entry = { paymentType: 'bank_transfer' };
+      if (amount > 0) entry.amount = amount;
+      if (chequeNumber) entry.chequeNumber = chequeNumber;
+      if (chequeDate) entry.chequeDate = chequeDate;
+      attachBankAccountFields(entry, item);
+      out.push(entry);
+      continue;
+    }
+
+    if (!chequeNumber && !chequeDate && amount <= 0 && !bankAccountId) continue;
     const entry = { paymentType: 'cheque', chequeNumber, chequeDate };
     if (amount > 0) entry.amount = amount;
-    const bankAccountId = String(item.bankAccountId ?? '').trim();
-    if (bankAccountId) entry.bankAccountId = bankAccountId;
-    const snap = item.bankAccount;
-    if (snap && typeof snap === 'object' && String(snap.id ?? '').trim()) {
-      entry.bankAccount = bankAccountSnapshot(snap);
-    }
+    attachBankAccountFields(entry, item);
     out.push(entry);
   }
   return out;
@@ -108,7 +130,7 @@ function validatePoCheques(raw, bankAccountById, labelPrefix = 'Payment') {
   if (cheques.length === 0) {
     return {
       ok: false,
-      error: `${labelPrefix}: enter at least one payment (cheque or cash).`,
+      error: `${labelPrefix}: enter at least one payment (cheque, cash, or bank transfer).`,
     };
   }
   for (let i = 0; i < cheques.length; i++) {
@@ -124,9 +146,31 @@ function validatePoCheques(raw, bankAccountById, labelPrefix = 'Payment') {
       continue;
     }
 
+    const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+    const bankAccountId = String(c.bankAccountId ?? '').trim();
+    const acct = bankAccountById?.get?.(bankAccountId);
+
+    if (isPoBankTransferPayment(c)) {
+      c.paymentType = 'bank_transfer';
+      if (!chequeDate || !/^\d{4}-\d{2}-\d{2}$/.test(chequeDate)) {
+        return { ok: false, error: `${labelPrefix} ${i + 1}: enter a valid transfer date.` };
+      }
+      if (!bankAccountId) {
+        return { ok: false, error: `${labelPrefix} ${i + 1}: select a bank account for this transfer.` };
+      }
+      if (!acct) {
+        return { ok: false, error: `${labelPrefix} ${i + 1}: invalid bank account.` };
+      }
+      c.chequeDate = chequeDate;
+      c.chequeNumber = String(c.chequeNumber ?? '').trim();
+      if (!c.chequeNumber) delete c.chequeNumber;
+      c.bankAccountId = bankAccountId;
+      c.bankAccount = bankAccountSnapshot(acct);
+      continue;
+    }
+
     c.paymentType = 'cheque';
     const chequeNumber = String(c.chequeNumber ?? '').trim();
-    const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
     if (!chequeNumber) {
       return { ok: false, error: `${labelPrefix} ${i + 1}: enter a cheque number.` };
     }
@@ -135,11 +179,9 @@ function validatePoCheques(raw, bankAccountById, labelPrefix = 'Payment') {
     }
     c.chequeNumber = chequeNumber;
     c.chequeDate = chequeDate;
-    const bankAccountId = String(c.bankAccountId ?? '').trim();
     if (!bankAccountId) {
       return { ok: false, error: `${labelPrefix} ${i + 1}: select a bank account for this cheque.` };
     }
-    const acct = bankAccountById?.get?.(bankAccountId);
     if (!acct) {
       return { ok: false, error: `${labelPrefix} ${i + 1}: invalid bank account.` };
     }
@@ -153,25 +195,57 @@ function validatePoCheques(raw, bankAccountById, labelPrefix = 'Payment') {
  * Last non-zero unit price for distributor + product (case-insensitive product match).
  * Prefers most recent by date, then createdAt.
  */
+function poLineItems(po) {
+  if (!po || typeof po !== 'object') return [];
+  if (Array.isArray(po.items) && po.items.length > 0) {
+    return po.items
+      .map((item) => ({
+        product: String(item?.product ?? '').trim(),
+        quantity: toNonNegNumber(item?.quantity),
+        unitPrice: toNonNegMoney(item?.unitPrice),
+        lineTotal:
+          item?.lineTotal != null && item.lineTotal !== ''
+            ? toNonNegMoney(item.lineTotal)
+            : lineTotal(item?.quantity, item?.unitPrice),
+      }))
+      .filter((item) => item.product);
+  }
+  const product = String(po.product ?? '').trim();
+  if (!product) return [];
+  return [
+    {
+      product,
+      quantity: toNonNegNumber(po.quantity),
+      unitPrice: toNonNegMoney(po.unitPrice),
+      lineTotal:
+        po.lineTotal != null && po.lineTotal !== ''
+          ? toNonNegMoney(po.lineTotal)
+          : lineTotal(po.quantity, po.unitPrice),
+    },
+  ];
+}
+
 function findLastUnitPrice(records, distributorId, product) {
   const distId = String(distributorId ?? '').trim();
   const productKey = String(product ?? '').trim().toLowerCase();
   if (!distId || !productKey) return null;
 
-  const matches = records
-    .filter((r) => {
-      if (isPurchaseOrderCancelled(r)) return false;
-      if (String(r.distributorId ?? '').trim() !== distId) return false;
-      if (String(r.product ?? '').trim().toLowerCase() !== productKey) return false;
-      const price = toNonNegMoney(r.unitPrice);
-      return price > 0;
-    })
-    .sort((a, b) => {
-      const da = String(a.date || '');
-      const db = String(b.date || '');
-      if (da !== db) return db.localeCompare(da);
-      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
-    });
+  const matches = [];
+  for (const r of records) {
+    if (isPurchaseOrderCancelled(r)) continue;
+    if (String(r.distributorId ?? '').trim() !== distId) continue;
+    for (const item of poLineItems(r)) {
+      if (item.product.toLowerCase() !== productKey) continue;
+      if (!(item.unitPrice > 0)) continue;
+      matches.push({ date: r.date, createdAt: r.createdAt, unitPrice: item.unitPrice });
+    }
+  }
+  matches.sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
 
   if (matches.length === 0) return null;
   return toNonNegMoney(matches[0].unitPrice);
@@ -194,13 +268,14 @@ function lastPricesByProduct(records, distributorId) {
 
   for (const r of sorted) {
     if (isPurchaseOrderCancelled(r)) continue;
-    const product = String(r.product ?? '').trim();
-    if (!product) continue;
-    const key = product.toLowerCase();
-    if (map[key] != null) continue;
-    const price = toNonNegMoney(r.unitPrice);
-    if (price <= 0) continue;
-    map[key] = { product, unitPrice: price };
+    for (const item of poLineItems(r)) {
+      const product = item.product;
+      if (!product) continue;
+      const key = product.toLowerCase();
+      if (map[key] != null) continue;
+      if (!(item.unitPrice > 0)) continue;
+      map[key] = { product, unitPrice: item.unitPrice };
+    }
   }
 
   const out = {};
@@ -382,6 +457,8 @@ module.exports = {
   cancelPurchaseOrder,
   isPurchaseOrderCancelled,
   isPoCashPayment,
+  isPoBankTransferPayment,
   normalizePaymentType,
+  poLineItems,
   PURCHASE_ORDERS_FILE,
 };

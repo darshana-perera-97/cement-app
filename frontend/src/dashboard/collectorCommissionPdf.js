@@ -203,7 +203,7 @@ export function downloadCollectionsReportPdf(data) {
   doc.setTextColor(71, 85, 105);
   doc.text(`Generated: ${generatedAt.toLocaleString()}`, MARGIN, 22);
   doc.text(`Period: ${periodLabel}`, MARGIN, 27);
-  doc.text(`Collector: ${collectorName}`, MARGIN, 32);
+  doc.text(`Collected by: ${collectorName}`, MARGIN, 32);
   doc.setTextColor(0, 0, 0);
 
   const summaryHead = ['Days to settle', 'Lines', 'Collection amount'];
@@ -239,20 +239,22 @@ export function downloadCollectionsReportPdf(data) {
     'Settled',
     'Days',
     'Bill amount',
+    'Collected by',
   ];
   const body =
     rows.length === 0
-      ? [['—', '—', '—', '—', moneyCell(0), '—', '—', '—', moneyCell(0)]]
+      ? [['—', '—', '—', '—', moneyCell(0), '—', '—', '—', moneyCell(0), '—']]
       : rows.map((r) => [
           r.date,
           r.invoiceNumber,
           r.shopName,
           r.bagType,
           moneyCell(r.amount),
-          r.billDate,
-          r.settledDate,
+          r.billDate || '—',
+          r.settledDate || '—',
           String(r.daysToSettle ?? '—'),
           moneyCell(r.billAmount),
+          r.collectorName || '—',
         ]);
 
   autoTable(doc, {
@@ -260,7 +262,7 @@ export function downloadCollectionsReportPdf(data) {
     head: [head],
     body,
     foot: rows.length
-      ? [[`Total (${rows.length})`, '', '', '', moneyCell(totals.amount), '', '', '', '']]
+      ? [[`Total (${rows.length})`, '', '', '', moneyCell(totals.amount), '', '', '', '', '']]
       : undefined,
     ...TABLE_OPTS,
     columnStyles: {

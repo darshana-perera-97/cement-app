@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
 import { authFetch, canEditDetails, getUsername } from '../auth';
-import { buildChequeTableRows } from './paymentCheques';
+import { buildChequeTableRows, cdmPortion, onlineTransferPortion } from './paymentCheques';
 import CashBookExpenseModal from './CashBookExpenseModal';
 import CashBookChequeDepositModal from './CashBookChequeDepositModal';
 import CashBookCompanyChequeModal from './CashBookCompanyChequeModal';
@@ -40,6 +40,7 @@ import {
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { formatPoChequeWithBank, isPoCashPayment } from './poChequeDisplay';
+import { poLineItems } from './poItems';
 import {
   buildCashBookLedgerRows,
   buildCashBookSourceEntries,
@@ -131,6 +132,18 @@ function bankAccountLabel(accountId, bankAccounts) {
   return String(a.nickName ?? '').trim() || String(a.bank ?? '').trim() || id;
 }
 
+function accountLabelFromSnap(snap, bankAccountId, bankAccounts) {
+  if (snap && typeof snap === 'object') {
+    return String(snap.nickName ?? '').trim() || String(snap.bank ?? '').trim() || bankAccountId || '—';
+  }
+  return bankAccountLabel(bankAccountId, bankAccounts);
+}
+
+function isPaymentApprovedForBank(p) {
+  if (!p?.requiresApproval) return true;
+  return String(p.approvalStatus ?? 'pending').trim().toLowerCase() === 'approved';
+}
+
 function todayYmdLocal() {
   const d = new Date();
   const y = d.getFullYear();
@@ -165,22 +178,28 @@ function collectPoOutgoingCheques(purchaseOrders) {
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = Math.max(0, Number(c.amount) || 0);
       if (!bankAccountId || amount <= 0) continue;
+      const paymentType =
+        String(c.paymentType ?? '').trim().toLowerCase() === 'bank_transfer' ? 'bank_transfer' : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
       const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       rows.push({
         bankAccountId,
         amount,
+        paymentType,
         chequeNumber,
         chequeDate,
         bankAccount: c.bankAccount,
         poId,
-        product: String(po.product ?? '').trim() || '—',
+        product: poLineItems(po)
+          .map((item) => item.product)
+          .filter(Boolean)
+          .join(', ') || '—',
         sortAt: po.createdAt || `${chequeDate}T12:00:00`,
       });
     }
@@ -208,6 +227,55 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
       detailVariant: null,
       detailPayload: d,
     });
+  }
+
+  for (const p of Array.isArray(payments) ? payments : []) {
+    if (!isPaymentApprovedForBank(p)) continue;
+    const date = String(p.date ?? '').slice(0, 10);
+    const addOtherMethod = (suffix, subLabel, amount, bankAccountId, snap, evidence) => {
+      const amt = Math.max(0, Number(amount) || 0);
+      const id = String(bankAccountId ?? '').trim();
+      if (amt <= 0 || !id) return;
+      rows.push({
+        id: `pay-${suffix}:${p.id}`,
+        kind: 'deposit',
+        direction: 'in',
+        date: date || '—',
+        amount: amt,
+        bankAccountIds: [id],
+        accountLabel: accountLabelFromSnap(snap, id, bankAccounts) || '—',
+        note: [
+          evidence,
+          String(p.customerName ?? '').trim(),
+          p.billNumber != null ? `Receipt ${p.billNumber}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        subLabel,
+        recordedBy: String(p.approvedBy ?? p.recordedBy ?? '').trim() || '—',
+        sortAt: p.approvedAt || p.createdAt || `${date}T12:00:00`,
+        detailVariant: 'payment',
+        detailPayload: p,
+      });
+    };
+    const cdmNum = String(p.cdmNumber ?? '').trim();
+    addOtherMethod(
+      'cdm',
+      'CDM deposit',
+      cdmPortion(p),
+      p.cdmBankAccountId,
+      p.cdmBankAccount,
+      cdmNum ? `#${cdmNum}` : '',
+    );
+    const onlineRef = String(p.onlineTransferReference ?? '').trim();
+    addOtherMethod(
+      'online',
+      'Online transfer',
+      onlineTransferPortion(p),
+      p.onlineTransferBankAccountId,
+      p.onlineTransferBankAccount,
+      onlineRef ? `ref ${onlineRef}` : '',
+    );
   }
 
   buildChequeTableRows(payments, (p, c, flat) => {
@@ -314,12 +382,14 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
   for (const c of collectPoOutgoingCheques(purchaseOrders)) {
     const futureDated = isFutureChequeDate(c.chequeDate);
     if (futureDated) continue;
+    const isTransfer = c.paymentType === 'bank_transfer';
     const kind = 'withdrawal';
     rows.push({
-      id: `po:${c.poId}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
+      id: `po:${c.poId}:${c.paymentType || 'cheque'}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
       source: 'po',
       poId: c.poId,
       chequeNumber: c.chequeNumber,
+      paymentType: c.paymentType,
       bankAccountId: c.bankAccountId,
       kind,
       direction: 'out',
@@ -328,18 +398,25 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
       bankAccountIds: [c.bankAccountId],
       accountLabel: bankAccountLabel(c.bankAccountId, bankAccounts),
       note: [
-        c.chequeNumber ? formatPoChequeWithBank(c, bankAccounts) : '',
+        formatPoChequeWithBank(c, bankAccounts),
         c.product !== '—' ? c.product : '',
       ]
-        .filter(Boolean)
+        .filter((v) => v && v !== '—')
         .join(' · '),
-      subLabel: futureDated ? 'PO cheque · future converting date' : 'Purchase order cheque',
+      subLabel: isTransfer
+        ? futureDated
+          ? 'PO bank transfer · future dated'
+          : 'Purchase order bank transfer'
+        : futureDated
+          ? 'PO cheque · future converting date'
+          : 'Purchase order cheque',
       recordedBy: '—',
       sortAt: c.sortAt,
       detailVariant: 'poCheque',
       detailPayload: {
         poId: c.poId,
         product: c.product,
+        paymentType: c.paymentType,
         chequeNumber: c.chequeNumber,
         chequeDate: c.chequeDate,
         bankAccountId: c.bankAccountId,
@@ -1174,8 +1251,9 @@ function BankPanel({ refreshToken, onBooksChanged }) {
           <div>
             <h2 className="text-sm font-bold text-slate-900">Bank accounts</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Balance includes deposits and deposited customer cheques, minus PO cheques whose converting date
-              has passed. Pending PO cheques show until their converting date. Balance may go negative.
+              Balance includes deposits, approved CDM / online transfers, and deposited customer cheques, minus PO
+              cheques and bank transfers whose date has passed. Pending PO cheques and transfers show until their
+              date. Balance may go negative.
             </p>
           </div>
           <Link
@@ -1274,7 +1352,8 @@ function BankPanel({ refreshToken, onBooksChanged }) {
         <div>
           <h2 className="text-sm font-bold text-slate-900">Transaction history</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Deposits, deposited customer cheques, and PO cheque withdrawals (after converting date). Use{' '}
+            Deposits, approved CDM / online transfers, deposited customer cheques, and PO cheque or bank transfer
+            withdrawals (after the converting or transfer date). Use{' '}
             <span className="font-medium text-slate-700">Mark returned</span> on a deposited customer cheque when the
             bank dishonours it.
           </p>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername } from '../auth';
+import { authFetch, getUsername, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
 import { getPaymentCheques } from './paymentCheques';
 import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
@@ -50,6 +50,12 @@ function newChequeLine(overrides = {}) {
   };
 }
 
+function bankAccountOptionLabel(a) {
+  const nick = String(a.nickName ?? '').trim() || 'Account';
+  const detail = [a.bank, a.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+  return detail ? `${nick} — ${detail}` : nick;
+}
+
 /** Last cheque details from the customer's most recent payment (excludes cheque number). */
 function lastChequeDefaultsForCustomer(payments, customerId) {
   const cid = String(customerId ?? '').trim();
@@ -75,6 +81,30 @@ function lastChequeDefaultsForCustomer(payments, customerId) {
   return null;
 }
 
+function lastOtherMethodBankDefaults(payments, customerId) {
+  const cid = String(customerId ?? '').trim();
+  if (!cid) return { cdmBankAccountId: '', onlineTransferBankAccountId: '' };
+  const sorted = (Array.isArray(payments) ? payments : [])
+    .filter((p) => String(p.customerId ?? '').trim() === cid)
+    .sort((a, b) =>
+      String(b.createdAt || `${b.date}T23:59:59`).localeCompare(
+        String(a.createdAt || `${a.date}T23:59:59`),
+      ),
+    );
+  let cdmBankAccountId = '';
+  let onlineTransferBankAccountId = '';
+  for (const payment of sorted) {
+    if (!cdmBankAccountId) {
+      cdmBankAccountId = String(payment.cdmBankAccountId ?? '').trim();
+    }
+    if (!onlineTransferBankAccountId) {
+      onlineTransferBankAccountId = String(payment.onlineTransferBankAccountId ?? '').trim();
+    }
+    if (cdmBankAccountId && onlineTransferBankAccountId) break;
+  }
+  return { cdmBankAccountId, onlineTransferBankAccountId };
+}
+
 const emptyForm = (receiptNumber = '') => ({
   customerId: '',
   billNumber: receiptNumber,
@@ -82,8 +112,10 @@ const emptyForm = (receiptNumber = '') => ({
   cashAmount: '',
   cdmAmount: '',
   cdmNumber: '',
+  cdmBankAccountId: '',
   onlineTransferAmount: '',
   onlineTransferReference: '',
+  onlineTransferBankAccountId: '',
   cheques: [newChequeLine()],
   date: todayYmdLocal(),
   note: '',
@@ -119,11 +151,13 @@ function formFromPayment(payment) {
     cashAmount: payment.cashAmount != null && payment.cashAmount !== '' ? String(payment.cashAmount) : '',
     cdmAmount: payment.cdmAmount != null && payment.cdmAmount !== '' ? String(payment.cdmAmount) : '',
     cdmNumber: payment.cdmNumber || '',
+    cdmBankAccountId: String(payment.cdmBankAccountId ?? '').trim(),
     onlineTransferAmount:
       payment.onlineTransferAmount != null && payment.onlineTransferAmount !== ''
         ? String(payment.onlineTransferAmount)
         : '',
     onlineTransferReference: payment.onlineTransferReference || '',
+    onlineTransferBankAccountId: String(payment.onlineTransferBankAccountId ?? '').trim(),
     cheques,
     date: payment.date || todayYmdLocal(),
     note: payment.note || '',
@@ -143,6 +177,7 @@ export default function RecordPaymentModal({
   const [payments, setPayments] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
+  const [bankAccounts, setBankAccounts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -180,6 +215,17 @@ export default function RecordPaymentModal({
     }
   }, []);
 
+  const loadBankAccounts = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/shop`);
+      if (!res.ok) throw new Error('Failed to load shop');
+      const data = await res.json();
+      setBankAccounts(Array.isArray(data?.bankAccounts) ? data.bankAccounts : []);
+    } catch {
+      setBankAccounts([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     receiptNumberTouched.current = false;
@@ -187,7 +233,8 @@ export default function RecordPaymentModal({
     loadCustomers();
     loadBills();
     loadPayments();
-  }, [open, loadCustomers, loadBills, loadPayments]);
+    loadBankAccounts();
+  }, [open, loadCustomers, loadBills, loadPayments, loadBankAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -198,9 +245,14 @@ export default function RecordPaymentModal({
     const defaults = prefillCustomerId
       ? lastChequeDefaultsForCustomer(payments, prefillCustomerId)
       : null;
+    const bankDefaults = prefillCustomerId
+      ? lastOtherMethodBankDefaults(payments, prefillCustomerId)
+      : { cdmBankAccountId: '', onlineTransferBankAccountId: '' };
     setForm({
       ...emptyForm(suggestNextPaymentReceiptNumber(payments)),
       customerId: prefillCustomerId || '',
+      cdmBankAccountId: bankDefaults.cdmBankAccountId,
+      onlineTransferBankAccountId: bankDefaults.onlineTransferBankAccountId,
       cheques: [newChequeLine(defaults || {})],
     });
   }, [open, editPayment, prefillCustomerId, payments]);
@@ -211,7 +263,10 @@ export default function RecordPaymentModal({
     setForm((f) => (f.billNumber === next ? f : { ...f, billNumber: next }));
   }, [open, editPayment, payments]);
 
+  const lockDateToToday = mustUseTodayRecordDate();
+
   const handleChange = (field, value) => {
+    if (field === 'date' && lockDateToToday) return;
     if (field === 'billNumber') {
       receiptNumberTouched.current = true;
       setForm((f) => ({ ...f, billNumber: String(value).slice(0, 40) }));
@@ -219,10 +274,13 @@ export default function RecordPaymentModal({
     }
     if (field === 'customerId') {
       const defaults = lastChequeDefaultsForCustomer(payments, value);
+      const bankDefaults = lastOtherMethodBankDefaults(payments, value);
       setForm((f) => ({
         ...f,
         customerId: value,
         appliedBillIds: [],
+        cdmBankAccountId: bankDefaults.cdmBankAccountId || f.cdmBankAccountId,
+        onlineTransferBankAccountId: bankDefaults.onlineTransferBankAccountId || f.onlineTransferBankAccountId,
         cheques: [newChequeLine(defaults || {})],
       }));
       return;
@@ -355,8 +413,16 @@ export default function RecordPaymentModal({
       setSaveError('Enter a CDM number when CDM deposit amount is greater than 0.');
       return;
     }
+    if (cdm > 0 && !String(form.cdmBankAccountId).trim()) {
+      setSaveError('Select a bank account when CDM deposit amount is greater than 0.');
+      return;
+    }
     if (onlineTransfer > 0 && !String(form.onlineTransferReference).trim()) {
       setSaveError('Enter an online transfer reference number when online transfer amount is greater than 0.');
+      return;
+    }
+    if (onlineTransfer > 0 && !String(form.onlineTransferBankAccountId).trim()) {
+      setSaveError('Select a bank account when online transfer amount is greater than 0.');
       return;
     }
     const chequeLines = [];
@@ -421,10 +487,12 @@ export default function RecordPaymentModal({
         cashAmount: cash,
         cdmAmount: cdm,
         cdmNumber: String(form.cdmNumber).trim(),
+        cdmBankAccountId: String(form.cdmBankAccountId).trim(),
         onlineTransferAmount: onlineTransfer,
         onlineTransferReference: String(form.onlineTransferReference).trim(),
+        onlineTransferBankAccountId: String(form.onlineTransferBankAccountId).trim(),
         cheques: chequeLines,
-        date: form.date,
+        date: lockDateToToday ? todayYmdLocal() : form.date,
         note: form.note.trim(),
       };
       const isEdit = !!editPayment?.id;
@@ -599,13 +667,28 @@ export default function RecordPaymentModal({
                   </label>
                   <label className="block text-sm font-medium text-slate-600">
                     Payment date
-                    <input
-                      type="date"
-                      required
-                      value={form.date}
-                      onChange={(e) => handleChange('date', e.target.value)}
-                      className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                    />
+                    {lockDateToToday ? (
+                      <>
+                        <p
+                          className="mt-1 flex min-h-[2.75rem] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm tabular-nums text-slate-700 ring-1 ring-slate-200"
+                          aria-readonly="true"
+                        >
+                          {todayYmdLocal()}
+                          <span className="sr-only"> (today, cannot be changed)</span>
+                        </p>
+                        <span className="mt-1 block text-xs font-normal text-slate-500">
+                          Today only — this date cannot be changed.
+                        </span>
+                      </>
+                    ) : (
+                      <input
+                        type="date"
+                        required
+                        value={form.date}
+                        onChange={(e) => handleChange('date', e.target.value)}
+                        className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      />
+                    )}
                   </label>
                 </div>
                 <p className="text-xs font-normal text-slate-500">
@@ -627,7 +710,9 @@ export default function RecordPaymentModal({
                 </label>
                 <fieldset className="rounded-xl bg-sky-50/70 p-3 ring-1 ring-sky-100 sm:p-4">
                   <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposit</legend>
-                  <p className="mt-1 text-xs text-slate-500">Enter amount and CDM number as evidence. Requires manager approval.</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Enter amount, CDM number, and the shop bank account. Credited when a manager approves.
+                  </p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-sm font-medium text-slate-600">
                       Amount (LKR)
@@ -653,10 +738,30 @@ export default function RecordPaymentModal({
                       />
                     </label>
                   </div>
+                  <label className="mt-3 block text-sm font-medium text-slate-600">
+                    Bank account <span className="text-rose-600">*</span>
+                    <select
+                      value={form.cdmBankAccountId}
+                      onChange={(e) => handleChange('cdmBankAccountId', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      disabled={bankAccounts.length === 0}
+                    >
+                      <option value="">
+                        {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                      </option>
+                      {bankAccounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {bankAccountOptionLabel(a)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </fieldset>
                 <fieldset className="rounded-xl bg-teal-50/70 p-3 ring-1 ring-teal-100 sm:p-4">
                   <legend className="px-1 text-sm font-semibold text-slate-800">Online transfer</legend>
-                  <p className="mt-1 text-xs text-slate-500">Enter amount and bank reference as evidence. Requires manager approval.</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Enter amount, bank reference, and the shop bank account. Credited when a manager approves.
+                  </p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <label className="block text-sm font-medium text-slate-600">
                       Amount (LKR)
@@ -682,6 +787,24 @@ export default function RecordPaymentModal({
                       />
                     </label>
                   </div>
+                  <label className="mt-3 block text-sm font-medium text-slate-600">
+                    Bank account <span className="text-rose-600">*</span>
+                    <select
+                      value={form.onlineTransferBankAccountId}
+                      onChange={(e) => handleChange('onlineTransferBankAccountId', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                      disabled={bankAccounts.length === 0}
+                    >
+                      <option value="">
+                        {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                      </option>
+                      {bankAccounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {bankAccountOptionLabel(a)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </fieldset>
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">

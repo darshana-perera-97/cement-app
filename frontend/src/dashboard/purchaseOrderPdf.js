@@ -1,20 +1,21 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { doorStepNotesText, isPoCashPayment, poChequeBankLabel } from './poChequeDisplay';
+import { doorStepNotesText, isPoCashPayment, isPoBankTransferPayment, poChequeBankLabel } from './poChequeDisplay';
 import { formatProductNameWithCode } from './brandTheme';
 
-const MARGIN = 10;
+const MARGIN = 8;
 const BLACK = [0, 0, 0];
 const MUTED = [40, 40, 40];
 const FONT = {
-  shop: 16,
-  header: 10.5,
-  title: 14,
-  section: 12,
-  body: 11,
-  table: 11,
+  shop: 12.5,
+  header: 8,
+  title: 11,
+  section: 9,
+  body: 8.5,
+  table: 8,
 };
-const LINE = 4.8;
+const LINE = 3.6;
+const SHOP_LINE = 4.4;
 
 function display(v) {
   const s = String(v ?? '').trim();
@@ -61,6 +62,13 @@ function orderNumberDisplay(poNumber) {
 
 function poPaymentRefDisplay(c, bankAccounts) {
   if (isPoCashPayment(c)) return 'Cash';
+  if (isPoBankTransferPayment(c)) {
+    const bank = poChequeBankLabel(c, bankAccounts);
+    const ref = display(c?.chequeNumber);
+    if (bank && ref !== '—') return `${bank} · ${ref}`;
+    if (bank) return bank;
+    return ref === '—' ? 'Bank transfer' : ref;
+  }
   const num = display(c?.chequeNumber);
   const bank = poChequeBankLabel(c, bankAccounts);
   if (bank && num !== '—') return `${bank} · ${num}`;
@@ -69,7 +77,30 @@ function poPaymentRefDisplay(c, bankAccounts) {
 }
 
 function poPaymentTypeLabel(c) {
-  return String(c?.paymentType ?? '').trim().toLowerCase() === 'cash' ? 'Cash' : 'Cheque';
+  const t = String(c?.paymentType ?? '').trim().toLowerCase();
+  if (t === 'cash') return 'Cash';
+  if (t === 'bank_transfer') return 'Bank Transfer';
+  return 'Cheque';
+}
+
+function productLineTotal(item) {
+  if (item?.lineTotal != null && item.lineTotal !== '') return Number(item.lineTotal) || 0;
+  if (item?.totalAmount != null && item.totalAmount !== '') return Number(item.totalAmount) || 0;
+  return (Number(item?.quantity) || 0) * (Number(item?.unitPrice) || 0);
+}
+
+/** One product row, or every line when a whole-order payment sheet is printed. */
+function productLinesForPdf(po, extraItems) {
+  const source =
+    Array.isArray(extraItems) && extraItems.length > 0
+      ? extraItems
+      : [po];
+  return source.map((item) => ({
+    product: item?.product,
+    quantity: item?.quantity,
+    unitPrice: item?.unitPrice,
+    lineTotal: productLineTotal(item),
+  }));
 }
 
 function underlineText(doc, text, x, y, options = {}) {
@@ -80,8 +111,8 @@ function underlineText(doc, text, x, y, options = {}) {
   if (align === 'center') x1 = x - w / 2;
   else if (align === 'right') x1 = x - w;
   doc.setDrawColor(...BLACK);
-  doc.setLineWidth(0.35);
-  doc.line(x1, y + 0.8, x1 + w, y + 0.8);
+  doc.setLineWidth(0.22);
+  doc.line(x1, y + 0.55, x1 + w, y + 0.55);
 }
 
 /**
@@ -100,6 +131,7 @@ function underlineText(doc, text, x, y, options = {}) {
  *   distributorLocation?: string,
  *   driverLicense?: string,
  *   bankAccounts?: object[],
+ *   items?: object[],
  * }} [opts]
  */
 export function downloadPurchaseOrderPdf(po, opts = {}) {
@@ -127,7 +159,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;
 
-  let y = 10;
+  let y = 8;
 
   // ——— Header / letterhead ———
   doc.setFont('times', 'bold');
@@ -135,7 +167,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   doc.setTextColor(...BLACK);
   const shopLines = doc.splitTextToSize(shopName, contentWidth);
   doc.text(shopLines, MARGIN, y);
-  y += shopLines.length * 5.6;
+  y += shopLines.length * SHOP_LINE;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(FONT.header);
@@ -163,7 +195,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     y += LINE;
   }
 
-  y += 1;
+  y += 0.6;
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(FONT.header);
   doc.setTextColor(...BLACK);
@@ -172,9 +204,9 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   y += tagLines.length * LINE;
 
   doc.setDrawColor(...BLACK);
-  doc.setLineWidth(0.5);
+  doc.setLineWidth(0.35);
   doc.line(MARGIN, y, pageWidth - MARGIN, y);
-  y += 5.5;
+  y += 4;
 
   // ——— Meta: Dealer Code / Order NO / Title / Date ———
   doc.setFont('helvetica', 'normal');
@@ -186,7 +218,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
 
   doc.text(`Dealer Code : ${display(dealerCode)}`, MARGIN, y);
   doc.text(`Order NO : ${orderNo}`, pageWidth - MARGIN, y, { align: 'right' });
-  y += 6;
+  y += 4.4;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(FONT.title);
@@ -195,7 +227,7 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(FONT.body);
   doc.text(`DATE : ${orderDate}`, pageWidth - MARGIN, y, { align: 'right' });
-  y += 7;
+  y += 5.2;
 
   // ——— Recipient ———
   doc.setFont('helvetica', 'normal');
@@ -212,49 +244,67 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     doc.text(locLines, MARGIN, y);
     y += locLines.length * LINE;
   }
-  y += 2.5;
+  y += 1.6;
 
   doc.text('Dear Sir,', MARGIN, y);
-  y += 5;
+  y += 3.8;
   const intro =
     'Please be kindly enough to issue these products. Details of the Vehicle and products are given bellow. Thank You.';
   const introLines = doc.splitTextToSize(intro, contentWidth);
   doc.text(introLines, MARGIN, y);
-  y += introLines.length * LINE + 4;
+  y += introLines.length * LINE + 2.6;
 
   // ——— Product Details ———
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(FONT.section);
   underlineText(doc, 'Product Details', MARGIN, y);
-  y += 3.5;
+  y += 2.4;
 
-  const lineTotal = po.lineTotal ?? po.totalAmount;
+  const productLines = productLinesForPdf(po, opts.items);
+  const grandTotal = productLines.reduce((sum, line) => sum + (Number(line.lineTotal) || 0), 0);
   autoTable(doc, {
     startY: y,
     head: [['Descriptions', 'Price', 'Quantity', 'Amount(Rs:)']],
-    body: [
-      [
-        display(formatProductNameWithCode(po.product) || po.product),
-        formatPrice(po.unitPrice),
-        String(Number(po.quantity) || 0),
-        formatAmount(lineTotal),
-      ],
-    ],
+    body: productLines.map((line) => [
+      display(formatProductNameWithCode(line.product) || line.product),
+      formatPrice(line.unitPrice),
+      String(Number(line.quantity) || 0),
+      formatAmount(line.lineTotal),
+    ]),
+    foot:
+      productLines.length > 1
+        ? [
+            [
+              { content: 'Total', styles: { halign: 'left', fontStyle: 'bold' } },
+              '',
+              '',
+              { content: formatAmount(grandTotal), styles: { halign: 'right', fontStyle: 'bold' } },
+            ],
+          ]
+        : undefined,
     theme: 'grid',
     styles: {
       font: 'helvetica',
       fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
-      lineWidth: 0.35,
-      cellPadding: 1.8,
+      lineWidth: 0.22,
+      cellPadding: { top: 1.05, bottom: 1.05, left: 1.2, right: 1.2 },
       valign: 'middle',
     },
     headStyles: {
       fillColor: [255, 255, 255],
       textColor: BLACK,
       fontStyle: 'bold',
+      fontSize: FONT.table,
       halign: 'center',
+    },
+    footStyles: {
+      fillColor: [255, 255, 255],
+      textColor: BLACK,
+      fontStyle: 'bold',
+      fontSize: FONT.table,
+      halign: 'right',
     },
     columnStyles: {
       0: { cellWidth: contentWidth * 0.46, halign: 'left' },
@@ -264,13 +314,13 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     },
     margin: { left: MARGIN, right: MARGIN },
   });
-  y = (doc.lastAutoTable?.finalY || y) + 5.5;
+  y = (doc.lastAutoTable?.finalY || y) + 4;
 
   // ——— Payment Details ———
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(FONT.section);
   underlineText(doc, 'PAYMENT DETAILS', MARGIN, y);
-  y += 3.5;
+  y += 2.4;
 
   const cheques = Array.isArray(po.cheques) ? po.cheques : [];
   const paymentBody =
@@ -283,13 +333,13 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
             : formatDisplayDate(c.chequeDate),
           c.amount != null && Number(c.amount) > 0
             ? formatAmount(c.amount)
-            : formatAmount(lineTotal),
+            : formatAmount(grandTotal),
         ])
-      : [['Cheque', '—', '—', formatAmount(lineTotal)]];
+      : [['Cheque', '—', '—', formatAmount(grandTotal)]];
 
   autoTable(doc, {
     startY: y,
-    head: [['Type/Mode', 'Bank / Cheque No', 'Date', 'Amount(Rs:)']],
+    head: [['Type/Mode', 'Bank / Ref', 'Date', 'Amount(Rs:)']],
     body: paymentBody,
     theme: 'grid',
     styles: {
@@ -297,14 +347,15 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
       fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
-      lineWidth: 0.35,
-      cellPadding: 1.8,
+      lineWidth: 0.22,
+      cellPadding: { top: 1.05, bottom: 1.05, left: 1.2, right: 1.2 },
       valign: 'middle',
     },
     headStyles: {
       fillColor: [255, 255, 255],
       textColor: BLACK,
       fontStyle: 'bold',
+      fontSize: FONT.table,
       halign: 'center',
     },
     columnStyles: {
@@ -315,13 +366,13 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     },
     margin: { left: MARGIN, right: MARGIN },
   });
-  y = (doc.lastAutoTable?.finalY || y) + 5.5;
+  y = (doc.lastAutoTable?.finalY || y) + 4;
 
   // ——— Vehicle Details ———
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(FONT.section);
   underlineText(doc, 'VEHICAL DETAILS', MARGIN, y);
-  y += 3.5;
+  y += 2.4;
 
   const vehicleLines = [
     `Driver Name : ${display(po.driverName).toUpperCase()}`,
@@ -338,8 +389,8 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
       fontSize: FONT.table,
       textColor: BLACK,
       lineColor: BLACK,
-      lineWidth: 0.35,
-      cellPadding: { top: 2, bottom: 2, left: 3, right: 3 },
+      lineWidth: 0.22,
+      cellPadding: { top: 1.15, bottom: 1.15, left: 2.2, right: 2.2 },
     },
     columnStyles: {
       0: { cellWidth: contentWidth * 0.85 },
@@ -347,14 +398,14 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
     margin: { left: MARGIN, right: MARGIN },
     tableWidth: contentWidth * 0.85,
   });
-  y = (doc.lastAutoTable?.finalY || y) + 5.5;
+  y = (doc.lastAutoTable?.finalY || y) + 4;
 
   const notesText = doorStepNotesText(po);
   if (notesText) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(FONT.section);
     underlineText(doc, 'NOTES', MARGIN, y);
-    y += 5;
+    y += 3.4;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(FONT.body);
     const noteLines = doc.splitTextToSize(notesText, contentWidth);

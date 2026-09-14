@@ -4,6 +4,14 @@ import { canEditDetails, getUsername } from '../auth';
 import { useBagProducts } from './BagProductsContext';
 import { productToBrandKey } from './brandTheme';
 import {
+  groupSharedPurchaseOrders,
+  poLineItems,
+  poProductSummary,
+  poSelectionIds,
+  poTotalAmount,
+  poTotalQuantity,
+} from './poItems';
+import {
   LoadingSpinner,
   TableFiltersBar,
   TablePaginationBar,
@@ -64,19 +72,21 @@ function aggregateFromPurchaseOrders(selectedPos, lastCutOffs, prevForm = {}, br
   }
   let vehicleNumber = '';
   for (const po of selectedPos) {
-    const key = productToBrandKey(po.product, brands);
-    if (!key || !brandAgg[key]) continue;
-    brandAgg[key].bags += Number(po.quantity) || 0;
-    brandAgg[key].cost += Number(po.lineTotal ?? po.totalAmount) || 0;
-    const cheques = Array.isArray(po.cheques) ? po.cheques : [];
-    for (const c of cheques) {
-      const label = formatPoChequeWithBank(c);
-      if (label && label !== '—' && !brandAgg[key].cheques.includes(label)) {
-        brandAgg[key].cheques.push(label);
-      }
-      const conv = String(c.chequeDate || '').trim().slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(conv) && !brandAgg[key].convertingDate) {
-        brandAgg[key].convertingDate = conv;
+    for (const line of poLineItems(po)) {
+      const key = productToBrandKey(line.product, brands);
+      if (!key || !brandAgg[key]) continue;
+      brandAgg[key].bags += Number(line.quantity) || 0;
+      brandAgg[key].cost += Number(line.lineTotal) || 0;
+      const cheques = Array.isArray(po.cheques) ? po.cheques : [];
+      for (const c of cheques) {
+        const label = formatPoChequeWithBank(c);
+        if (label && label !== '—' && !brandAgg[key].cheques.includes(label)) {
+          brandAgg[key].cheques.push(label);
+        }
+        const conv = String(c.chequeDate || '').trim().slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(conv) && !brandAgg[key].convertingDate) {
+          brandAgg[key].convertingDate = conv;
+        }
       }
     }
     if (!vehicleNumber) {
@@ -265,7 +275,7 @@ export default function LoadsPage() {
   }, [rows, editingLoadId]);
 
   const selectablePurchaseOrders = useMemo(() => {
-    return purchaseOrders
+    const available = purchaseOrders
       .filter((po) => {
         if (po?.cancelled) return false;
         const id = String(po.id || '').trim();
@@ -280,6 +290,7 @@ export default function LoadsPage() {
         if (da !== db) return db.localeCompare(da);
         return String(b.poNumber || '').localeCompare(String(a.poNumber || ''));
       });
+    return groupSharedPurchaseOrders(available);
   }, [purchaseOrders, usedPoIds, selectedPoIds]);
 
   const selectedPos = useMemo(() => {
@@ -289,12 +300,23 @@ export default function LoadsPage() {
 
   const hasDoorStockPo = useMemo(() => selectedPos.some((po) => po.doorStock), [selectedPos]);
 
+  const selectedDisplayCount = useMemo(
+    () =>
+      selectablePurchaseOrders.filter((po) => {
+        const ids = poSelectionIds(po);
+        return ids.length > 0 && ids.every((poId) => selectedPoIds.includes(poId));
+      }).length,
+    [selectablePurchaseOrders, selectedPoIds],
+  );
+
   const activeBrands = useMemo(() => {
     if (selectedPoIds.length > 0) {
       const keys = new Set();
       for (const po of selectedPos) {
-        const key = productToBrandKey(po.product, brands);
-        if (key) keys.add(key);
+        for (const line of poLineItems(po)) {
+          const key = productToBrandKey(line.product, brands);
+          if (key) keys.add(key);
+        }
       }
       // Also include brands that still have bags in the form (after edits)
       for (const b of brands) {
@@ -422,14 +444,17 @@ export default function LoadsPage() {
     setForm((f) => ({ ...f, [field]: value }));
   };
 
-  const togglePoSelection = (poId) => {
-    const id = String(poId || '').trim();
-    if (!id) return;
+  const togglePoSelection = (po) => {
+    const ids = poSelectionIds(po);
+    if (ids.length === 0) return;
     setSelectedPoIds((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      const allSelected = ids.every((id) => prev.includes(id));
+      const next = allSelected
+        ? prev.filter((x) => !ids.includes(x))
+        : [...new Set([...prev, ...ids])];
       const nextHasDoorStock = purchaseOrders
-        .filter((po) => next.includes(String(po.id)))
-        .some((po) => po.doorStock);
+        .filter((row) => next.includes(String(row.id)))
+        .some((row) => row.doorStock);
       setForm((f) => {
         const applied = applyPosToForm(next, f);
         return {
@@ -835,7 +860,7 @@ export default function LoadsPage() {
                   Purchase orders
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Select one or more POs. Bags and cost are applied only to each PO&apos;s product.
+                  Select one or more POs. Bags and cost are applied to each product on the PO.
                   Vehicle and cheque are filled from the selection (you can still edit them). Enter
                   invoice no. and cut-off price per product.
                 </p>
@@ -847,14 +872,16 @@ export default function LoadsPage() {
                 ) : (
                   <div className="mt-3 max-h-48 space-y-2 overflow-y-auto rounded-xl bg-white p-2 ring-1 ring-slate-200/80">
                     {selectablePurchaseOrders.map((po) => {
-                      const id = String(po.id);
-                      const checked = selectedPoIds.includes(id);
-                      const productName = String(po.product || '').trim() || '—';
-                      const brandKey = productToBrandKey(po.product, brands);
+                      const ids = poSelectionIds(po);
+                      const id = ids[0] || String(po.id);
+                      const checked = ids.length > 0 && ids.every((poId) => selectedPoIds.includes(poId));
+                      const productName = poProductSummary(po);
+                      const lines = poLineItems(po);
+                      const brandKey = lines.length === 1 ? productToBrandKey(lines[0].product, brands) : null;
                       const brandLabel = brands.find((b) => b.key === brandKey)?.label;
                       const showMappedBrand =
                         brandLabel &&
-                        brandLabel.trim().toLowerCase() !== productName.toLowerCase();
+                        brandLabel.trim().toLowerCase() !== String(lines[0]?.product || '').trim().toLowerCase();
                       return (
                         <label
                           key={id}
@@ -865,7 +892,7 @@ export default function LoadsPage() {
                           <input
                             type="checkbox"
                             checked={checked}
-                            onChange={() => togglePoSelection(id)}
+                            onChange={() => togglePoSelection(po)}
                             className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                           />
                           <span className="min-w-0 flex-1 text-sm text-slate-800">
@@ -876,9 +903,9 @@ export default function LoadsPage() {
                               {productName}
                               {showMappedBrand ? ` (${brandLabel})` : ''}
                               {' · '}
-                              {Number(po.quantity) || 0} bags
+                              {poTotalQuantity(po)} bags
                               {' · '}
-                              {money(po.lineTotal ?? po.totalAmount)}
+                              {money(poTotalAmount(po))}
                               {Array.isArray(po.cheques) && po.cheques.length > 0 ? (
                                 <>
                                   {' · '}
@@ -898,9 +925,9 @@ export default function LoadsPage() {
                     })}
                   </div>
                 )}
-                {selectedPoIds.length > 0 ? (
+                {selectedDisplayCount > 0 ? (
                   <p className="mt-2 text-xs text-slate-500">
-                    {selectedPoIds.length} PO{selectedPoIds.length === 1 ? '' : 's'} selected
+                    {selectedDisplayCount} PO{selectedDisplayCount === 1 ? '' : 's'} selected
                   </p>
                 ) : null}
               </div>

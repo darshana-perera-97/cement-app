@@ -11,6 +11,8 @@ import {
   getPrinterConnection,
   printTestPage,
   reconnectLastPrinter,
+  startPrinterAutoReconnect,
+  stopPrinterAutoReconnect,
   subscribePrinterConnection,
   updatePrinterProperties,
 } from './bluetoothPrinter';
@@ -19,6 +21,8 @@ import {
   EMPTY_PRINTER_SETTINGS,
   PRINTER_SETTINGS_CHANGED,
   PRINTER_SCENARIOS,
+  isPrinterRoleAllowed,
+  printerCopiesForScenario,
   shouldAutoPrintScenario,
   shouldShowPrinterIndicator,
 } from './printerSettings';
@@ -26,7 +30,10 @@ import {
 const apiBase = getApiBase();
 const PrinterContext = createContext(null);
 
-const SCENARIO_TITLES = Object.fromEntries(PRINTER_SCENARIOS.map((s) => [s.key, s.label]));
+const SCENARIO_TITLES = {
+  ...Object.fromEntries(PRINTER_SCENARIOS.map((s) => [s.key, s.label])),
+  dailyCollections: 'Daily collections',
+};
 
 export function usePrinter() {
   const ctx = useContext(PrinterContext);
@@ -92,8 +99,8 @@ export function PrinterProvider({ children }) {
 
   useEffect(() => {
     if (!showIndicator) return undefined;
-    reconnectLastPrinter();
-    return undefined;
+    startPrinterAutoReconnect();
+    return () => stopPrinterAutoReconnect();
   }, [showIndicator]);
 
   const openConnectModal = useCallback(() => {
@@ -114,6 +121,21 @@ export function PrinterProvider({ children }) {
       await connectBluetoothPrinter();
     } catch (e) {
       setActionError(e?.message || 'Could not connect.');
+    } finally {
+      setConnectBusy(false);
+    }
+  }, []);
+
+  const handleReconnect = useCallback(async () => {
+    setConnectBusy(true);
+    setActionError('');
+    try {
+      const next = await reconnectLastPrinter({ force: true });
+      if (!next.connected) {
+        setActionError(next.error || 'Could not reconnect to the last printer. Scan if it is a new device.');
+      }
+    } catch (e) {
+      setActionError(e?.message || 'Could not reconnect.');
     } finally {
       setConnectBusy(false);
     }
@@ -150,15 +172,29 @@ export function PrinterProvider({ children }) {
     });
   }, []);
 
-  const requestAutoPrint = useCallback(
-    (scenarioKey, payload) => {
+  const enqueuePrint = useCallback(
+    (scenarioKey, payload, { force = false } = {}) => {
       printChain.current = printChain.current
         .catch(() => {})
         .then(async () => {
           if (!payload) return;
           const live = getPrinterConnection();
-          if (!shouldAutoPrintScenario(settings, scenarioKey, live.connected)) return;
-          const copies = Math.max(1, Number(settings.scenarios?.[scenarioKey]?.copies) || 1);
+          if (force) {
+            if (!isPrinterRoleAllowed(settings)) {
+              setActionError('Bluetooth printing is not enabled for your account.');
+              setConnectOpen(true);
+              return;
+            }
+            if (!live.connected) {
+              setActionError('Connect the Bluetooth printer, then print again.');
+              setConnectOpen(true);
+              return;
+            }
+          } else if (!shouldAutoPrintScenario(settings, scenarioKey, live.connected)) {
+            return;
+          }
+          const copies =
+            scenarioKey === 'dailyCollections' ? 1 : Math.max(1, printerCopiesForScenario(settings, scenarioKey));
           const title = SCENARIO_TITLES[scenarioKey] || 'Receipt';
           for (let copy = 1; copy <= copies; copy += 1) {
             const proceed = await askPrintCopy({
@@ -189,7 +225,17 @@ export function PrinterProvider({ children }) {
         });
       return printChain.current;
     },
-    [askPrintCopy, connection.connected, settings, shop],
+    [askPrintCopy, settings, shop],
+  );
+
+  const requestAutoPrint = useCallback(
+    (scenarioKey, payload) => enqueuePrint(scenarioKey, payload, { force: false }),
+    [enqueuePrint],
+  );
+
+  const requestPrint = useCallback(
+    (scenarioKey, payload) => enqueuePrint(scenarioKey, payload, { force: true }),
+    [enqueuePrint],
   );
 
   const value = useMemo(
@@ -201,6 +247,7 @@ export function PrinterProvider({ children }) {
       openConnectModal,
       closeConnectModal,
       requestAutoPrint,
+      requestPrint,
       reloadSettings: loadSettings,
     }),
     [
@@ -211,6 +258,7 @@ export function PrinterProvider({ children }) {
       openConnectModal,
       closeConnectModal,
       requestAutoPrint,
+      requestPrint,
       loadSettings,
     ],
   );
@@ -218,7 +266,7 @@ export function PrinterProvider({ children }) {
   return (
     <PrinterContext.Provider value={value}>
       {children}
-      {showIndicator && connectOpen ? (
+      {connectOpen ? (
         <PrinterConnectModal
           connection={connection}
           busy={connectBusy}
@@ -226,6 +274,7 @@ export function PrinterProvider({ children }) {
           error={actionError}
           onClose={closeConnectModal}
           onConnect={handleConnect}
+          onReconnect={handleReconnect}
           onDisconnect={handleDisconnect}
           onTestPrint={handleTestPrint}
         />
@@ -259,7 +308,11 @@ export function PrinterStatusButton() {
   const dotTone = connected ? 'bg-sky-500' : connection.connecting ? 'bg-amber-500' : 'bg-slate-400';
   const title = connected
     ? `Bluetooth printer connected${connection.deviceName ? `: ${connection.deviceName}` : ''}. Click to manage.`
-    : 'Bluetooth printer. Click to scan and connect.';
+    : connection.connecting
+      ? `Connecting to ${connection.deviceName || 'the last Bluetooth printer'}…`
+      : connection.deviceName
+        ? `Last printer: ${connection.deviceName}. It reconnects automatically when this page is open. Click to manage.`
+        : 'Bluetooth printer. Click to scan and connect.';
 
   return (
     <button
@@ -289,8 +342,9 @@ function BluetoothGlyph({ className = 'h-4 w-4' }) {
   );
 }
 
-function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onConnect, onDisconnect, onTestPrint }) {
+function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onConnect, onReconnect, onDisconnect, onTestPrint }) {
   const connected = connection.connected;
+  const lastName = connection.deviceName || '';
   return (
     <div className="fixed inset-0 z-[120] flex items-end justify-center p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="printer-connect-title">
       <ModalBackdrop onClose={onClose} />
@@ -301,7 +355,9 @@ function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onCon
             <h2 id="printer-connect-title" className="text-lg font-bold text-slate-900">
               Bluetooth printer
             </h2>
-            <p className="mt-1 text-sm text-slate-500">Scan nearby 80mm XPrinter devices, connect, and check printer properties.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              The last connected 80mm XPrinter reconnects automatically when you open the app. Scan only if you need a different printer.
+            </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-50">
             Close
@@ -324,7 +380,7 @@ function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onCon
           <div className="flex items-center justify-between gap-3">
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">Status</dt>
             <dd className={`text-sm font-semibold ${connected ? 'text-emerald-700' : 'text-slate-700'}`}>
-              {busy ? 'Connecting…' : connected ? 'Connected' : 'Not connected'}
+              {busy || connection.connecting ? 'Connecting…' : connected ? 'Connected' : lastName ? 'Waiting to reconnect' : 'Not connected'}
             </dd>
           </div>
           <div className="flex items-center justify-between gap-3">
@@ -388,14 +444,30 @@ function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onCon
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={onConnect}
-              disabled={busy || !connection.available}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {busy ? <LoadingSpinner size="sm" label="Scanning…" /> : 'Scan and connect'}
-            </button>
+            <>
+              {lastName ? (
+                <button
+                  type="button"
+                  onClick={onReconnect}
+                  disabled={busy || connection.connecting || !connection.available}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {busy || connection.connecting ? <LoadingSpinner size="sm" label="Connecting…" /> : `Connect ${lastName}`}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={onConnect}
+                disabled={busy || !connection.available}
+                className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:opacity-60 ${
+                  lastName
+                    ? 'bg-white text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50'
+                    : 'bg-indigo-600 text-white shadow-md hover:bg-indigo-700'
+                }`}
+              >
+                {busy && !lastName ? <LoadingSpinner size="sm" label="Scanning…" /> : lastName ? 'Scan for another printer' : 'Scan and connect'}
+              </button>
+            </>
           )}
         </div>
       </div>

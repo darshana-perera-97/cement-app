@@ -148,6 +148,11 @@ export function isCollector() {
   return getStaffRole() === 'Collector';
 }
 
+/** Collectors and drivers may only record today's date on new entries. */
+export function mustUseTodayRecordDate() {
+  return isCollector() || isDriverAuthed();
+}
+
 /** Admin-only: edit existing records in detail popups and edit modals. */
 export function canEditDetails() {
   return isAdmin();
@@ -180,6 +185,8 @@ export async function refreshSessionFromServer(apiBase) {
     const res = await authFetch(`${root}/api/me`);
     if (!res.ok) return;
     const data = await res.json();
+    const displayName = String(data.name || data.username || '').trim();
+    if (displayName) sessionStorage.setItem(DISPLAY_NAME_KEY, displayName);
     if (data.role === 'admin') {
       sessionStorage.setItem(ROLE_KEY, 'admin');
       sessionStorage.removeItem(STAFF_ROLE_KEY);

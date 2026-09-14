@@ -27,6 +27,19 @@ let lastError = '';
 const listeners = new Set();
 let printQueue = Promise.resolve();
 
+let manualDisconnect = false;
+let autoReconnectActive = false;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let watchingDevice = null;
+let advertisementAbort = null;
+let autoReconnectListenersBound = false;
+let gestureCleanup = null;
+let connectGeneration = 0;
+let reconnectInFlight = null;
+
+const RECONNECT_RETRY_MS = [800, 2000, 4000, 8000, 15000, 30000];
+
 function bluetoothAvailable() {
   return typeof navigator !== 'undefined' && Boolean(navigator.bluetooth);
 }
@@ -68,6 +81,10 @@ function emit() {
   });
 }
 
+function isLinkUp() {
+  return Boolean(characteristic && device?.gatt?.connected);
+}
+
 function resetLink() {
   if (device) {
     try {
@@ -81,11 +98,122 @@ function resetLink() {
   characteristic = null;
 }
 
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function stopAdvertisementWatch() {
+  if (advertisementAbort) {
+    try {
+      advertisementAbort.abort();
+    } catch {
+      /* ignore */
+    }
+    advertisementAbort = null;
+  }
+  watchingDevice = null;
+}
+
+function disarmGestureReconnect() {
+  if (gestureCleanup) {
+    gestureCleanup();
+    gestureCleanup = null;
+  }
+}
+
+function armGestureReconnect() {
+  if (typeof window === 'undefined' || gestureCleanup) return;
+  const onGesture = () => {
+    disarmGestureReconnect();
+    if (!autoReconnectActive || manualDisconnect || isLinkUp() || connecting) return;
+    reconnectLastPrinter();
+  };
+  window.addEventListener('pointerdown', onGesture, { passive: true });
+  window.addEventListener('keydown', onGesture);
+  gestureCleanup = () => {
+    window.removeEventListener('pointerdown', onGesture);
+    window.removeEventListener('keydown', onGesture);
+  };
+}
+
+function scheduleReconnect() {
+  if (!autoReconnectActive || manualDisconnect || isLinkUp() || connecting) return;
+  clearReconnectTimer();
+  const delay = RECONNECT_RETRY_MS[Math.min(reconnectAttempt, RECONNECT_RETRY_MS.length - 1)];
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    reconnectLastPrinter();
+  }, delay);
+}
+
+function onVisibilityOrFocus() {
+  if (typeof document !== 'undefined' && document.visibilityState && document.visibilityState !== 'visible') {
+    return;
+  }
+  if (!autoReconnectActive || manualDisconnect || isLinkUp()) return;
+  reconnectAttempt = 0;
+  reconnectLastPrinter();
+}
+
+function onBluetoothAvailability(event) {
+  if (event && event.value === false) return;
+  if (!autoReconnectActive || manualDisconnect || isLinkUp()) return;
+  reconnectAttempt = 0;
+  reconnectLastPrinter();
+}
+
+async function findRememberedDevice() {
+  if (!bluetoothAvailable() || typeof navigator.bluetooth.getDevices !== 'function') return null;
+  const props = readProps();
+  if (!props.lastDeviceId && !props.lastDeviceName) return null;
+  const devices = await navigator.bluetooth.getDevices();
+  return (
+    devices.find((d) => props.lastDeviceId && d.id === props.lastDeviceId) ||
+    devices.find((d) => props.lastDeviceName && d.name === props.lastDeviceName) ||
+    null
+  );
+}
+
+async function watchRememberedDevice(btDevice) {
+  if (!btDevice || typeof btDevice.watchAdvertisements !== 'function') return;
+  if (watchingDevice === btDevice && advertisementAbort) return;
+  stopAdvertisementWatch();
+  advertisementAbort = new AbortController();
+  watchingDevice = btDevice;
+  const onAd = () => {
+    if (manualDisconnect || isLinkUp() || connecting) return;
+    reconnectAttempt = 0;
+    reconnectLastPrinter();
+  };
+  try {
+    btDevice.addEventListener('advertisementreceived', onAd);
+    await btDevice.watchAdvertisements({ signal: advertisementAbort.signal });
+  } catch {
+    advertisementAbort = null;
+    watchingDevice = null;
+  }
+}
+
 function onDisconnected() {
   server = null;
   characteristic = null;
-  lastError = lastError || 'Printer disconnected';
+  if (!manualDisconnect) {
+    lastError = lastError || 'Printer disconnected';
+  }
   emit();
+  if (!manualDisconnect && autoReconnectActive) {
+    reconnectAttempt = 0;
+    scheduleReconnect();
+    findRememberedDevice()
+      .then((match) => {
+        if (match && !manualDisconnect && !isLinkUp()) return watchRememberedDevice(match);
+        return undefined;
+      })
+      .catch(() => {});
+  }
 }
 
 export function getPrinterConnection() {
@@ -96,6 +224,7 @@ export function getPrinterConnection() {
     connecting,
     deviceName: device?.name || props.lastDeviceName || '',
     deviceId: device?.id || props.lastDeviceId || '',
+    remembered: Boolean(props.lastDeviceId || props.lastDeviceName),
     error: lastError,
     charsPerLine: props.charsPerLine,
     autoCut: props.autoCut,
@@ -134,9 +263,37 @@ async function pickWritableCharacteristic(gattServer) {
 }
 
 async function bindDevice(nextDevice) {
+  if (device && device !== nextDevice) {
+    try {
+      device.removeEventListener('gattserverdisconnected', onDisconnected);
+      device.gatt?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    resetLink();
+  } else if (device === nextDevice) {
+    try {
+      device.removeEventListener('gattserverdisconnected', onDisconnected);
+    } catch {
+      /* ignore */
+    }
+  }
   device = nextDevice;
   device.addEventListener('gattserverdisconnected', onDisconnected);
-  server = await device.gatt.connect();
+  if (device.gatt?.connected) {
+    server = device.gatt;
+  } else {
+    server = await device.gatt.connect();
+  }
+  if (manualDisconnect) {
+    try {
+      device.gatt?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    resetLink();
+    throw new Error('Printer disconnected');
+  }
   characteristic = await pickWritableCharacteristic(server);
   if (!characteristic) {
     throw new Error('Connected, but this device has no writable Bluetooth printer characteristic.');
@@ -146,6 +303,11 @@ async function bindDevice(nextDevice) {
     lastDeviceName: device.name || 'Bluetooth printer',
   });
   lastError = '';
+  manualDisconnect = false;
+  reconnectAttempt = 0;
+  clearReconnectTimer();
+  stopAdvertisementWatch();
+  disarmGestureReconnect();
 }
 
 export async function connectBluetoothPrinter() {
@@ -155,6 +317,7 @@ export async function connectBluetoothPrinter() {
     throw new Error(lastError);
   }
   connecting = true;
+  connectGeneration += 1;
   lastError = '';
   emit();
   try {
@@ -162,14 +325,6 @@ export async function connectBluetoothPrinter() {
       acceptAllDevices: true,
       optionalServices: PRINTER_BLE_SERVICES,
     });
-    if (device && device !== nextDevice) {
-      try {
-        device.gatt?.disconnect();
-      } catch {
-        /* ignore */
-      }
-      resetLink();
-    }
     await bindDevice(nextDevice);
     emit();
     return getPrinterConnection();
@@ -184,33 +339,107 @@ export async function connectBluetoothPrinter() {
   }
 }
 
-export async function reconnectLastPrinter() {
-  if (!bluetoothAvailable() || typeof navigator.bluetooth.getDevices !== 'function') return getPrinterConnection();
-  if (characteristic && device?.gatt?.connected) return getPrinterConnection();
+export async function reconnectLastPrinter(options = {}) {
+  if (options.force) manualDisconnect = false;
+  if (!bluetoothAvailable()) return getPrinterConnection();
+  if (manualDisconnect) return getPrinterConnection();
+  if (isLinkUp()) return getPrinterConnection();
+  if (reconnectInFlight) return reconnectInFlight;
+  if (connecting) return getPrinterConnection();
   const props = readProps();
   if (!props.lastDeviceId && !props.lastDeviceName) return getPrinterConnection();
-  connecting = true;
-  emit();
-  try {
-    const devices = await navigator.bluetooth.getDevices();
-    const match =
-      devices.find((d) => props.lastDeviceId && d.id === props.lastDeviceId) ||
-      devices.find((d) => props.lastDeviceName && d.name === props.lastDeviceName) ||
-      devices[0];
-    if (!match) return getPrinterConnection();
-    await bindDevice(match);
-    emit();
-  } catch (e) {
-    lastError = e?.message || 'Could not restore the last printer.';
-    emit();
-  } finally {
-    connecting = false;
-    emit();
+  if (typeof navigator.bluetooth.getDevices !== 'function') {
+    if (options.force) {
+      lastError = 'This browser cannot restore a printer automatically. Scan to connect.';
+      emit();
+    }
+    return getPrinterConnection();
   }
-  return getPrinterConnection();
+
+  reconnectInFlight = (async () => {
+    const generation = ++connectGeneration;
+    connecting = true;
+    lastError = '';
+    emit();
+    try {
+      const match = await findRememberedDevice();
+      if (generation !== connectGeneration) return getPrinterConnection();
+      if (!match) {
+        if (options.force) {
+          lastError = props.lastDeviceName
+            ? `This browser has no saved access to ${props.lastDeviceName}. Scan once so it can reconnect automatically.`
+            : 'No remembered printer. Scan to connect.';
+        }
+        return getPrinterConnection();
+      }
+      await bindDevice(match);
+      emit();
+    } catch (e) {
+      if (generation !== connectGeneration) return getPrinterConnection();
+      reconnectAttempt += 1;
+      if (options.force) {
+        lastError = e?.message || 'Could not restore the last printer.';
+      } else {
+        lastError = '';
+      }
+      findRememberedDevice()
+        .then((match) => {
+          if (match && !manualDisconnect && !isLinkUp()) return watchRememberedDevice(match);
+          return undefined;
+        })
+        .catch(() => {});
+      if (autoReconnectActive && !manualDisconnect && !isLinkUp()) {
+        scheduleReconnect();
+        armGestureReconnect();
+      }
+    } finally {
+      if (generation === connectGeneration) {
+        connecting = false;
+      }
+      reconnectInFlight = null;
+      emit();
+    }
+    return getPrinterConnection();
+  })();
+  return reconnectInFlight;
+}
+
+export function startPrinterAutoReconnect() {
+  autoReconnectActive = true;
+  reconnectAttempt = 0;
+  if (!autoReconnectListenersBound && typeof window !== 'undefined') {
+    autoReconnectListenersBound = true;
+    document.addEventListener('visibilitychange', onVisibilityOrFocus);
+    window.addEventListener('focus', onVisibilityOrFocus);
+    if (navigator.bluetooth?.addEventListener) {
+      navigator.bluetooth.addEventListener('availabilitychanged', onBluetoothAvailability);
+    }
+  }
+  armGestureReconnect();
+  reconnectLastPrinter();
+}
+
+export function stopPrinterAutoReconnect() {
+  autoReconnectActive = false;
+  clearReconnectTimer();
+  stopAdvertisementWatch();
+  disarmGestureReconnect();
+  if (autoReconnectListenersBound && typeof window !== 'undefined') {
+    autoReconnectListenersBound = false;
+    document.removeEventListener('visibilitychange', onVisibilityOrFocus);
+    window.removeEventListener('focus', onVisibilityOrFocus);
+    if (navigator.bluetooth?.removeEventListener) {
+      navigator.bluetooth.removeEventListener('availabilitychanged', onBluetoothAvailability);
+    }
+  }
 }
 
 export function disconnectBluetoothPrinter() {
+  manualDisconnect = true;
+  connectGeneration += 1;
+  clearReconnectTimer();
+  stopAdvertisementWatch();
+  disarmGestureReconnect();
   try {
     device?.gatt?.disconnect();
   } catch {
@@ -290,21 +519,34 @@ export function buildEscPosReceipt(lines, options = {}) {
       continue;
     }
     if (kind === 'cols') {
-      const left = String(line.left ?? '');
-      const right = String(line.right ?? '');
-      const gap = Math.max(1, width - left.length - right.length);
-      pushBytes(out, encodeText(`${left}${' '.repeat(gap)}${right}`), 0x0a);
+      const rows = formatCols(line.left, line.right, width);
+      if (line.bold) pushBytes(out, 0x1b, 0x45, 0x01);
+      if (line.invert) pushBytes(out, 0x1d, 0x42, 0x01);
+      for (const row of rows) {
+        const padded = line.invert && row.length < width ? `${row}${' '.repeat(width - row.length)}` : row;
+        pushBytes(out, encodeText(padded), 0x0a);
+      }
+      if (line.invert) pushBytes(out, 0x1d, 0x42, 0x00);
+      if (line.bold) pushBytes(out, 0x1b, 0x45, 0x00);
       continue;
     }
     const text = String(line.text ?? '');
-    if (line.double) pushBytes(out, 0x1d, 0x21, 0x11);
+    const wide = Boolean(line.double);
+    const tall = Boolean(line.tall) && !wide;
+    if (wide) pushBytes(out, 0x1d, 0x21, 0x11);
+    else if (tall) pushBytes(out, 0x1d, 0x21, 0x01);
     if (line.bold) pushBytes(out, 0x1b, 0x45, 0x01);
-    const chunks = wrapText(text, line.double ? Math.floor(width / 2) : width);
+    if (line.invert) pushBytes(out, 0x1d, 0x42, 0x01);
+    const chunks = wrapText(text, wide ? Math.floor(width / 2) : width);
     for (const chunk of chunks) {
-      pushBytes(out, encodeText(chunk), 0x0a);
+      const padded = line.invert && chunk.length < (wide ? Math.floor(width / 2) : width)
+        ? `${chunk}${' '.repeat((wide ? Math.floor(width / 2) : width) - chunk.length)}`
+        : chunk;
+      pushBytes(out, encodeText(padded), 0x0a);
     }
+    if (line.invert) pushBytes(out, 0x1d, 0x42, 0x00);
     if (line.bold) pushBytes(out, 0x1b, 0x45, 0x00);
-    if (line.double) pushBytes(out, 0x1d, 0x21, 0x00);
+    if (wide || tall) pushBytes(out, 0x1d, 0x21, 0x00);
   }
 
   if (feedLines > 0) pushBytes(out, 0x1b, 0x64, feedLines);
@@ -315,14 +557,35 @@ export function buildEscPosReceipt(lines, options = {}) {
 function wrapText(text, width) {
   const s = String(text ?? '');
   if (!s) return [''];
+  const max = Math.max(1, Number(width) || 1);
   const rows = [];
   let rest = s;
-  while (rest.length > width) {
-    rows.push(rest.slice(0, width));
-    rest = rest.slice(width);
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(' ', max);
+    if (cut < Math.floor(max * 0.45)) cut = max;
+    rows.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
   }
-  rows.push(rest);
-  return rows;
+  if (rest) rows.push(rest);
+  return rows.length ? rows : [''];
+}
+
+function formatCols(left, right, width) {
+  const l = String(left ?? '');
+  const r = String(right ?? '');
+  const w = Math.max(8, Number(width) || 48);
+  if (!r) return wrapText(l, w);
+  const maxLeft = Math.max(1, w - r.length - 1);
+  if (l.length <= maxLeft) {
+    return [`${l}${' '.repeat(w - l.length - r.length)}${r}`];
+  }
+  const wrapped = wrapText(l, maxLeft);
+  return wrapped.map((chunk, i) => {
+    if (i !== wrapped.length - 1) return chunk;
+    const gap = Math.max(1, w - chunk.length - r.length);
+    const line = `${chunk}${' '.repeat(gap)}${r}`;
+    return line.length > w ? `${chunk.slice(0, maxLeft)}${' '.repeat(w - maxLeft - r.length)}${r}` : line;
+  });
 }
 
 export async function printEscPosLines(lines) {

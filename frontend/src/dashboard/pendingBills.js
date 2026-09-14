@@ -23,7 +23,7 @@ function toNonNegMoney(n) {
 }
 
 /** Matches backend `paymentCreditToCustomer`. */
-function paymentCreditToCustomer(p) {
+export function paymentCreditToCustomer(p) {
   if (!isPaymentCreditActive(p)) return 0;
   const cheques = getPaymentCheques(p);
   const cdm = cdmPortion(p);
@@ -187,6 +187,7 @@ export function listCustomerBillPaymentAllocations(customer, bills, payments) {
     allocations.push({
       paymentId: String(payment.id ?? '').trim(),
       paymentDate,
+      recordedBy: String(payment.recordedBy ?? '').trim(),
       bill,
       amount: toward,
     });

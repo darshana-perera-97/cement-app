@@ -1,3 +1,5 @@
+import { poLineItems } from './poItems';
+
 function todayYmdLocal() {
   const d = new Date();
   const y = d.getFullYear();
@@ -25,22 +27,27 @@ export function collectPoOutgoingCheques(purchaseOrders) {
       const bankAccountId = String(c.bankAccountId ?? '').trim();
       const amount = Math.max(0, Number(c.amount) || 0);
       if (!bankAccountId || amount <= 0) continue;
+      const paymentType = isPoBankTransferPayment(c) ? 'bank_transfer' : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
       const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       rows.push({
         bankAccountId,
         amount,
+        paymentType,
         chequeNumber,
         chequeDate,
         bankAccount: c.bankAccount,
         poId,
-        product: String(po.product ?? '').trim() || '—',
+        product: poLineItems(po)
+          .map((item) => item.product)
+          .filter(Boolean)
+          .join(', ') || '—',
         distributorName: String(po.distributorName ?? '').trim() || '—',
         sortAt: po.createdAt || `${chequeDate}T12:00:00`,
       });
@@ -56,11 +63,12 @@ export function buildPendingPoOutgoingRows(purchaseOrders, bankAccounts, asOf = 
     const converting = String(c.chequeDate ?? '').slice(0, 10);
     if (converting && converting <= asOf) continue;
     rows.push({
-      rowKey: `po:${c.poId}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
+      rowKey: `po:${c.poId}:${c.paymentType || 'cheque'}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
       poId: c.poId,
       product: c.product,
       distributorName: c.distributorName,
-      chequeNumber: c.chequeNumber || '—',
+      paymentType: c.paymentType || 'cheque',
+      chequeNumber: c.chequeNumber || (c.paymentType === 'bank_transfer' ? 'Bank transfer' : '—'),
       chequeDate: converting || '—',
       bankLabel: formatPoChequeWithBank(c, bankAccounts),
       amount: c.amount,
@@ -101,6 +109,10 @@ export function isPoCashPayment(c) {
   return String(c?.paymentType ?? '').trim().toLowerCase() === 'cash';
 }
 
+export function isPoBankTransferPayment(c) {
+  return String(c?.paymentType ?? '').trim().toLowerCase() === 'bank_transfer';
+}
+
 /** User-facing Door step note; stored "Door stock" still displays as Door step. */
 export function doorStepNotesText(row) {
   const notes = String(row?.notes ?? '').trim();
@@ -108,11 +120,17 @@ export function doorStepNotesText(row) {
   return notes;
 }
 
-/** e.g. "Commercial Bank · #123456" or "Cash" */
+/** e.g. "Commercial Bank · #123456" or "Cash" or "Commercial Bank · Bank transfer" */
 export function formatPoChequeWithBank(c, bankAccounts) {
   if (isPoCashPayment(c)) return 'Cash';
   const num = String(c?.chequeNumber ?? '').trim();
   const bank = poChequeBankLabel(c, bankAccounts);
+  if (isPoBankTransferPayment(c)) {
+    if (bank && num) return `${bank} · Bank transfer ${num}`;
+    if (bank) return `${bank} · Bank transfer`;
+    if (num) return `Bank transfer ${num}`;
+    return 'Bank transfer';
+  }
   if (bank && num) return `${bank} · #${num}`;
   if (num) return `#${num}`;
   if (bank) return bank;

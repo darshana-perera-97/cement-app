@@ -17,7 +17,9 @@ import {
 import { useBagProducts } from './BagProductsContext';
 import { formatProductNameWithCode } from './brandTheme';
 import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
-import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment } from './poChequeDisplay';
+import { getPaymentReceiptInvoices } from './paymentReceipt';
+import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment, isPoBankTransferPayment } from './poChequeDisplay';
+import { poLineItems } from './poItems';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import { MANAGER_ACCESS_OPTIONS } from './navConfig';
 
@@ -142,14 +144,16 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'poCheque':
       return {
-        title: 'Issued cheque',
+        title: isPoBankTransferPayment(row) ? 'Bank transfer' : 'Issued cheque',
         subtitle:
           [
             row.chequeDate,
             row.accountLabel && row.chequeNumber
-              ? `${row.accountLabel} · #${row.chequeNumber}`
+              ? `${row.accountLabel} · ${isPoBankTransferPayment(row) ? row.chequeNumber : `#${row.chequeNumber}`}`
               : row.chequeNumber
-                ? `#${row.chequeNumber}`
+                ? isPoBankTransferPayment(row)
+                  ? row.chequeNumber
+                  : `#${row.chequeNumber}`
                 : row.accountLabel,
             formatProductNameWithCode(row.product) || row.product,
           ]
@@ -549,11 +553,22 @@ function CustomerDetailContent({ row }) {
   );
 }
 
+function bankAccountSnapLabel(snap, fallbackId = '') {
+  if (snap && typeof snap === 'object') {
+    const nick = String(snap.nickName ?? '').trim();
+    const detail = [snap.bank, snap.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+    if (nick && detail) return `${nick} — ${detail}`;
+    return nick || detail || fallbackId || '—';
+  }
+  return fallbackId || '—';
+}
+
 function PaymentDetailContent({ row }) {
   const cash = Math.max(0, Number(row.cashAmount) || 0);
   const cdm = cdmPortion(row);
   const onlineTransfer = onlineTransferPortion(row);
   const chequeLines = getPaymentCheques(row);
+  const receiptInvoices = getPaymentReceiptInvoices(row);
 
   return (
     <>
@@ -594,6 +609,12 @@ function PaymentDetailContent({ row }) {
         {row.cdmNumber ? (
           <SummaryField label="CDM number" value={displayText(row.cdmNumber)} valueClassName="font-mono" />
         ) : null}
+        {cdm > 0 && (row.cdmBankAccount || row.cdmBankAccountId) ? (
+          <SummaryField
+            label="CDM bank account"
+            value={bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId)}
+          />
+        ) : null}
         {onlineTransfer > 0 ? (
           <SummaryField
             label="Online transfer"
@@ -606,6 +627,12 @@ function PaymentDetailContent({ row }) {
             label="Transfer reference"
             value={displayText(row.onlineTransferReference)}
             valueClassName="font-mono"
+          />
+        ) : null}
+        {onlineTransfer > 0 && (row.onlineTransferBankAccount || row.onlineTransferBankAccountId) ? (
+          <SummaryField
+            label="Online transfer bank account"
+            value={bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId)}
           />
         ) : null}
         <SummaryField
@@ -635,43 +662,66 @@ function PaymentDetailContent({ row }) {
         </div>
       ) : null}
       {row.note ? <NoteBlock value={row.note} /> : null}
-      {Array.isArray(row.billCashAllocations) && row.billCashAllocations.length > 0 ? (
+      {receiptInvoices.length > 0 ? (
         <div className="mt-4 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Payment by bill</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Settled / affecting invoices
+          </p>
           <ul className="space-y-1.5 text-sm text-slate-700">
-            {row.billCashAllocations.map((b) => (
-              <li
-                key={b.billId}
-                className="rounded-lg bg-emerald-50/80 px-3 py-2 ring-1 ring-emerald-100 tabular-nums"
-              >
-                {b.details ? `${b.details} · ` : ''}
-                {b.billDate || '—'}
-                <span className="ml-2 font-semibold text-emerald-900">{formatMoney(b.cashAmount)}</span>
-                {b.billTotal != null && b.billTotal !== '' ? (
-                  <span className="ml-2 text-xs font-normal text-slate-500">
-                    bill {formatMoney(b.billTotal)}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : Array.isArray(row.appliedBills) && row.appliedBills.length > 0 ? (
-        <div className="mt-4 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Applied to bills</p>
-          <ul className="space-y-1.5 text-sm text-slate-700">
-            {row.appliedBills.map((b) => (
-              <li
-                key={b.id}
-                className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-100 tabular-nums"
-              >
-                {b.details ? `${b.details} · ` : ''}
-                {b.date || '—'}
-                {b.totalAmount != null && b.totalAmount !== '' ? (
-                  <span className="ml-2 font-medium text-slate-900">{formatMoney(b.totalAmount)}</span>
-                ) : null}
-              </li>
-            ))}
+            {receiptInvoices.map((inv, i) => {
+              const title =
+                inv.invoiceNumber && inv.invoiceNumber.toLowerCase() === 'opening'
+                  ? 'Opening balance'
+                  : inv.invoiceNumber
+                    ? `Invoice ${inv.invoiceNumber}`
+                    : inv.details || 'Invoice';
+              const status = inv.taggedOnly ? null : inv.settled ? 'Settled' : inv.appliedAmount > 0 ? 'Part' : null;
+              return (
+                <li
+                  key={inv.billId || i}
+                  className={`rounded-lg px-3 py-2 ring-1 tabular-nums ${
+                    inv.settled
+                      ? 'bg-emerald-50/80 ring-emerald-100'
+                      : 'bg-slate-50 ring-slate-100'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-900">{title}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {[inv.date || null, inv.details && inv.details !== title ? inv.details : null]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      {inv.appliedAmount > 0 ? (
+                        <p className="font-semibold text-emerald-900">{formatMoney(inv.appliedAmount)}</p>
+                      ) : inv.billTotal > 0 ? (
+                        <p className="font-medium text-slate-900">{formatMoney(inv.billTotal)}</p>
+                      ) : null}
+                      {status ? (
+                        <p
+                          className={`mt-0.5 text-[11px] font-bold uppercase tracking-wide ${
+                            inv.settled ? 'text-emerald-800' : 'text-amber-800'
+                          }`}
+                        >
+                          {status}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  {!inv.taggedOnly && inv.billTotal > 0 ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Invoice {formatMoney(inv.billTotal)}
+                      {!inv.settled && inv.remainingAfter != null && inv.remainingAfter > 0.009
+                        ? ` · remaining ${formatMoney(inv.remainingAfter)}`
+                        : ''}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -783,16 +833,26 @@ function UnloadRequestDetailContent({ row }) {
   );
 }
 
-function poChequeStatusLabel(chequeDate) {
+function poChequeStatusLabel(chequeDate, paymentType) {
   const d = String(chequeDate ?? '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (String(paymentType ?? '').trim().toLowerCase() === 'bank_transfer') {
+    return d <= today ? 'Deducted from bank account' : 'Pending (deducted on transfer date)';
+  }
   return d <= today ? 'Deducted from bank balance' : 'Pending (cash out on converting date)';
 }
 
 function PurchaseOrderDetailContent({ row }) {
   const cheques = Array.isArray(row.cheques) ? row.cheques : [];
+  const lineItems =
+    Array.isArray(row.batchItems) && row.batchItems.length > 0 ? row.batchItems : poLineItems(row);
+  const batchItems = lineItems.length > 1 ? lineItems : null;
+  const single = lineItems[0];
+  const itemsTotal = lineItems.reduce((sum, item) => sum + (Number(item.lineTotal ?? item.totalAmount) || 0), 0)
+    || Number(row.lineTotal ?? row.totalAmount)
+    || 0;
 
   return (
     <>
@@ -811,20 +871,24 @@ function PurchaseOrderDetailContent({ row }) {
           value={displayText(row.distributionLocation)}
           className="col-span-2"
         />
-        <SummaryField label="Product" value={displayText(formatProductNameWithCode(row.product) || row.product)} className="col-span-2" />
-        <SummaryField
-          label="Amount"
-          value={Number(row.quantity) || 0}
-          valueClassName="tabular-nums"
-        />
-        <SummaryField
-          label="Invoice price / unit"
-          value={formatMoney(row.unitPrice)}
-          valueClassName="tabular-nums"
-        />
+        {batchItems ? null : (
+          <>
+            <SummaryField label="Product" value={displayText(formatProductNameWithCode(single?.product) || single?.product || row.product)} className="col-span-2" />
+            <SummaryField
+              label="Amount"
+              value={Number(single?.quantity ?? row.quantity) || 0}
+              valueClassName="tabular-nums"
+            />
+            <SummaryField
+              label="Invoice price / unit"
+              value={formatMoney(single?.unitPrice ?? row.unitPrice)}
+              valueClassName="tabular-nums"
+            />
+          </>
+        )}
         <SummaryField
           label="Total invoice amount"
-          value={formatMoney(row.lineTotal ?? row.totalAmount)}
+          value={formatMoney(itemsTotal)}
           className="col-span-2 bg-indigo-50 ring-indigo-100"
           valueClassName="tabular-nums font-semibold text-indigo-900"
         />
@@ -843,6 +907,41 @@ function PurchaseOrderDetailContent({ row }) {
         <SummaryField label="Created by" value={displayText(row.createdBy)} />
         <SummaryField label="Created" value={formatDateTime(row.createdAt)} />
       </SummaryGrid>
+      {batchItems ? (
+        <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-slate-100">
+          <p className="bg-slate-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Products
+          </p>
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-white text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Product</th>
+                <th className="px-3 py-2 text-right">Amount</th>
+                <th className="px-3 py-2 text-right">Invoice price / unit</th>
+                <th className="px-3 py-2 text-right">Line total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {batchItems.map((item, idx) => (
+                <tr key={item.id || `${item.product}-${idx}`}>
+                  <td className="px-3 py-2 text-slate-800">
+                    {displayText(formatProductNameWithCode(item.product) || item.product)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                    {Number(item.quantity) || 0}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                    {formatMoney(item.unitPrice)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
+                    {formatMoney(item.lineTotal ?? item.totalAmount)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       {row.doorStock || String(row.notes ?? '').trim() ? (
         <NoteBlock label="Notes" value={doorStepNotesText(row) || 'Door step'} />
       ) : null}
@@ -861,6 +960,11 @@ function PurchaseOrderDetailContent({ row }) {
                     Paid in cash on {displayText(row.date)}
                     {c.amount != null && Number(c.amount) > 0 ? ` · ${formatMoney(c.amount)}` : ''}
                   </>
+                ) : isPoBankTransferPayment(c) ? (
+                  <>
+                    Transfer date {displayText(c.chequeDate)}
+                    {c.amount != null && Number(c.amount) > 0 ? ` · ${formatMoney(c.amount)}` : ''}
+                  </>
                 ) : (
                   <>
                     Converting date {displayText(c.chequeDate)}
@@ -868,7 +972,7 @@ function PurchaseOrderDetailContent({ row }) {
                   </>
                 )}
               </p>
-              {!isPoCashPayment(c) && poChequeStatusLabel(c.chequeDate) && (c.bankAccountId || c.amount) ? (
+              {!isPoCashPayment(c) && poChequeStatusLabel(c.chequeDate, c.paymentType) && (c.bankAccountId || c.amount) ? (
                 <p
                   className={`mt-1 text-xs font-medium ${
                     String(c.chequeDate ?? '').slice(0, 10) <=
@@ -877,7 +981,7 @@ function PurchaseOrderDetailContent({ row }) {
                       : 'text-amber-800'
                   }`}
                 >
-                  {poChequeStatusLabel(c.chequeDate)}
+                  {poChequeStatusLabel(c.chequeDate, c.paymentType)}
                 </p>
               ) : null}
             </div>
@@ -1094,16 +1198,27 @@ function BankDailyDetailContent({ row }) {
 }
 
 function PoChequeDetailContent({ row }) {
-  const chequeLabel =
-    row.accountLabel && row.chequeNumber
+  const isTransfer = isPoBankTransferPayment(row);
+  const chequeLabel = isTransfer
+    ? row.accountLabel && row.chequeNumber
+      ? `${row.accountLabel} · ${row.chequeNumber}`
+      : row.chequeNumber
+        ? row.chequeNumber
+        : displayText(row.accountLabel)
+    : row.accountLabel && row.chequeNumber
       ? `${row.accountLabel} · #${row.chequeNumber}`
       : row.chequeNumber
         ? `#${row.chequeNumber}`
         : displayText(row.accountLabel);
   return (
     <SummaryGrid>
-      <SummaryField label="Converting date" value={displayText(row.chequeDate)} />
-      <SummaryField label="Cheque" value={chequeLabel} valueClassName="font-mono" className="col-span-2" />
+      <SummaryField label={isTransfer ? 'Transfer date' : 'Converting date'} value={displayText(row.chequeDate)} />
+      <SummaryField
+        label={isTransfer ? 'Bank transfer' : 'Cheque'}
+        value={chequeLabel}
+        valueClassName="font-mono"
+        className="col-span-2"
+      />
       <SummaryField label="Bank account" value={displayText(row.accountLabel)} className="col-span-2" />
       <SummaryField label="Product" value={displayText(formatProductNameWithCode(row.product) || row.product)} />
       <SummaryField label="PO id" value={displayText(row.poId)} valueClassName="font-mono text-xs" />
@@ -1116,14 +1231,14 @@ function PoChequeDetailContent({ row }) {
       {row.futureDated ? (
         <SummaryField
           label="Status"
-          value="Pending (future dated)"
+          value={isTransfer ? 'Pending (future dated)' : 'Pending (future dated)'}
           className="col-span-2 bg-amber-50 ring-amber-100"
           valueClassName="font-semibold text-amber-900"
         />
       ) : (
         <SummaryField
           label="Status"
-          value="Cleared on converting date"
+          value={isTransfer ? 'Deducted from bank account' : 'Cleared on converting date'}
           className="col-span-2 bg-slate-50 ring-slate-100"
           valueClassName="font-semibold text-slate-800"
         />

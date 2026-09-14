@@ -36,6 +36,8 @@ const {
   openingBalanceBillId,
   isOpeningBalanceBillId,
   openingBalanceBillDate,
+  listPaymentAffectedInvoices,
+  mapPaymentAffectedInvoices,
 } = require('./models/customerBalance');
 const {
   readOverdueDates,
@@ -141,6 +143,52 @@ async function listCollectorStaff() {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
+/** Collectors, managers, and admins who can record customer payments. */
+async function listCollectionStaff() {
+  const users = await readUsers();
+  const allowed = new Set(['Collector', 'Manager', 'Admin']);
+  const rows = [];
+  const seen = new Set();
+  for (const u of users) {
+    const role = String(u.role || '').trim();
+    if (!allowed.has(role)) continue;
+    const username = String(u.username || '').trim();
+    if (!username) continue;
+    const key = username.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      id: u.id,
+      name: collectorDisplayName(u),
+      username,
+      nic: String(u.nic || '').trim() || username,
+      role,
+    });
+  }
+  const envAdmin = String(process.env.ADMIN_USERNAME || '').trim();
+  if (envAdmin && !seen.has(envAdmin.toLowerCase())) {
+    rows.push({
+      id: `env-admin:${envAdmin}`,
+      name: 'Admin',
+      username: envAdmin,
+      nic: envAdmin,
+      role: 'Admin',
+    });
+  }
+  const rank = (role) => {
+    if (role === 'Admin') return 0;
+    if (role === 'Collector') return 1;
+    if (role === 'Manager') return 2;
+    return 3;
+  };
+  rows.sort((a, b) => {
+    const byRole = rank(a.role) - rank(b.role);
+    if (byRole !== 0) return byRole;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return rows;
+}
+
 async function validateCollectorUserId(collectorUserId) {
   const id = String(collectorUserId ?? '').trim();
   if (!id) return { ok: true, collectorUserId: '' };
@@ -166,6 +214,7 @@ const {
 } = require('./models/paymentCheques');
 const {
   parseOtherPaymentMethodsFromBody,
+  resolveOtherMethodBankAccounts,
   attachOtherPaymentMethodsToRow,
   attachApprovalMetaToRow,
   cdmPortion,
@@ -206,6 +255,29 @@ async function resolveStaffUser(auth) {
 
 function isCollectorStaff(user) {
   return Boolean(user && String(user.role || '').trim() === 'Collector');
+}
+
+function isDriverStaff(user) {
+  return Boolean(user && String(user.role || '').trim() === 'Driver');
+}
+
+function staffMustUseTodayRecordDate(user) {
+  return isCollectorStaff(user) || isDriverStaff(user);
+}
+
+/** Collectors/drivers may only create records dated today; admin/manager may pick any date. */
+async function resolveRecordDate(req, requestedDate, { required = false } = {}) {
+  const auth = getAuthFromRequest(req);
+  const staffUser = await resolveStaffUser(auth);
+  if (staffMustUseTodayRecordDate(staffUser)) {
+    return { date: paymentDateDefaultYmd() };
+  }
+  let date = String(requestedDate ?? '').trim();
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (required) return { error: 'date must be YYYY-MM-DD' };
+    date = paymentDateDefaultYmd();
+  }
+  return { date };
 }
 
 async function collectorAssignedCustomerNames(collectorUserId) {
@@ -901,6 +973,8 @@ function appliedBillSnapshots(bills, ids, cust) {
       id: bill.id,
       date: bill.date,
       totalAmount: toNonNegMoney(bill.totalAmount),
+      invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
+      details: billDetailsLine(bill),
     };
   }).filter(Boolean);
 }
@@ -983,10 +1057,49 @@ function attachBillCashAllocationsToPaymentRow(row, bills, allocations, cust) {
       cashAmount: toNonNegMoney(cashAmount),
       billDate: bill?.date,
       billTotal: bill ? toNonNegMoney(bill.totalAmount) : undefined,
+      invoiceNumber: String(bill?.invoiceNumber ?? '').trim(),
+      details: bill ? billDetailsLine(bill) : undefined,
     };
   });
   const ids = allocations.map((a) => a.billId);
   attachAppliedBillsToPaymentRow(row, bills, ids, cust);
+}
+
+function attachAffectedInvoicesToPaymentRow(row, bills, cust, payments, promotions = []) {
+  if (!row?.id || !cust) {
+    if (row) delete row.affectedInvoices;
+    return;
+  }
+  const items = listPaymentAffectedInvoices(cust, bills, payments, row.id, promotions);
+  assignAffectedInvoices(row, bills, items);
+}
+
+function assignAffectedInvoices(row, bills, items) {
+  if (!items || !items.length) {
+    delete row.affectedInvoices;
+    return;
+  }
+  row.affectedInvoices = items.map((item) => {
+    if (item.invoiceNumber === 'Opening' || item.details) return item;
+    const bill = bills.find((b) => String(b.id ?? '').trim() === item.billId);
+    return {
+      ...item,
+      details: bill ? billDetailsLine(bill) : item.details,
+    };
+  });
+}
+
+function hydratePaymentReceiptInvoices(rows, allPayments, bills, customers, promotions = []) {
+  const custById = new Map((customers || []).map((c) => [c.id, c]));
+  const mapsByCustomer = new Map();
+  for (const row of rows) {
+    const cust = custById.get(row.customerId);
+    if (!cust) continue;
+    if (!mapsByCustomer.has(cust.id)) {
+      mapsByCustomer.set(cust.id, mapPaymentAffectedInvoices(cust, bills, allPayments, promotions));
+    }
+    assignAffectedInvoices(row, bills, mapsByCustomer.get(cust.id).get(String(row.id ?? '').trim()) || []);
+  }
 }
 
 /** How a payment settled the account (customer transaction list). */
@@ -1462,7 +1575,7 @@ app.get('/api/cash-flow', async (req, res) => {
   }
 });
 
-/** Running balance per shop bank account (deposits + deposited cheques − cleared PO cheques; pending until converting date). */
+/** Running balance per shop bank account (deposits + deposited cheques + approved CDM / online − cleared PO cheques; pending until converting date). */
 app.get('/api/bank-account-balances', async (req, res) => {
   try {
     const shop = await readShopData();
@@ -1801,7 +1914,23 @@ app.get('/api/me', async (req, res) => {
   }
   try {
     if (auth.role === 'admin') {
-      return res.json({ username: auth.username, role: 'admin' });
+      const adminUser = await findUserByUsername(auth.username);
+      if (adminUser) {
+        return res.json({
+          username: adminUser.username,
+          role: 'admin',
+          name: String(adminUser.name || '').trim() || adminUser.username,
+          staffRole: 'Administrator',
+          contact: String(adminUser.contact || '').trim(),
+          nic: String(adminUser.nic || '').trim(),
+        });
+      }
+      return res.json({
+        username: auth.username,
+        role: 'admin',
+        name: auth.username,
+        staffRole: 'Administrator',
+      });
     }
     const u = await findUserByUsername(auth.username);
     if (!u) {
@@ -1813,6 +1942,8 @@ app.get('/api/me', async (req, res) => {
       role: 'staff',
       staffRole,
       name: String(u.name || '').trim() || u.username,
+      contact: String(u.contact || '').trim(),
+      nic: String(u.nic || '').trim(),
     };
     if (staffRole === 'Manager') {
       payload.managerAccess = getEffectiveManagerAccess(u.access);
@@ -2218,12 +2349,30 @@ app.post('/api/payment-requests/:id/approve', async (req, res) => {
     if (!isPaymentApprovalPending(existing)) {
       return res.status(400).json({ error: 'This payment request is no longer pending' });
     }
+    const shopForBanks = await readShopData();
+    const resolvedBanks = resolveOtherMethodBankAccounts(
+      {
+        cdmAmount: cdmPortion(existing),
+        cdmNumber: String(existing.cdmNumber ?? '').trim(),
+        cdmBankAccountId: String(body.cdmBankAccountId ?? existing.cdmBankAccountId ?? '').trim(),
+        onlineTransferAmount: onlineTransferPortion(existing),
+        onlineTransferReference: String(existing.onlineTransferReference ?? '').trim(),
+        onlineTransferBankAccountId: String(
+          body.onlineTransferBankAccountId ?? existing.onlineTransferBankAccountId ?? '',
+        ).trim(),
+      },
+      shopForBanks.bankAccounts || [],
+    );
+    if (resolvedBanks.error) {
+      return res.status(400).json({ error: resolvedBanks.error });
+    }
     const row = {
       ...existing,
       approvalStatus: 'approved',
       approvedBy,
       approvedAt: new Date().toISOString(),
     };
+    attachOtherPaymentMethodsToRow(row, resolvedBanks);
     delete row.rejectedBy;
     delete row.rejectedAt;
     delete row.rejectReason;
@@ -2465,6 +2614,17 @@ app.get('/api/collectors', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load collectors' });
+  }
+});
+
+app.get('/api/collection-staff', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    res.json(await listCollectionStaff());
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load collection staff' });
   }
 });
 
@@ -3009,11 +3169,17 @@ app.patch('/api/customers/:id', async (req, res) => {
 app.get('/api/payments', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
-    const payments = await readPayments();
+    const [payments, bills, customers, promotions] = await Promise.all([
+      readPayments(),
+      readBills(),
+      readCustomers(),
+      readPromotions(),
+    ]);
     let rows = [...payments].sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
     );
     rows = await filterRowsForCollector(rows, auth, (p) => p.customerName);
+    hydratePaymentReceiptInvoices(rows, payments, bills, customers, promotions);
     res.json(rows);
   } catch (e) {
     console.error(e);
@@ -3041,7 +3207,12 @@ app.post('/api/payments', async (req, res) => {
     let chequeAmount = sumChequeAmounts(
       parsedCheques.cheques.map((c) => ({ amount: c.amount })),
     );
-    const parsedOther = parseOtherPaymentMethodsFromBody(body);
+    const parsedOtherRaw = parseOtherPaymentMethodsFromBody(body);
+    if (parsedOtherRaw.error) {
+      return res.status(400).json({ error: parsedOtherRaw.error });
+    }
+    const shopForBanks = await readShopData();
+    const parsedOther = resolveOtherMethodBankAccounts(parsedOtherRaw, shopForBanks.bankAccounts || []);
     if (parsedOther.error) {
       return res.status(400).json({ error: parsedOther.error });
     }
@@ -3057,10 +3228,8 @@ app.post('/api/payments', async (req, res) => {
       });
     }
 
-    let date = String(body.date ?? '').trim();
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      date = paymentDateDefaultYmd();
-    }
+    const dated = await resolveRecordDate(req, body.date);
+    const date = dated.date;
     const note = String(body.note ?? '').trim();
 
     const payments = await readPayments();
@@ -3153,6 +3322,7 @@ app.post('/api/payments', async (req, res) => {
 
     payments.push(row);
     const promotions = await readPromotions();
+    attachAffectedInvoicesToPaymentRow(row, billsList, cust, payments, promotions);
     cust.remainingAmount = computeRemainingAmount(cust, billsList, payments, promotions);
     await writeCustomers(customers);
     await writePayments(payments);
@@ -3198,7 +3368,12 @@ app.patch('/api/payments/:id', async (req, res) => {
     let chequeAmount = sumChequeAmounts(
       parsedCheques.cheques.map((c) => ({ amount: c.amount })),
     );
-    const parsedOther = parseOtherPaymentMethodsFromBody(body);
+    const parsedOtherRaw = parseOtherPaymentMethodsFromBody(body);
+    if (parsedOtherRaw.error) {
+      return res.status(400).json({ error: parsedOtherRaw.error });
+    }
+    const shopForBanks = await readShopData();
+    const parsedOther = resolveOtherMethodBankAccounts(parsedOtherRaw, shopForBanks.bankAccounts || []);
     if (parsedOther.error) {
       return res.status(400).json({ error: parsedOther.error });
     }
@@ -3284,6 +3459,11 @@ app.patch('/api/payments/:id', async (req, res) => {
     }
 
     const existing = payments[idx];
+    const auth = getAuthFromRequest(req);
+    const staffUser = await resolveStaffUser(auth);
+    if (staffMustUseTodayRecordDate(staffUser)) {
+      date = existing.date;
+    }
     const chequeUpdate = buildChequesForUpdate(parsedCheques.cheques, existing);
     if (chequeUpdate.error) {
       return res.status(400).json({ error: chequeUpdate.error });
@@ -3317,6 +3497,8 @@ app.patch('/api/payments/:id', async (req, res) => {
     }
 
     payments[idx] = row;
+    const promotions = await readPromotions();
+    attachAffectedInvoicesToPaymentRow(row, billsList, cust, payments, promotions);
     await writePayments(payments);
 
     await refreshCustomerBalancesForCustomerIds(
@@ -4604,7 +4786,8 @@ app.get('/api/purchase-orders/last-price', async (req, res) => {
 });
 
 /**
- * Create one PO per product line.
+ * Create purchase orders. Payment per product → one PO per line.
+ * Whole-order payment → a single PO with all items.
  * Body: date, distributorId, vehicleNumber, driverName, driverId?, cheques[], createdBy,
  *       items: [{ product, quantity, unitPrice }]
  */
@@ -4748,33 +4931,65 @@ app.post('/api/purchase-orders', async (req, res) => {
     const chequeMode = chequePerProduct ? 'perProduct' : 'shared';
     const created = [];
 
-    for (const item of items) {
+    const basePo = {
+      date,
+      distributorId: distributor.id,
+      distributorName: distributor.name,
+      ...(distributionLocation ? { distributionLocation } : {}),
+      chequeMode,
+      vehicleNumber,
+      driverName,
+      ...(driverId ? { driverId } : {}),
+      ...(doorStock ? { doorStock: true, notes: 'Door step' } : {}),
+      createdBy,
+      createdAt,
+    };
+
+    const takePoNumber = () => {
       const poNumber = nextPo;
       const m = /^PO-(\d+)$/i.exec(nextPo);
       const n = m ? parseInt(m[1], 10) + 1 : existing.length + created.length + 2;
       nextPo = `PO-${String(n).padStart(4, '0')}`;
+      return poNumber;
+    };
 
-      created.push({
-        id: `po-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        poNumber,
-        batchId,
-        date,
-        distributorId: distributor.id,
-        distributorName: distributor.name,
-        ...(distributionLocation ? { distributionLocation } : {}),
+    if (chequePerProduct) {
+      for (const item of items) {
+        created.push({
+          id: `po-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          poNumber: takePoNumber(),
+          batchId,
+          ...basePo,
+          product: item.product,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.lineTotal,
+          totalAmount: item.lineTotal,
+          cheques: item.cheques,
+        });
+      }
+    } else {
+      const lineItems = items.map((item) => ({
         product: item.product,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         lineTotal: item.lineTotal,
-        totalAmount: item.lineTotal,
-        chequeMode,
-        cheques: item.cheques,
-        vehicleNumber,
-        driverName,
-        ...(driverId ? { driverId } : {}),
-        ...(doorStock ? { doorStock: true, notes: 'Door step' } : {}),
-        createdBy,
-        createdAt,
+      }));
+      const totalAmount = lineItems.reduce((sum, item) => sum + (Number(item.lineTotal) || 0), 0);
+      const totalQty = lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+      const first = lineItems[0];
+      created.push({
+        id: `po-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        poNumber: takePoNumber(),
+        batchId,
+        ...basePo,
+        items: lineItems,
+        product: first.product,
+        quantity: totalQty,
+        unitPrice: first.unitPrice,
+        lineTotal: totalAmount,
+        totalAmount,
+        cheques: sharedCheques,
       });
     }
 
@@ -4800,7 +5015,7 @@ app.post('/api/purchase-orders', async (req, res) => {
             amount: p.amount,
             poId: po.id,
             poNumber: po.poNumber,
-            product: po.product,
+            product: (po.items || []).map((i) => i.product).filter(Boolean).join(', ') || po.product,
           });
         }
       }

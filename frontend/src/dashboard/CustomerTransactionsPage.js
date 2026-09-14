@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, getUsername } from '../auth';
+import { authFetch, canEditDetails, getUsername, isCollector, isManagerOrAdmin } from '../auth';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -189,7 +189,7 @@ function CustomerHeaderSkeleton() {
 
 export default function CustomerTransactionsPage() {
   const { customerId } = useParams();
-  const { requestAutoPrint } = usePrinter();
+  const { requestAutoPrint, requestPrint } = usePrinter();
   const [searchParams, setSearchParams] = useSearchParams();
   const [customer, setCustomer] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -351,6 +351,10 @@ export default function CustomerTransactionsPage() {
     [filteredTransactions, pagination.offset, pagination.pageSize]
   );
 
+  const detailPaymentForPrint =
+    (isCollector() || isManagerOrAdmin()) && detailTx?.kind === 'payment'
+      ? payments.find((p) => p.id === detailTx.id) || null
+      : null;
 
   return (
     <div className="space-y-6">
@@ -685,7 +689,26 @@ export default function CustomerTransactionsPage() {
       </section>
       ) : null}
 
-      <RowDetailModal open={!!detailTx} row={detailTx} variant="transaction" onClose={() => setDetailTx(null)} />
+      <RowDetailModal
+        open={!!detailTx}
+        row={detailTx}
+        variant="transaction"
+        onClose={() => setDetailTx(null)}
+        actions={
+          detailPaymentForPrint ? (
+            <button
+              type="button"
+              onClick={() => requestPrint('cashCollection', detailPaymentForPrint)}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
+              </svg>
+              Print bill
+            </button>
+          ) : null
+        }
+      />
 
       {customerEditOpen && canEditDetails() ? (
         <div

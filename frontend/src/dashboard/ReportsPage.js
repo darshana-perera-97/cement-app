@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getDisplayName, isCollector, isManagerOrAdmin } from '../auth';
+import { authFetch, getDisplayName, getUsername, isAdmin, isCollector, isManagerOrAdmin } from '../auth';
 import { formatBrandLabel, getCachedBrands } from './brandTheme';
 import { useBagProducts } from './BagProductsContext';
 import {
@@ -16,7 +16,7 @@ import {
   stickyFirstTh,
   stickyThead,
 } from './tableToolbar';
-import { buildChequeTableRows, chequePortion } from './paymentCheques';
+import { buildChequeTableRows, cdmPortion, chequePortion, onlineTransferPortion } from './paymentCheques';
 import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import {
@@ -44,6 +44,7 @@ import {
   COLLECTION_DAY_BUCKETS,
 } from './collectionsReport';
 import { downloadCollectionsReportPdf } from './collectorCommissionPdf';
+import { usePrinter } from '../printer/PrinterProvider';
 
 const apiBase = getApiBase();
 
@@ -537,8 +538,160 @@ function buildPendingChequeRows(payments, from, to) {
   return rows;
 }
 
+function bankAccountSnapLabel(snap, fallbackId = '') {
+  if (snap && typeof snap === 'object') {
+    const nick = String(snap.nickName ?? '').trim();
+    const detail = [snap.bank, snap.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+    if (nick && detail) return `${nick} — ${detail}`;
+    return nick || detail || fallbackId || '—';
+  }
+  return String(fallbackId ?? '').trim() || '—';
+}
+
+function paymentApprovalLabel(p) {
+  if (!p?.requiresApproval) return '—';
+  const s = String(p.approvalStatus ?? 'pending').trim().toLowerCase();
+  if (s === 'approved') return 'Approved';
+  if (s === 'rejected') return 'Rejected';
+  return 'Pending';
+}
+
+function approvalStatusClass(label) {
+  if (label === 'Approved') return 'font-semibold text-emerald-700';
+  if (label === 'Rejected') return 'font-semibold text-rose-700';
+  if (label === 'Pending') return 'font-semibold text-amber-700';
+  return 'text-slate-500';
+}
+
+function normalizeUserKey(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function staffUserLabel(user) {
+  if (!user) return '';
+  return String(user.name ?? '').trim() || String(user.username ?? '').trim() || '—';
+}
+
+function uniqueNormalizedKeys(values) {
+  const out = [];
+  const seen = new Set();
+  for (const v of values || []) {
+    const key = normalizeUserKey(v);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function customerNameKey(name) {
+  return String(name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function paymentMatchesRecordedByKeys(p, keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return false;
+  const by = normalizeUserKey(p?.recordedBy);
+  if (!by) return false;
+  return keys.includes(by);
+}
+
+function paymentMatchesStaffUser(p, user) {
+  if (!user) return false;
+  const by = normalizeUserKey(p?.recordedBy);
+  if (!by) return false;
+  const keys = [user.username, user.nic].map(normalizeUserKey).filter(Boolean);
+  return keys.includes(by);
+}
+
+function recordedByDisplay(p, users = []) {
+  const raw = String(p?.recordedBy ?? '').trim();
+  if (!raw) return '—';
+  const user = users.find((u) => paymentMatchesStaffUser(p, u));
+  return user ? staffUserLabel(user) : raw;
+}
+
+function dailyReportUserOptions(users) {
+  const list = [...(users || [])];
+  if (isAdmin()) {
+    const username = String(getUsername() ?? '').trim();
+    if (username) {
+      const key = normalizeUserKey(username);
+      const already = list.some((u) =>
+        [u.username, u.nic].map(normalizeUserKey).filter(Boolean).includes(key),
+      );
+      if (!already) {
+        list.unshift({
+          id: `session-admin:${username}`,
+          name: 'Admin',
+          username,
+          nic: username,
+          role: 'Admin',
+        });
+      }
+    }
+  }
+  return list
+    .filter((u) => String(u.role ?? '').trim() !== 'Driver')
+    .sort((a, b) => {
+      const rank = (role) => {
+        const r = String(role ?? '').trim();
+        if (r === 'Admin') return 0;
+        if (r === 'Collector') return 1;
+        if (r === 'Manager') return 2;
+        return 3;
+      };
+      const byRole = rank(a.role) - rank(b.role);
+      if (byRole !== 0) return byRole;
+      return staffUserLabel(a).localeCompare(staffUserLabel(b));
+    });
+}
+
+function buildDailyCollectionUserRows(payments, users, ymd) {
+  const map = new Map();
+  for (const p of payments) {
+    const d = String(p.date ?? '').slice(0, 10);
+    if (d !== ymd) continue;
+    const matched = (users || []).find((u) => paymentMatchesStaffUser(p, u));
+    const id = matched?.id || `by:${normalizeUserKey(p.recordedBy) || 'unknown'}`;
+    const userLabel = matched ? staffUserLabel(matched) : String(p.recordedBy ?? '').trim() || 'Unknown';
+    const cur = map.get(id) || {
+      id,
+      userId: matched?.id || '',
+      userLabel,
+      cash: 0,
+      cheque: 0,
+      cdm: 0,
+      bankTransfer: 0,
+      collections: 0,
+      paymentCount: 0,
+    };
+    cur.cash = round2(cur.cash + cashPortion(p));
+    cur.cheque = round2(cur.cheque + chequePortion(p));
+    cur.cdm = round2(cur.cdm + cdmPortion(p));
+    cur.bankTransfer = round2(cur.bankTransfer + onlineTransferPortion(p));
+    cur.collections = round2(cur.collections + paymentTotal(p));
+    cur.paymentCount += 1;
+    map.set(id, cur);
+  }
+  return [...map.values()].sort((a, b) => a.userLabel.localeCompare(b.userLabel));
+}
+
+function sortDailyCollectionDetailRows(rows) {
+  rows.sort((a, b) => {
+    const byShop = a.customerName.localeCompare(b.customerName);
+    if (byShop !== 0) return byShop;
+    return String(a.billNumber ?? '').localeCompare(String(b.billNumber ?? ''));
+  });
+  return rows;
+}
+
 /** Cheques on payments recorded on a single calendar day (collections day). */
-function buildDailyCollectionChequeRows(payments, ymd) {
+function buildDailyCollectionChequeRows(payments, ymd, users = []) {
   const rows = buildChequeTableRows(payments, (p, _c, flat) => {
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) return null;
@@ -550,6 +703,7 @@ function buildDailyCollectionChequeRows(payments, ymd) {
       amount: flat.amount,
       chequeDeposited: flat.chequeDeposited,
       billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+      recordedBy: recordedByDisplay(p, users),
     };
   });
   rows.sort((a, b) => {
@@ -560,20 +714,73 @@ function buildDailyCollectionChequeRows(payments, ymd) {
   return rows;
 }
 
+/** CDM deposits on payments recorded on a single calendar day. */
+function buildDailyCollectionCdmRows(payments, ymd, users = []) {
+  const rows = [];
+  for (const p of payments) {
+    const payDate = String(p.date ?? '').slice(0, 10);
+    if (payDate !== ymd) continue;
+    const amount = cdmPortion(p);
+    if (amount <= 0) continue;
+    rows.push({
+      id: p.id || `${payDate}-${rows.length}`,
+      customerName: String(p.customerName ?? '').trim() || '—',
+      amount,
+      cdmNumber: String(p.cdmNumber ?? '').trim() || '—',
+      bankAccount: bankAccountSnapLabel(p.cdmBankAccount, p.cdmBankAccountId),
+      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+      approval: paymentApprovalLabel(p),
+      recordedBy: recordedByDisplay(p, users),
+    });
+  }
+  return sortDailyCollectionDetailRows(rows);
+}
+
+/** Online / bank transfers on payments recorded on a single calendar day. */
+function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
+  const rows = [];
+  for (const p of payments) {
+    const payDate = String(p.date ?? '').slice(0, 10);
+    if (payDate !== ymd) continue;
+    const amount = onlineTransferPortion(p);
+    if (amount <= 0) continue;
+    rows.push({
+      id: p.id || `${payDate}-${rows.length}`,
+      customerName: String(p.customerName ?? '').trim() || '—',
+      amount,
+      reference: String(p.onlineTransferReference ?? '').trim() || '—',
+      bankAccount: bankAccountSnapLabel(p.onlineTransferBankAccount, p.onlineTransferBankAccountId),
+      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+      approval: paymentApprovalLabel(p),
+      recordedBy: recordedByDisplay(p, users),
+    });
+  }
+  return sortDailyCollectionDetailRows(rows);
+}
+
 function enrichDailyShopRows(baseRows, payments, ymd) {
   const cashByShop = new Map();
   const chequeByShop = new Map();
+  const cdmByShop = new Map();
+  const bankTransferByShop = new Map();
   for (const p of payments) {
     const d = String(p.date ?? '').slice(0, 10);
     if (d !== ymd) continue;
     const shop = String(p.customerName ?? '').trim() || '—';
     cashByShop.set(shop, round2((cashByShop.get(shop) || 0) + cashPortion(p)));
     chequeByShop.set(shop, round2((chequeByShop.get(shop) || 0) + chequePortion(p)));
+    cdmByShop.set(shop, round2((cdmByShop.get(shop) || 0) + cdmPortion(p)));
+    bankTransferByShop.set(
+      shop,
+      round2((bankTransferByShop.get(shop) || 0) + onlineTransferPortion(p)),
+    );
   }
   return baseRows.map((r) => ({
     ...r,
     cashCollected: cashByShop.get(r.shop) || 0,
     chequeCollected: chequeByShop.get(r.shop) || 0,
+    cdmCollected: cdmByShop.get(r.shop) || 0,
+    bankTransferCollected: bankTransferByShop.get(r.shop) || 0,
   }));
 }
 
@@ -642,6 +849,7 @@ function BrandRemainingBreakdown({ byBrand, brandKey = '' }) {
 
 export default function ReportsPage() {
   const { brands } = useBagProducts();
+  const { requestPrint } = usePrinter();
   const [loads, setLoads] = useState([]);
   const [bills, setBills] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -667,14 +875,16 @@ export default function ReportsPage() {
   const [dailyBagsBrand, setDailyBagsBrand] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
   const [dailyReportDate, setDailyReportDate] = useState(() => localYmd());
+  const [dailyReportUserId, setDailyReportUserId] = useState('');
   const [collectionsMonth, setCollectionsMonth] = useState(() => currentMonthValue());
   const [collectionsCollectorId, setCollectionsCollectorId] = useState('');
-  const [collectors, setCollectors] = useState([]);
-  const [collectorStaffUserId, setCollectorStaffUserId] = useState('');
+  const [collectionStaff, setCollectionStaff] = useState([]);
   const [collectorDisplayName, setCollectorDisplayName] = useState('');
+  const [collectorSession, setCollectorSession] = useState(null);
 
   const collectorReportsView = isCollector();
   const showDailyCollectionsReport = isManagerOrAdmin() || collectorReportsView;
+  const adminDailyReportView = isAdmin();
 
   const [fsPeriodMode, setFsPeriodMode] = useState('monthly');
   const [fsSelectedWeek, setFsSelectedWeek] = useState(() => currentIsoWeekValue());
@@ -689,10 +899,11 @@ export default function ReportsPage() {
     setError(null);
     try {
       if (collectorReportsView) {
-        const [billsRes, paymentsRes, customersRes] = await Promise.all([
+        const [billsRes, paymentsRes, customersRes, meRes] = await Promise.all([
           authFetch(`${apiBase}/api/bills`),
           authFetch(`${apiBase}/api/payments`),
-          fetch(`${apiBase}/api/customers`),
+          authFetch(`${apiBase}/api/customers`),
+          authFetch(`${apiBase}/api/me`),
         ]);
         if (!billsRes.ok) throw new Error('Failed to load bills');
         if (!paymentsRes.ok) throw new Error('Failed to load payments');
@@ -704,37 +915,72 @@ export default function ReportsPage() {
           customersRes.json(),
         ]);
 
-        setBills(Array.isArray(billsData) ? billsData : []);
-        setPayments(Array.isArray(paymentsData) ? paymentsData : []);
-        setCustomers(Array.isArray(customersData) ? customersData : []);
+        let session = {
+          id: '',
+          username: getUsername(),
+          nic: '',
+          name: getDisplayName(),
+        };
+        if (meRes.ok) {
+          const meData = await meRes.json();
+          session = {
+            id: String(meData.staffUserId ?? '').trim(),
+            username: String(meData.username ?? '').trim() || getUsername(),
+            nic: String(meData.nic ?? '').trim(),
+            name: String(meData.name ?? '').trim() || getDisplayName(),
+          };
+        }
+        setCollectorSession(session);
+        setCollectorDisplayName(session.name || getDisplayName());
+
+        const assignedId = session.id;
+        let customersList = Array.isArray(customersData) ? customersData : [];
+        if (assignedId) {
+          customersList = customersList.filter(
+            (c) => String(c.collectorUserId ?? '').trim() === assignedId,
+          );
+        }
+        const assignedNames = new Set(
+          customersList.map((c) => customerNameKey(c.name)).filter(Boolean),
+        );
+        const billsList = (Array.isArray(billsData) ? billsData : []).filter((b) =>
+          assignedNames.has(customerNameKey(b.customerName)),
+        );
+        const paymentsList = (Array.isArray(paymentsData) ? paymentsData : []).filter((p) =>
+          assignedNames.has(customerNameKey(p.customerName)),
+        );
+
+        setBills(billsList);
+        setPayments(paymentsList);
+        setCustomers(customersList);
         setLoads([]);
         setDailyStockDays([]);
-        setCollectors([]);
+        setCollectionStaff([]);
         return;
       }
 
-      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectorsRes] = await Promise.all([
+      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectionStaffRes] = await Promise.all([
         fetch(`${apiBase}/api/stocks`),
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/customers`),
         fetch(`${apiBase}/api/daily-stock`),
-        authFetch(`${apiBase}/api/collectors`),
+        authFetch(`${apiBase}/api/collection-staff`),
       ]);
       if (!loadsRes.ok) throw new Error('Failed to load loads');
       if (!billsRes.ok) throw new Error('Failed to load bills');
       if (!paymentsRes.ok) throw new Error('Failed to load payments');
       if (!customersRes.ok) throw new Error('Failed to load customers');
       if (!dailyRes.ok) throw new Error('Failed to load daily stock');
-      if (!collectorsRes.ok) throw new Error('Failed to load collectors');
+      if (!collectionStaffRes.ok) throw new Error('Failed to load collection staff');
 
-      const [loadsData, billsData, paymentsData, customersData, dailyData, collectorsData] = await Promise.all([
+      const [loadsData, billsData, paymentsData, customersData, dailyData, collectionStaffData] = await Promise.all([
         loadsRes.json(),
         billsRes.json(),
         paymentsRes.json(),
         customersRes.json(),
         dailyRes.json(),
-        collectorsRes.json(),
+        collectionStaffRes.json(),
       ]);
 
       setLoads(Array.isArray(loadsData) ? loadsData : []);
@@ -742,7 +988,8 @@ export default function ReportsPage() {
       setPayments(Array.isArray(paymentsData) ? paymentsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
       setDailyStockDays(Array.isArray(dailyData?.days) ? dailyData.days : []);
-      setCollectors(Array.isArray(collectorsData) ? collectorsData : []);
+      setCollectionStaff(Array.isArray(collectionStaffData) ? collectionStaffData : []);
+      setCollectorSession(null);
     } catch (e) {
       setError(e.message || 'Could not load report data');
       setLoads([]);
@@ -750,7 +997,8 @@ export default function ReportsPage() {
       setPayments([]);
       setCustomers([]);
       setDailyStockDays([]);
-      setCollectors([]);
+      setCollectionStaff([]);
+      setCollectorSession(null);
     } finally {
       setLoading(false);
     }
@@ -760,31 +1008,23 @@ export default function ReportsPage() {
     loadData();
   }, [loadData]);
 
-  useEffect(() => {
-    if (!collectorReportsView) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await authFetch(`${apiBase}/api/me`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-        const id = String(data.staffUserId ?? '').trim();
-        if (id) setCollectorStaffUserId(id);
-        const name = String(data.name ?? '').trim();
-        setCollectorDisplayName(name || getDisplayName());
-      } catch {
-        if (!cancelled) setCollectorDisplayName(getDisplayName());
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [collectorReportsView]);
+  const selectedCollectionStaff = useMemo(
+    () => collectionStaff.find((u) => u.id === collectionsCollectorId) || null,
+    [collectionStaff, collectionsCollectorId],
+  );
 
-  const effectiveCollectionsCollectorId = collectorReportsView
-    ? collectorStaffUserId
-    : collectionsCollectorId;
+  const settledCollectionsRecordedByKeys = useMemo(() => {
+    if (collectorReportsView) {
+      return uniqueNormalizedKeys([
+        collectorSession?.username,
+        collectorSession?.nic,
+        getUsername(),
+      ]);
+    }
+    if (!collectionsCollectorId) return null;
+    if (!selectedCollectionStaff) return [];
+    return uniqueNormalizedKeys([selectedCollectionStaff.username, selectedCollectionStaff.nic]);
+  }, [collectorReportsView, collectorSession, collectionsCollectorId, selectedCollectionStaff]);
 
   const customerLocationMap = useMemo(() => {
     const map = new Map();
@@ -961,23 +1201,24 @@ export default function ReportsPage() {
     [collectionsMonth],
   );
 
-  const settledCollectionsRows = useMemo(() => {
-    if (collectorReportsView && !collectorStaffUserId) return [];
-    return buildSettledCollectionsRows(customers, bills, billSettledDateLookup, payments, {
-      from: collectionsMonthRange.from,
-      to: collectionsMonthRange.to,
-      collectorUserId: effectiveCollectionsCollectorId,
-    });
-  }, [
-    collectorReportsView,
-    collectorStaffUserId,
-    customers,
-    bills,
-    payments,
-    billSettledDateLookup,
-    collectionsMonthRange,
-    effectiveCollectionsCollectorId,
-  ]);
+  const settledCollectionsRows = useMemo(
+    () =>
+      buildSettledCollectionsRows(customers, bills, billSettledDateLookup, payments, {
+        from: collectionsMonthRange.from,
+        to: collectionsMonthRange.to,
+        recordedByKeys: settledCollectionsRecordedByKeys,
+        staff: collectionStaff,
+      }),
+    [
+      customers,
+      bills,
+      payments,
+      billSettledDateLookup,
+      collectionsMonthRange,
+      settledCollectionsRecordedByKeys,
+      collectionStaff,
+    ],
+  );
 
   const settledCollectionsBucketSummary = useMemo(
     () => summarizeCollectionsByBucket(settledCollectionsRows),
@@ -991,9 +1232,9 @@ export default function ReportsPage() {
 
   const collectionsCollectorLabel = useMemo(() => {
     if (collectorReportsView) return collectorDisplayName || getDisplayName() || 'Your collections';
-    if (!collectionsCollectorId) return 'All collectors';
-    return collectors.find((c) => c.id === collectionsCollectorId)?.name || '—';
-  }, [collectorReportsView, collectorDisplayName, collectionsCollectorId, collectors]);
+    if (!collectionsCollectorId) return 'All staff';
+    return staffUserLabel(selectedCollectionStaff) || '—';
+  }, [collectorReportsView, collectorDisplayName, collectionsCollectorId, selectedCollectionStaff]);
 
   const handleDownloadSettledCollectionsPdf = () => {
     downloadCollectionsReportPdf({
@@ -1332,18 +1573,57 @@ export default function ReportsPage() {
     [shopRows],
   );
 
+  const dailyReportUserChoices = useMemo(() => dailyReportUserOptions(collectionStaff), [collectionStaff]);
+
+  const dailyReportSelectedUser = useMemo(
+    () => dailyReportUserChoices.find((u) => u.id === dailyReportUserId) || null,
+    [dailyReportUserChoices, dailyReportUserId],
+  );
+
+  const dailyReportUserLabel = dailyReportSelectedUser
+    ? staffUserLabel(dailyReportSelectedUser)
+    : 'All users';
+
+  const dailyReportPayments = useMemo(() => {
+    if (!showDailyCollectionsReport) return [];
+    if (collectorReportsView) {
+      if (!settledCollectionsRecordedByKeys.length) return [];
+      return payments.filter((p) => paymentMatchesRecordedByKeys(p, settledCollectionsRecordedByKeys));
+    }
+    if (!adminDailyReportView || !dailyReportUserId) return payments;
+    if (!dailyReportSelectedUser) return [];
+    return payments.filter((p) => paymentMatchesStaffUser(p, dailyReportSelectedUser));
+  }, [
+    showDailyCollectionsReport,
+    collectorReportsView,
+    settledCollectionsRecordedByKeys,
+    adminDailyReportView,
+    dailyReportUserId,
+    dailyReportSelectedUser,
+    payments,
+  ]);
+
+  const showDailyReportRecordedBy = adminDailyReportView && !dailyReportUserId;
+
   const dailyReportShopRows = useMemo(() => {
     if (!showDailyCollectionsReport) return [];
     const base = buildShopRowsForRange(
       bills,
-      payments,
+      dailyReportPayments,
       customerLocationMap,
       dailyReportDate,
       dailyReportDate,
       '',
     );
-    return enrichDailyShopRows(base, payments, dailyReportDate).filter((r) => r.cashIn > 0);
-  }, [showDailyCollectionsReport, bills, payments, customerLocationMap, dailyReportDate]);
+    return enrichDailyShopRows(base, dailyReportPayments, dailyReportDate).filter(
+      (r) =>
+        r.cashIn > 0 ||
+        r.cashCollected > 0 ||
+        r.chequeCollected > 0 ||
+        r.cdmCollected > 0 ||
+        r.bankTransferCollected > 0,
+    );
+  }, [showDailyCollectionsReport, bills, dailyReportPayments, customerLocationMap, dailyReportDate]);
 
   const dailyReportTotals = useMemo(
     () =>
@@ -1352,22 +1632,49 @@ export default function ReportsPage() {
           collections: round2(acc.collections + r.cashIn),
           cash: round2(acc.cash + r.cashCollected),
           cheque: round2(acc.cheque + r.chequeCollected),
+          cdm: round2(acc.cdm + r.cdmCollected),
+          bankTransfer: round2(acc.bankTransfer + r.bankTransferCollected),
           paymentCount: acc.paymentCount + r.paymentCount,
         }),
-        { collections: 0, cash: 0, cheque: 0, paymentCount: 0 },
+        { collections: 0, cash: 0, cheque: 0, cdm: 0, bankTransfer: 0, paymentCount: 0 },
       ),
     [dailyReportShopRows],
   );
 
   const dailyReportChequeRows = useMemo(() => {
     if (!showDailyCollectionsReport) return [];
-    return buildDailyCollectionChequeRows(payments, dailyReportDate);
-  }, [showDailyCollectionsReport, payments, dailyReportDate]);
+    return buildDailyCollectionChequeRows(dailyReportPayments, dailyReportDate, dailyReportUserChoices);
+  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate, dailyReportUserChoices]);
 
   const dailyReportChequeTotal = useMemo(
     () => round2(dailyReportChequeRows.reduce((s, r) => s + r.amount, 0)),
     [dailyReportChequeRows],
   );
+
+  const dailyReportCdmRows = useMemo(() => {
+    if (!showDailyCollectionsReport) return [];
+    return buildDailyCollectionCdmRows(dailyReportPayments, dailyReportDate, dailyReportUserChoices);
+  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate, dailyReportUserChoices]);
+
+  const dailyReportCdmTotal = useMemo(
+    () => round2(dailyReportCdmRows.reduce((s, r) => s + r.amount, 0)),
+    [dailyReportCdmRows],
+  );
+
+  const dailyReportBankTransferRows = useMemo(() => {
+    if (!showDailyCollectionsReport) return [];
+    return buildDailyCollectionBankTransferRows(dailyReportPayments, dailyReportDate, dailyReportUserChoices);
+  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate, dailyReportUserChoices]);
+
+  const dailyReportBankTransferTotal = useMemo(
+    () => round2(dailyReportBankTransferRows.reduce((s, r) => s + r.amount, 0)),
+    [dailyReportBankTransferRows],
+  );
+
+  const dailyReportUserRows = useMemo(() => {
+    if (!showDailyCollectionsReport || !adminDailyReportView) return [];
+    return buildDailyCollectionUserRows(payments, dailyReportUserChoices, dailyReportDate);
+  }, [showDailyCollectionsReport, adminDailyReportView, payments, dailyReportUserChoices, dailyReportDate]);
 
   const bankDailyRows = useMemo(() => {
     const all = buildDailyBankRows(payments);
@@ -1659,19 +1966,60 @@ export default function ReportsPage() {
     downloadDailyCollectionsReportPdf(
       {
         reportDate: dailyReportDate,
+        userLabel: adminDailyReportView ? dailyReportUserLabel : '',
         totals: dailyReportTotals,
+        userRows: adminDailyReportView && !dailyReportUserId ? dailyReportUserRows : [],
         shopRows: dailyReportShopRows,
         chequeRows: dailyReportChequeRows,
         chequeTotal: dailyReportChequeTotal,
+        cdmRows: dailyReportCdmRows,
+        cdmTotal: dailyReportCdmTotal,
+        bankTransferRows: dailyReportBankTransferRows,
+        bankTransferTotal: dailyReportBankTransferTotal,
+        showRecordedBy: showDailyReportRecordedBy,
       },
       { dateSlug: dailyReportDate },
     );
   }, [
     dailyReportDate,
+    adminDailyReportView,
+    dailyReportUserLabel,
+    dailyReportUserId,
     dailyReportTotals,
+    dailyReportUserRows,
     dailyReportShopRows,
     dailyReportChequeRows,
     dailyReportChequeTotal,
+    dailyReportCdmRows,
+    dailyReportCdmTotal,
+    dailyReportBankTransferRows,
+    dailyReportBankTransferTotal,
+    showDailyReportRecordedBy,
+  ]);
+
+  const handlePrintDailyCollections = useCallback(() => {
+    requestPrint('dailyCollections', {
+      reportDate: dailyReportDate,
+      collectorName: collectorDisplayName || getDisplayName() || '',
+      cashTotal: dailyReportTotals.cash,
+      chequeRows: dailyReportChequeRows,
+      chequeTotal: dailyReportChequeTotal,
+      cdmRows: dailyReportCdmRows,
+      cdmTotal: dailyReportCdmTotal,
+      bankTransferRows: dailyReportBankTransferRows,
+      bankTransferTotal: dailyReportBankTransferTotal,
+    });
+  }, [
+    requestPrint,
+    dailyReportDate,
+    collectorDisplayName,
+    dailyReportTotals.cash,
+    dailyReportChequeRows,
+    dailyReportChequeTotal,
+    dailyReportCdmRows,
+    dailyReportCdmTotal,
+    dailyReportBankTransferRows,
+    dailyReportBankTransferTotal,
   ]);
 
   return (
@@ -1698,8 +2046,10 @@ export default function ReportsPage() {
           title="Daily collections report"
           subtitle={
             collectorReportsView
-              ? 'Collections and cheques received from your assigned shops on the selected day'
-              : 'Collections and cheques received for the selected day (manager / admin)'
+              ? 'Cash, cheques, CDM deposits, and bank transfers you collected from your assigned shops on the selected day'
+              : adminDailyReportView
+                ? 'Cash, cheques, CDM deposits, and bank transfers for the selected day — filter by user'
+                : 'Cash, cheques, CDM deposits, and bank transfers for the selected day (manager / admin)'
           }
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
@@ -1713,6 +2063,24 @@ export default function ReportsPage() {
                 className={filterControl}
               />
             </label>
+            {adminDailyReportView ? (
+              <label className={filterLabel}>
+                User
+                <select
+                  value={dailyReportUserId}
+                  onChange={(e) => setDailyReportUserId(e.target.value)}
+                  className={filterControl}
+                >
+                  <option value="">All users</option>
+                  {dailyReportUserChoices.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {staffUserLabel(u)}
+                      {u.role ? ` · ${u.role}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <button
               type="button"
               onClick={handleDownloadDailyCollectionsPdf}
@@ -1721,6 +2089,19 @@ export default function ReportsPage() {
             >
               Download report (PDF)
             </button>
+            {collectorReportsView ? (
+              <button
+                type="button"
+                onClick={handlePrintDailyCollections}
+                disabled={loading || !!error}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-5 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 transition hover:bg-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
+                </svg>
+                Print summary
+              </button>
+            ) : null}
           </div>
 
           {loading ? (
@@ -1729,7 +2110,7 @@ export default function ReportsPage() {
             </p>
           ) : (
             <>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
                 <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-100">
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Collections</p>
                   <SummaryLkrAmount value={dailyReportTotals.collections} valueClassName="text-emerald-900" />
@@ -1749,13 +2130,160 @@ export default function ReportsPage() {
                     {dailyReportChequeRows.length} cheque{dailyReportChequeRows.length === 1 ? '' : 's'}
                   </p>
                 </div>
+                <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">CDM deposit</p>
+                  <SummaryLkrAmount value={dailyReportTotals.cdm} valueClassName="text-amber-900" />
+                  <p className="mt-0.5 text-xs text-amber-600">
+                    {dailyReportCdmRows.length} deposit{dailyReportCdmRows.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 p-4 ring-1 ring-teal-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Bank transfer</p>
+                  <SummaryLkrAmount value={dailyReportTotals.bankTransfer} valueClassName="text-teal-900" />
+                  <p className="mt-0.5 text-xs text-teal-600">
+                    {dailyReportBankTransferRows.length} transfer
+                    {dailyReportBankTransferRows.length === 1 ? '' : 's'}
+                  </p>
+                </div>
               </div>
 
-              <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">By shop</h3>
+              {adminDailyReportView && !dailyReportUserId ? (
+                <>
+                  <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">By user</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Collections recorded by each user on {dailyReportDate}. Select a user above for that
+                    person&apos;s shop and payment details.
+                  </p>
+                  <div className="mt-3 space-y-3 sm:hidden">
+                    {dailyReportUserRows.length === 0 ? (
+                      <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                        No collections{adminDailyReportView && dailyReportUserId ? ` for ${dailyReportUserLabel}` : ''}{' '}
+                    on {dailyReportDate}.
+                      </p>
+                    ) : (
+                      dailyReportUserRows.map((r) => (
+                        <MobileRowCard
+                          key={r.id}
+                          title={r.userLabel}
+                          subtitle={`${r.paymentCount} payment${r.paymentCount === 1 ? '' : 's'}`}
+                          fields={[
+                            { label: 'Cash', value: money(r.cash) },
+                            { label: 'Cheque', value: money(r.cheque) },
+                            { label: 'CDM', value: money(r.cdm) },
+                            { label: 'Bank transfer', value: money(r.bankTransfer) },
+                            { label: 'Collections', value: money(r.collections) },
+                          ]}
+                          onClick={
+                            r.userId
+                              ? () => setDailyReportUserId(r.userId)
+                              : undefined
+                          }
+                        />
+                      ))
+                    )}
+                  </div>
+                  <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                    <table className="w-full min-w-[880px] data-table border-separate border-spacing-0 text-left text-sm">
+                      <thead className={stickyThead}>
+                        <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>User</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">Payments</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">Cash</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">Cheque</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">CDM</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">Bank transfer</th>
+                          <th className="whitespace-nowrap px-4 py-3 text-right">Collections</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dailyReportUserRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                              No collections{adminDailyReportView && dailyReportUserId ? ` for ${dailyReportUserLabel}` : ''}{' '}
+                    on {dailyReportDate}.
+                            </td>
+                          </tr>
+                        ) : (
+                          dailyReportUserRows.map((r) => (
+                            <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                              <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>
+                                {r.userId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyReportUserId(r.userId)}
+                                    className="text-left font-medium text-indigo-700 hover:underline"
+                                  >
+                                    {r.userLabel}
+                                  </button>
+                                ) : (
+                                  r.userLabel
+                                )}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
+                                {r.paymentCount}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
+                                {r.cash > 0 ? money(r.cash) : '—'}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
+                                {r.cheque > 0 ? money(r.cheque) : '—'}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
+                                {r.cdm > 0 ? money(r.cdm) : '—'}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
+                                {r.bankTransfer > 0 ? money(r.bankTransfer) : '—'}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                                {r.collections > 0 ? money(r.collections) : '—'}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                      {dailyReportUserRows.length > 0 ? (
+                        <tfoot>
+                          <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                            <td className="px-4 py-3">
+                              Total ({dailyReportUserRows.length} user
+                              {dailyReportUserRows.length === 1 ? '' : 's'})
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                              {dailyReportTotals.paymentCount}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
+                              {money(dailyReportTotals.cash)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
+                              {money(dailyReportTotals.cheque)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
+                              {money(dailyReportTotals.cdm)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
+                              {money(dailyReportTotals.bankTransfer)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
+                              {money(dailyReportTotals.collections)}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      ) : null}
+                    </table>
+                  </div>
+                </>
+              ) : null}
+
+              <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">
+                {adminDailyReportView && dailyReportUserId
+                  ? `By shop · ${dailyReportUserLabel}`
+                  : 'By shop'}
+              </h3>
               <div className="mt-3 space-y-3 sm:hidden">
                 {dailyReportShopRows.length === 0 ? (
                   <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
-                    No collections on {dailyReportDate}.
+                    No collections{adminDailyReportView && dailyReportUserId ? ` for ${dailyReportUserLabel}` : ''}{' '}
+                    on {dailyReportDate}.
                   </p>
                 ) : (
                   dailyReportShopRows.map((r) => (
@@ -1766,6 +2294,8 @@ export default function ReportsPage() {
                       fields={[
                         { label: 'Cash', value: money(r.cashCollected) },
                         { label: 'Cheque', value: money(r.chequeCollected) },
+                        { label: 'CDM', value: money(r.cdmCollected) },
+                        { label: 'Bank transfer', value: money(r.bankTransferCollected) },
                         { label: 'Collections', value: money(r.cashIn) },
                       ]}
                     />
@@ -1773,21 +2303,24 @@ export default function ReportsPage() {
                 )}
               </div>
               <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
-                <table className="w-full min-w-[600px] data-table border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[880px] data-table border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
                       <th className="whitespace-nowrap px-4 py-3">Location</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Cash</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Cheque</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">CDM</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Bank transfer</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Collections</th>
                     </tr>
                   </thead>
                   <tbody>
                     {dailyReportShopRows.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
-                          No collections on {dailyReportDate}.
+                        <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                          No collections{adminDailyReportView && dailyReportUserId ? ` for ${dailyReportUserLabel}` : ''}{' '}
+                    on {dailyReportDate}.
                         </td>
                       </tr>
                     ) : (
@@ -1802,6 +2335,12 @@ export default function ReportsPage() {
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
                             {r.chequeCollected > 0 ? money(r.chequeCollected) : '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
+                            {r.cdmCollected > 0 ? money(r.cdmCollected) : '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
+                            {r.bankTransferCollected > 0 ? money(r.bankTransferCollected) : '—'}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
                             {r.cashIn > 0 ? money(r.cashIn) : '—'}
@@ -1823,6 +2362,12 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
                           {money(dailyReportTotals.cheque)}
                         </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
+                          {money(dailyReportTotals.cdm)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
+                          {money(dailyReportTotals.bankTransfer)}
+                        </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
                           {money(dailyReportTotals.collections)}
                         </td>
@@ -1834,7 +2379,8 @@ export default function ReportsPage() {
 
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cheque list</h3>
               <p className="mt-1 text-xs text-slate-500">
-                Cheques recorded on payments dated {dailyReportDate}.
+                Cheques recorded on payments dated {dailyReportDate}
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
                 {dailyReportChequeRows.length === 0 ? (
@@ -1855,6 +2401,7 @@ export default function ReportsPage() {
                           label: 'Deposited',
                           value: r.chequeDeposited ? 'Yes' : 'Pending',
                         },
+                        ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
                       ]}
                     />
                   ))
@@ -1870,12 +2417,18 @@ export default function ReportsPage() {
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Cheque #</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
                       <th className="whitespace-nowrap px-4 py-3">Deposited</th>
+                      {showDailyReportRecordedBy ? (
+                        <th className="whitespace-nowrap px-4 py-3">Recorded by</th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
                     {dailyReportChequeRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                        <td
+                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
                           No cheques on this day.
                         </td>
                       </tr>
@@ -1896,6 +2449,9 @@ export default function ReportsPage() {
                               <span className="font-semibold text-amber-700">Pending</span>
                             )}
                           </td>
+                          {showDailyReportRecordedBy ? (
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">{r.recordedBy}</td>
+                          ) : null}
                         </tr>
                       ))
                     )}
@@ -1910,7 +2466,185 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
                           {money(dailyReportChequeTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={3} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 4 : 3} />
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+
+              <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">CDM deposit list</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                CDM deposits recorded on payments dated {dailyReportDate}
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+              </p>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportCdmRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No CDM deposits on this day.
+                  </p>
+                ) : (
+                  dailyReportCdmRows.map((r) => (
+                    <MobileRowCard
+                      key={r.id}
+                      title={r.customerName}
+                      subtitle={r.cdmNumber}
+                      fields={[
+                        { label: 'Amount', value: money(r.amount) },
+                        { label: 'Bank account', value: r.bankAccount },
+                        { label: 'Bill #', value: r.billNumber },
+                        { label: 'Approval', value: r.approval },
+                        ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">CDM #</th>
+                      <th className="px-4 py-3">Bank account</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
+                      <th className="whitespace-nowrap px-4 py-3">Approval</th>
+                      {showDailyReportRecordedBy ? (
+                        <th className="whitespace-nowrap px-4 py-3">Recorded by</th>
+                      ) : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportCdmRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
+                          No CDM deposits on this day.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportCdmRows.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-amber-800">
+                            {money(r.amount)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.cdmNumber}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
+                          <td className={`whitespace-nowrap px-4 py-3 text-sm ${approvalStatusClass(r.approval)}`}>
+                            {r.approval}
+                          </td>
+                          {showDailyReportRecordedBy ? (
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">{r.recordedBy}</td>
+                          ) : null}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportCdmRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className={`px-4 py-3 ${stickyFirstTd}`}>
+                          Total ({dailyReportCdmRows.length} deposit
+                          {dailyReportCdmRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
+                          {money(dailyReportCdmTotal)}
+                        </td>
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+
+              <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Bank transfer list</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Online bank transfers recorded on payments dated {dailyReportDate}
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+              </p>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportBankTransferRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No bank transfers on this day.
+                  </p>
+                ) : (
+                  dailyReportBankTransferRows.map((r) => (
+                    <MobileRowCard
+                      key={r.id}
+                      title={r.customerName}
+                      subtitle={r.reference}
+                      fields={[
+                        { label: 'Amount', value: money(r.amount) },
+                        { label: 'Bank account', value: r.bankAccount },
+                        { label: 'Bill #', value: r.billNumber },
+                        { label: 'Approval', value: r.approval },
+                        ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">Reference #</th>
+                      <th className="px-4 py-3">Bank account</th>
+                      <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
+                      <th className="whitespace-nowrap px-4 py-3">Approval</th>
+                      {showDailyReportRecordedBy ? (
+                        <th className="whitespace-nowrap px-4 py-3">Recorded by</th>
+                      ) : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportBankTransferRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
+                          No bank transfers on this day.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportBankTransferRows.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-teal-800">
+                            {money(r.amount)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.reference}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
+                          <td className={`whitespace-nowrap px-4 py-3 text-sm ${approvalStatusClass(r.approval)}`}>
+                            {r.approval}
+                          </td>
+                          {showDailyReportRecordedBy ? (
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">{r.recordedBy}</td>
+                          ) : null}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportBankTransferRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className={`px-4 py-3 ${stickyFirstTd}`}>
+                          Total ({dailyReportBankTransferRows.length} transfer
+                          {dailyReportBankTransferRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
+                          {money(dailyReportBankTransferTotal)}
+                        </td>
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -1925,13 +2659,13 @@ export default function ReportsPage() {
         title="Settled collections"
         subtitle={
           collectorReportsView
-            ? `Your fully settled invoices by settled date in ${collectionsMonthLabel}`
-            : `Fully settled invoices by settled date in ${collectionsMonthLabel} — filter by collector`
+            ? `Payments you collected in ${collectionsMonthLabel}`
+            : `Payments collected by the selected collector, manager, or admin in ${collectionsMonthLabel}`
         }
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           <label className={filterLabelNarrow}>
-            Settled in month
+            Collected in month
             <input
               type="month"
               value={collectionsMonth}
@@ -1941,16 +2675,17 @@ export default function ReportsPage() {
           </label>
           {!collectorReportsView ? (
             <label className={filterLabel}>
-              Collector
+              Collected by
               <select
                 value={collectionsCollectorId}
                 onChange={(e) => setCollectionsCollectorId(e.target.value)}
                 className={filterControl}
               >
-                <option value="">All collectors</option>
-                {collectors.map((c) => (
+                <option value="">All staff</option>
+                {collectionStaff.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {staffUserLabel(c)}
+                    {c.role ? ` · ${c.role}` : ''}
                   </option>
                 ))}
               </select>
@@ -1959,12 +2694,7 @@ export default function ReportsPage() {
           <button
             type="button"
             onClick={handleDownloadSettledCollectionsPdf}
-            disabled={
-              loading ||
-              !!error ||
-              settledCollectionsRows.length === 0 ||
-              (collectorReportsView && !collectorStaffUserId)
-            }
+            disabled={loading || !!error || settledCollectionsRows.length === 0}
             className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Download PDF
@@ -2019,19 +2749,22 @@ export default function ReportsPage() {
                 <th className="whitespace-nowrap px-4 py-3">Settled date</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Bill amount</th>
+                {!collectorReportsView ? (
+                  <th className="whitespace-nowrap px-4 py-3">Collected by</th>
+                ) : null}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
-              {loading || (collectorReportsView && !collectorStaffUserId) ? (
+              {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={collectorReportsView ? 9 : 10} className="px-4 py-8 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : settledCollectionsRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
-                    No settled collections for {collectionsCollectorLabel} in {collectionsMonthLabel}.
+                  <td colSpan={collectorReportsView ? 9 : 10} className="px-4 py-8 text-center text-slate-500">
+                    No collections for {collectionsCollectorLabel} in {collectionsMonthLabel}.
                   </td>
                 </tr>
               ) : (
@@ -2058,10 +2791,15 @@ export default function ReportsPage() {
                         )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate}</td>
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.daysToSettle}</td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                        {r.daysToSettle != null ? r.daysToSettle : '—'}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.billAmount)}</td>
+                      {!collectorReportsView ? (
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.collectorName || '—'}</td>
+                      ) : null}
                     </tr>
                   );
                 })
