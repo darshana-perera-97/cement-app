@@ -272,7 +272,12 @@ export default function RecordPaymentModal({
         });
       }
     }
-    return [...byId.values()].sort((a, b) => String(a.billDate).localeCompare(String(b.billDate)));
+    return [...byId.values()].sort((a, b) => {
+      if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
+        return a.isOpeningBalance ? -1 : 1;
+      }
+      return String(a.billDate).localeCompare(String(b.billDate));
+    });
   }, [form.customerId, form.appliedBillIds, customers, bills, payments, editPayment?.id]);
 
   const handleChequeChange = (key, field, value) => {
@@ -518,7 +523,7 @@ export default function RecordPaymentModal({
                       Credit bills this payment is for
                     </legend>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      Optional. Select opening balance and/or outstanding bills. Customer balances still follow
+                      Optional. Select opening balance (shown as an invoice) and/or outstanding bills. Customer balances still follow
                       opening balance first, then oldest bills, unless you allocate amounts per invoice.
                     </p>
                     {customerBillOptions.length === 0 ? (
@@ -541,10 +546,12 @@ export default function RecordPaymentModal({
                                 <span className="min-w-0 flex-1">
                                   <span className="flex flex-col gap-0.5 sm:block">
                                     <span className="font-medium tabular-nums text-slate-900">
-                                      {b.billDate || '—'}
+                                      {b.isOpeningBalance
+                                        ? 'Opening balance'
+                                        : b.billDate || '—'}
                                       {b.isOpeningBalance ? (
                                         <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-                                          Opening
+                                          Invoice
                                         </span>
                                       ) : null}
                                     </span>

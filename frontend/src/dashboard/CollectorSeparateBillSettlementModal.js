@@ -166,9 +166,14 @@ export default function CollectorSeparateBillSettlementModal({
 
   const pendingBills = useMemo(() => {
     if (!form.customerId) return [];
-    return buildCustomerOutstandingBills(customers, bills, payments, form.customerId).sort((a, b) =>
-      String(a.billDate).localeCompare(String(b.billDate)),
-    );
+    return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId)].sort((a, b) => {
+      if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
+        return a.isOpeningBalance ? -1 : 1;
+      }
+      const dateCmp = String(a.billDate).localeCompare(String(b.billDate));
+      if (dateCmp !== 0) return dateCmp;
+      return String(a.invoiceNumber || a.id).localeCompare(String(b.invoiceNumber || b.id));
+    });
   }, [form.customerId, customers, bills, payments]);
 
   const chequeTotal = useMemo(
@@ -342,14 +347,16 @@ export default function CollectorSeparateBillSettlementModal({
       if (amount <= 0) continue;
       if (amount > bill.outstandingAmount + 0.009) {
         setSaveError(
-          `Amount for bill ${bill.billDate || bill.id} cannot exceed ${money(bill.outstandingAmount)} outstanding.`,
+          bill.isOpeningBalance
+            ? `Amount for opening balance cannot exceed ${money(bill.outstandingAmount)} outstanding.`
+            : `Amount for bill ${bill.invoiceNumber || bill.billDate || bill.id} cannot exceed ${money(bill.outstandingAmount)} outstanding.`,
         );
         return;
       }
       billCashAllocations.push({ billId: bill.id, cashAmount: amount });
     }
     if (billCashAllocations.length === 0) {
-      setSaveError('Enter an amount for at least one pending invoice.');
+      setSaveError('Enter an amount for at least one opening balance or pending invoice.');
       return;
     }
     if (Math.abs(allocatedTotal - paymentTotal) > 0.009) {
@@ -439,7 +446,7 @@ export default function CollectorSeparateBillSettlementModal({
               <p className="mt-1 text-sm text-slate-500">
                 {step === 1
                   ? 'Select the shop and enter cash or cheque payment details.'
-                  : 'Split the payment across pending invoices. You can settle any invoices in any order — partial amounts are allowed.'}
+                  : 'Split the payment across opening balance and pending invoices. You can settle any of them in any order — partial amounts are allowed.'}
               </p>
             </div>
             <span className="shrink-0 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
@@ -757,7 +764,7 @@ export default function CollectorSeparateBillSettlementModal({
 
                   <div className="rounded-xl bg-slate-50/90 p-3 ring-1 ring-slate-100 sm:p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <p className="text-sm font-semibold text-slate-800">Pending invoices</p>
+                      <p className="text-sm font-semibold text-slate-800">Opening balance & invoices</p>
                       <p className="text-xs tabular-nums text-slate-600">
                         Allocated {money(allocatedTotal)} of {money(paymentTotal)}
                         {Math.abs(unallocatedTotal) > 0.009 ? (
@@ -771,25 +778,43 @@ export default function CollectorSeparateBillSettlementModal({
                       </p>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
-                      Enter how much of this payment applies to each invoice. Settle any invoices in any order — partial amounts are allowed.
+                      Enter how much of this payment applies to the opening balance and each invoice. Settle any of them in any order — partial amounts are allowed.
                     </p>
                     {pendingBills.length === 0 ? (
-                      <p className="mt-3 text-sm text-slate-500">No outstanding credit invoices for this shop.</p>
+                      <p className="mt-3 text-sm text-slate-500">
+                        No outstanding opening balance or credit invoices for this shop.
+                      </p>
                     ) : (
                       <ul className="mt-3 space-y-2">
                         {pendingBills.map((b) => (
                           <li
                             key={b.id}
-                            className="rounded-lg bg-white px-3 py-3 ring-1 ring-slate-200 sm:flex sm:items-center sm:gap-4"
+                            className={`rounded-lg px-3 py-3 sm:flex sm:items-center sm:gap-4 ${
+                              b.isOpeningBalance
+                                ? 'bg-amber-50/80 ring-1 ring-amber-200'
+                                : 'bg-white ring-1 ring-slate-200'
+                            }`}
                           >
                             <div className="min-w-0 flex-1">
-                              <p className="font-medium tabular-nums text-slate-900">
-                                {b.billDate || '—'}
+                              <p className="font-medium text-slate-900">
+                                {b.isOpeningBalance
+                                  ? 'Opening balance'
+                                  : b.invoiceNumber
+                                    ? `Inv ${b.invoiceNumber}`
+                                    : b.billDate || '—'}
                                 {b.isOpeningBalance ? (
                                   <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-                                    Opening
+                                    Invoice
                                   </span>
                                 ) : null}
+                              </p>
+                              <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+                                {[
+                                  b.billDate || null,
+                                  b.dueDate ? `due ${b.dueDate}` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ') || '—'}
                               </p>
                               <p className="mt-0.5 text-sm font-semibold tabular-nums text-emerald-800">
                                 {money(b.outstandingAmount)} due
@@ -799,7 +824,9 @@ export default function CollectorSeparateBillSettlementModal({
                                   </span>
                                 ) : null}
                               </p>
-                              <p className="mt-1 text-xs leading-snug text-slate-600">{b.details}</p>
+                              {!b.isOpeningBalance && b.details ? (
+                                <p className="mt-1 text-xs leading-snug text-slate-600">{b.details}</p>
+                              ) : null}
                             </div>
                             <label className="mt-3 block shrink-0 text-sm font-medium text-slate-600 sm:mt-0 sm:w-36">
                               Amount (LKR)
@@ -810,7 +837,11 @@ export default function CollectorSeparateBillSettlementModal({
                                 step={0.01}
                                 value={form.billAllocations[b.id] ?? ''}
                                 onChange={(e) => handleBillAllocationChange(b.id, e.target.value)}
-                                className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                className={`mt-1 w-full rounded-xl border-0 px-3 py-2.5 text-sm tabular-nums ring-1 focus:outline-none focus:ring-2 focus:ring-indigo-500/35 ${
+                                  b.isOpeningBalance
+                                    ? 'bg-white ring-amber-200'
+                                    : 'bg-slate-100 ring-slate-200'
+                                }`}
                                 placeholder="0"
                               />
                             </label>

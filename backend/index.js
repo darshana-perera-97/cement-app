@@ -891,6 +891,7 @@ function appliedBillSnapshots(bills, ids, cust) {
         id: openingBalanceBillId(cust.id),
         date: openingBalanceBillDate(cust),
         totalAmount: toNonNegMoney(cust.pastBill),
+        invoiceNumber: 'Opening',
         details: 'Opening balance',
       };
     }
@@ -931,16 +932,18 @@ function parseBillCashAllocationsFromBody(body) {
   return { allocations };
 }
 
-function validateBillCashAllocationsForCustomer(bills, cust, allocations) {
+function validateBillCashAllocationsForCustomer(bills, cust, allocations, payments = [], promotions = []) {
   if (!allocations.length) return null;
   const nk = normalizeCustomerName(cust.name);
+  const { pastPaid } = computeBillPaymentAllocation(cust, bills, payments, promotions);
   for (const { billId, cashAmount } of allocations) {
     if (isOpeningBalanceBillId(billId, cust.id)) {
       const pastTotal = toNonNegMoney(cust.pastBill);
       if (pastTotal <= 0) return 'This customer has no opening balance to allocate';
       if (cashAmount <= 0) return 'Each bill allocation must have an amount greater than 0';
-      if (cashAmount > pastTotal) {
-        return 'Amount for opening balance cannot exceed the opening balance';
+      const openingRemaining = Math.round((pastTotal - pastPaid) * 100) / 100;
+      if (cashAmount > openingRemaining + 0.009) {
+        return 'Amount for opening balance cannot exceed the remaining opening balance';
       }
       continue;
     }
@@ -970,6 +973,7 @@ function attachBillCashAllocationsToPaymentRow(row, bills, allocations, cust) {
         cashAmount: toNonNegMoney(cashAmount),
         billDate: openingBalanceBillDate(cust),
         billTotal: toNonNegMoney(cust.pastBill),
+        invoiceNumber: 'Opening',
         details: 'Opening balance',
       };
     }
@@ -1313,6 +1317,7 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
         daysFromBillDate: daysFromDueToToday(billDate, todayYmd),
         outstandingAmount: openingRemaining,
         billTotal: pastOwed,
+        invoiceNumber: 'Opening',
         details: 'Opening balance',
         settlementDays,
         isOpeningBalance: true,
@@ -1334,6 +1339,7 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
           daysFromBillDate: daysFromDueToToday(bill.date, todayYmd),
           outstandingAmount: remaining,
           billTotal: total,
+          invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
           details: billDetailsLine(bill),
           settlementDays,
         });
@@ -1386,6 +1392,9 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
   rows.sort((a, b) => {
     const shopCmp = String(a.customerName ?? '').localeCompare(String(b.customerName ?? ''));
     if (shopCmp !== 0) return shopCmp;
+    if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
+      return a.isOpeningBalance ? -1 : 1;
+    }
     const dateCmp = String(a.billDate ?? '').localeCompare(String(b.billDate ?? ''));
     if (dateCmp !== 0) return dateCmp;
     return (Number(b.outstandingAmount) || 0) - (Number(a.outstandingAmount) || 0);
@@ -3089,7 +3098,12 @@ app.post('/api/payments', async (req, res) => {
     if (appliedErr) {
       return res.status(400).json({ error: appliedErr });
     }
-    const billCashErr = validateBillCashAllocationsForCustomer(billsList, cust, parsedBillCash.allocations);
+    const billCashErr = validateBillCashAllocationsForCustomer(
+      billsList,
+      cust,
+      parsedBillCash.allocations,
+      payments,
+    );
     if (billCashErr) {
       return res.status(400).json({ error: billCashErr });
     }
@@ -3241,7 +3255,12 @@ app.patch('/api/payments/:id', async (req, res) => {
     if (appliedErr) {
       return res.status(400).json({ error: appliedErr });
     }
-    const billCashErr = validateBillCashAllocationsForCustomer(billsList, cust, parsedBillCash.allocations);
+    const billCashErr = validateBillCashAllocationsForCustomer(
+      billsList,
+      cust,
+      parsedBillCash.allocations,
+      payments.filter((p) => p.id !== id),
+    );
     if (billCashErr) {
       return res.status(400).json({ error: billCashErr });
     }

@@ -506,6 +506,7 @@ export function buildPendingBillRows(
         daysFromBillDate: daysBetweenYmd(billDate, todayYmd),
         outstandingAmount: openingRemaining,
         billTotal: pastOwed,
+        invoiceNumber: 'Opening',
         details: 'Opening balance',
         settlementDays,
         isOpeningBalance: true,
@@ -527,6 +528,7 @@ export function buildPendingBillRows(
         daysFromBillDate: daysBetweenYmd(bill.date, todayYmd),
         outstandingAmount: remaining,
         billTotal: total,
+        invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
         details: billDetailsLine(bill),
         settlementDays,
       });
@@ -565,6 +567,7 @@ export function buildPendingBillRows(
           daysFromBillDate: daysBetweenYmd(bill.date, todayYmd),
           outstandingAmount: remaining,
           billTotal: total,
+          invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
           details: billDetailsLine(bill),
         });
       }
@@ -574,6 +577,9 @@ export function buildPendingBillRows(
   rows.sort((a, b) => {
     const shopCmp = String(a.customerName ?? '').localeCompare(String(b.customerName ?? ''));
     if (shopCmp !== 0) return shopCmp;
+    if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
+      return a.isOpeningBalance ? -1 : 1;
+    }
     const dateCmp = String(a.billDate ?? '').localeCompare(String(b.billDate ?? ''));
     if (dateCmp !== 0) return dateCmp;
     return (Number(b.outstandingAmount) || 0) - (Number(a.outstandingAmount) || 0);
