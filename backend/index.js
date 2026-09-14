@@ -33,6 +33,9 @@ const {
   paymentGrossCredit,
   computeBillPaymentAllocation,
   effectiveBillTotal,
+  openingBalanceBillId,
+  isOpeningBalanceBillId,
+  openingBalanceBillDate,
 } = require('./models/customerBalance');
 const {
   readOverdueDates,
@@ -53,6 +56,19 @@ const {
   readPrinterSettings,
   writePrinterSettings,
 } = require('./models/printerSettingsStore');
+const {
+  isSmtpConfigured,
+  sendDataBackupEmail,
+  startBackupScheduler,
+  readBackupHistory,
+  latestBackupHistory,
+} = require('./models/backupService');
+const {
+  parseEmailList,
+  publicBackupSettings,
+  readBackupSettings,
+  writeBackupSettings,
+} = require('./models/backupSettingsStore');
 const { startOverdueReminderScheduler } = require('./models/overdueReminderService');
 const { readCompanyData, writeCompanyData } = require('./models/companyDataStore');
 const { readShopData, writeShopData, normalizeShopData, addBankAccount, updateBankAccount, deleteBankAccount, addProduct, updateProduct, deleteProduct, updateDoorStockTransportSettings } = require('./models/shopDataStore');
@@ -378,6 +394,107 @@ app.put('/api/printer-settings', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save printer settings' });
+  }
+});
+
+app.get('/api/backup/status', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to send a backup' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can send a backup' });
+  }
+  try {
+    const [shopData, settings, history] = await Promise.all([
+      readShopData(),
+      readBackupSettings(),
+      readBackupHistory(),
+    ]);
+    const shopName = String(shopData.shopName || '').trim() || SHOP_NAME;
+    res.json({
+      smtpConfigured: isSmtpConfigured(),
+      shopName,
+      defaultEmail: String(shopData.email || '').trim(),
+      settings: publicBackupSettings(settings),
+      history: latestBackupHistory(history, 10),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load backup status' });
+  }
+});
+
+app.put('/api/backup/settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to save backup settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can save backup settings' });
+  }
+  try {
+    const body = req.body || {};
+    const parsed = parseEmailList(body.emails ?? body.email);
+    if (parsed.invalid.length > 0) {
+      return res.status(400).json({
+        error: `Invalid email address${parsed.invalid.length === 1 ? '' : 'es'}: ${parsed.invalid.join(', ')}`,
+      });
+    }
+    const scheduleEnabled = Boolean(body.scheduleEnabled);
+    if (scheduleEnabled && parsed.emails.length === 0) {
+      return res.status(400).json({ error: 'Add at least one email before enabling the daily schedule' });
+    }
+    const next = await writeBackupSettings({
+      emails: parsed.emails,
+      scheduleEnabled,
+      scheduleTime: body.scheduleTime,
+    });
+    res.json({ settings: publicBackupSettings(next) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save backup settings' });
+  }
+});
+
+app.post('/api/backup/email', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to send a backup' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can send a backup' });
+  }
+  try {
+    const shopData = await readShopData();
+    const shopName = String(shopData.shopName || '').trim() || SHOP_NAME;
+    const parsed = parseEmailList(req.body?.emails ?? req.body?.email);
+    if (parsed.invalid.length > 0) {
+      return res.status(400).json({
+        error: `Invalid email address${parsed.invalid.length === 1 ? '' : 'es'}: ${parsed.invalid.join(', ')}`,
+      });
+    }
+    let emails = parsed.emails;
+    if (emails.length === 0) {
+      const saved = await readBackupSettings();
+      emails = saved.emails;
+    }
+    if (emails.length > 0) {
+      await writeBackupSettings({ emails });
+    }
+    const result = await sendDataBackupEmail({
+      to: emails,
+      shopName,
+      trigger: 'manual',
+    });
+    const history = latestBackupHistory(await readBackupHistory(), 10);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error, history });
+    }
+    res.json({ ...result, history });
+  } catch (e) {
+    console.error('backup email', e);
+    res.status(500).json({ error: e.message || 'Failed to send backup email' });
   }
 });
 
@@ -751,6 +868,12 @@ function validateAppliedBillIdsForCustomer(bills, cust, ids) {
   if (!ids.length) return null;
   const nk = normalizeCustomerName(cust.name);
   for (const id of ids) {
+    if (isOpeningBalanceBillId(id, cust.id)) {
+      if (toNonNegMoney(cust.pastBill) <= 0) {
+        return 'This customer has no opening balance to select';
+      }
+      continue;
+    }
     const bill = bills.find((b) => String(b.id ?? '').trim() === id);
     if (!bill) return 'One or more selected bills were not found';
     if (normalizeCustomerName(bill.customerName) !== nk) {
@@ -760,9 +883,17 @@ function validateAppliedBillIdsForCustomer(bills, cust, ids) {
   return null;
 }
 
-function appliedBillSnapshots(bills, ids) {
+function appliedBillSnapshots(bills, ids, cust) {
   if (!ids.length) return [];
   return ids.map((id) => {
+    if (cust && isOpeningBalanceBillId(id, cust.id)) {
+      return {
+        id: openingBalanceBillId(cust.id),
+        date: openingBalanceBillDate(cust),
+        totalAmount: toNonNegMoney(cust.pastBill),
+        details: 'Opening balance',
+      };
+    }
     const bill = bills.find((b) => String(b.id ?? '').trim() === id);
     if (!bill) return null;
     return {
@@ -773,14 +904,14 @@ function appliedBillSnapshots(bills, ids) {
   }).filter(Boolean);
 }
 
-function attachAppliedBillsToPaymentRow(row, bills, ids) {
+function attachAppliedBillsToPaymentRow(row, bills, ids, cust) {
   if (!ids.length) {
     delete row.appliedBillIds;
     delete row.appliedBills;
     return;
   }
   row.appliedBillIds = ids;
-  row.appliedBills = appliedBillSnapshots(bills, ids);
+  row.appliedBills = appliedBillSnapshots(bills, ids, cust);
 }
 
 function parseBillCashAllocationsFromBody(body) {
@@ -804,6 +935,15 @@ function validateBillCashAllocationsForCustomer(bills, cust, allocations) {
   if (!allocations.length) return null;
   const nk = normalizeCustomerName(cust.name);
   for (const { billId, cashAmount } of allocations) {
+    if (isOpeningBalanceBillId(billId, cust.id)) {
+      const pastTotal = toNonNegMoney(cust.pastBill);
+      if (pastTotal <= 0) return 'This customer has no opening balance to allocate';
+      if (cashAmount <= 0) return 'Each bill allocation must have an amount greater than 0';
+      if (cashAmount > pastTotal) {
+        return 'Amount for opening balance cannot exceed the opening balance';
+      }
+      continue;
+    }
     const bill = bills.find((b) => String(b.id ?? '').trim() === billId);
     if (!bill) return 'One or more bill allocations were not found';
     if (normalizeCustomerName(bill.customerName) !== nk) {
@@ -818,12 +958,21 @@ function validateBillCashAllocationsForCustomer(bills, cust, allocations) {
   return null;
 }
 
-function attachBillCashAllocationsToPaymentRow(row, bills, allocations) {
+function attachBillCashAllocationsToPaymentRow(row, bills, allocations, cust) {
   if (!allocations.length) {
     delete row.billCashAllocations;
     return;
   }
   row.billCashAllocations = allocations.map(({ billId, cashAmount }) => {
+    if (cust && isOpeningBalanceBillId(billId, cust.id)) {
+      return {
+        billId,
+        cashAmount: toNonNegMoney(cashAmount),
+        billDate: openingBalanceBillDate(cust),
+        billTotal: toNonNegMoney(cust.pastBill),
+        details: 'Opening balance',
+      };
+    }
     const bill = bills.find((b) => String(b.id ?? '').trim() === billId);
     return {
       billId,
@@ -833,7 +982,7 @@ function attachBillCashAllocationsToPaymentRow(row, bills, allocations) {
     };
   });
   const ids = allocations.map((a) => a.billId);
-  attachAppliedBillsToPaymentRow(row, bills, ids);
+  attachAppliedBillsToPaymentRow(row, bills, ids, cust);
 }
 
 /** How a payment settled the account (customer transaction list). */
@@ -1148,7 +1297,27 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 
   for (const cust of customers) {
     const settlementDays = getOverdueDaysForCustomer(overdueDates, cust.id);
-    const { paidByBillId, custBills } = computeBillPaymentAllocation(cust, bills, payments, promotions);
+    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(cust, bills, payments, promotions);
+
+    const pastOwed = toNonNegMoney(cust.pastBill);
+    const openingRemaining = Math.round((pastOwed - pastPaid) * 100) / 100;
+    if (openingRemaining > 0) {
+      const billDate = openingBalanceBillDate(cust);
+      const dueRaw = String(cust.dueDate ?? '').slice(0, 10);
+      const due = /^\d{4}-\d{2}-\d{2}$/.test(dueRaw) ? dueRaw : addDaysToYmd(billDate, settlementDays);
+      pushIfMatch({
+        id: openingBalanceBillId(cust.id),
+        customerName: cust.name,
+        billDate,
+        dueDate: due,
+        daysFromBillDate: daysFromDueToToday(billDate, todayYmd),
+        outstandingAmount: openingRemaining,
+        billTotal: pastOwed,
+        details: 'Opening balance',
+        settlementDays,
+        isOpeningBalance: true,
+      });
+    }
 
     for (const bill of custBills) {
       const total = effectiveBillTotal(bill, promotions);
@@ -2963,9 +3132,9 @@ app.post('/api/payments', async (req, res) => {
     attachOtherPaymentMethodsToRow(row, parsedOther);
     attachApprovalMetaToRow(row, parsedOther);
     if (parsedBillCash.allocations.length > 0) {
-      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust);
     } else {
-      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids);
+      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids, cust);
     }
 
     payments.push(row);
@@ -3123,9 +3292,9 @@ app.patch('/api/payments/:id', async (req, res) => {
     attachOtherPaymentMethodsToRow(row, parsedOther);
     attachApprovalMetaToRow(row, parsedOther, existing);
     if (parsedBillCash.allocations.length > 0) {
-      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations);
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust);
     } else {
-      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids);
+      attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids, cust);
     }
 
     payments[idx] = row;
@@ -4917,4 +5086,5 @@ app.listen(PORT, () => {
     console.log(`Serving SPA from ${FRONTEND_BUILD}`);
   }
   startOverdueReminderScheduler();
+  startBackupScheduler();
 });

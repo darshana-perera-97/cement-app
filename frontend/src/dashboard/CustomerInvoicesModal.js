@@ -214,9 +214,10 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
             Invoices — {customer?.name || 'Customer'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Credit bills · settle within {settlementDays} day{settlementDays === 1 ? '' : 's'} of bill date.
-            Payments apply to opening balance first, then oldest bills.
-            {taxReady ? ' Tax invoice download is available per row.' : null}
+            Credit bills and opening balance · settle within {settlementDays} day
+            {settlementDays === 1 ? '' : 's'} of bill date. Payments apply to opening balance first, then oldest
+            bills.
+            {taxReady ? ' Tax invoice download is available per credit bill.' : null}
           </p>
         </div>
 
@@ -272,7 +273,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
             ) : filteredRows.length === 0 ? (
               <p className="rounded-2xl bg-slate-50 px-4 py-12 text-center text-sm text-slate-500 ring-1 ring-slate-100">
                 {allRows.length === 0
-                  ? 'No credit bills recorded for this customer yet.'
+                  ? 'No credit bills or opening balance recorded for this customer yet.'
                   : 'No invoices in this date range.'}
               </p>
             ) : (
@@ -282,7 +283,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                     <MobileRowCard
                       key={r.id}
                       title={formatDisplayDate(r.billDate)}
-                      subtitle={r.details}
+                      subtitle={r.isOpeningBalance ? 'Opening balance' : r.details}
                       badge={statusBadge(r.status, r.isOverdue)}
                       fields={[
                         { label: 'Bill total', value: money(r.billTotal) },
@@ -298,7 +299,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                         { label: 'Days to settle', value: formatDaysToSettle(r) },
                       ]}
                       actions={
-                        taxReady ? (
+                        taxReady && !r.isOpeningBalance ? (
                           <button
                             type="button"
                             onClick={() => handleDownloadTaxInvoice(r)}
@@ -332,6 +333,11 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                         <tr key={r.id} className={r.isOverdue ? 'bg-rose-50/40' : 'hover:bg-slate-50/80'}>
                           <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>
                             {formatDisplayDate(r.billDate)}
+                            {r.isOpeningBalance ? (
+                              <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                                Opening
+                              </span>
+                            ) : null}
                           </td>
                           <td className="max-w-[14rem] px-4 py-3 text-xs text-slate-600">{r.details}</td>
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
@@ -352,15 +358,19 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                           <td className="whitespace-nowrap px-4 py-3">{statusBadge(r.status, r.isOverdue)}</td>
                           {taxReady ? (
                             <td className="whitespace-nowrap px-4 py-3">
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadTaxInvoice(r)}
-                                disabled={taxDownloadingId === r.id}
-                                className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
-                                title="Download tax invoice PDF"
-                              >
-                                {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
-                              </button>
+                              {r.isOpeningBalance ? (
+                                <span className="text-xs text-slate-400">—</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadTaxInvoice(r)}
+                                  disabled={taxDownloadingId === r.id}
+                                  className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                                  title="Download tax invoice PDF"
+                                >
+                                  {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
+                                </button>
+                              )}
                             </td>
                           ) : null}
                         </tr>

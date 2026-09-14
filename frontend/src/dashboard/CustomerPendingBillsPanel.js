@@ -162,8 +162,8 @@ export default function CustomerPendingBillsPanel({
       <div>
         <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
         <p className="mt-0.5 text-sm text-slate-500">
-          Unpaid credit bills for this customer — remaining balance after payments, including overdue
-          bills past the {settlementDays}-day window.
+          Unpaid opening balance and credit bills for this customer — remaining balance after payments,
+          including overdue bills past the {settlementDays}-day window.
         </p>
       </div>
 
@@ -236,7 +236,7 @@ export default function CustomerPendingBillsPanel({
                 <MobileRowCard
                   key={row.id}
                   title={formatDisplayDate(row.billDate)}
-                  subtitle={row.details || undefined}
+                  subtitle={row.isOpeningBalance ? 'Opening balance' : row.details || undefined}
                   badge={
                     overdue ? (
                       <span className="inline-flex items-center rounded-lg bg-rose-50 px-2 py-1 text-xs font-semibold tabular-nums text-rose-700 ring-1 ring-rose-100">
@@ -306,6 +306,11 @@ export default function CustomerPendingBillsPanel({
                         }`}
                       >
                         {formatDisplayDate(row.billDate)}
+                        {row.isOpeningBalance ? (
+                          <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                            Opening
+                          </span>
+                        ) : null}
                         <span className="mt-0.5 block text-xs font-normal text-slate-500">
                           {row.daysFromBillDate != null ? `${row.daysFromBillDate}d from bill` : '—'}
                         </span>

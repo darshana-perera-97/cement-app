@@ -104,12 +104,18 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'overdueBill':
       return {
-        title: 'Overdue bill',
+        title: row.isOpeningBalance ? 'Overdue opening balance' : 'Overdue bill',
         subtitle: row.customerName || null,
       };
     case 'pendingBill':
       return {
-        title: Number(row.daysOverdue) > 0 ? 'Overdue bill' : 'Pending bill',
+        title: row.isOpeningBalance
+          ? Number(row.daysOverdue) > 0
+            ? 'Overdue opening balance'
+            : 'Opening balance'
+          : Number(row.daysOverdue) > 0
+            ? 'Overdue bill'
+            : 'Pending bill',
         subtitle: row.customerName || null,
       };
     case 'bankDaily':
@@ -638,6 +644,7 @@ function PaymentDetailContent({ row }) {
                 key={b.billId}
                 className="rounded-lg bg-emerald-50/80 px-3 py-2 ring-1 ring-emerald-100 tabular-nums"
               >
+                {b.details ? `${b.details} · ` : ''}
                 {b.billDate || '—'}
                 <span className="ml-2 font-semibold text-emerald-900">{formatMoney(b.cashAmount)}</span>
                 {b.billTotal != null && b.billTotal !== '' ? (
@@ -658,6 +665,7 @@ function PaymentDetailContent({ row }) {
                 key={b.id}
                 className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-100 tabular-nums"
               >
+                {b.details ? `${b.details} · ` : ''}
                 {b.date || '—'}
                 {b.totalAmount != null && b.totalAmount !== '' ? (
                   <span className="ml-2 font-medium text-slate-900">{formatMoney(b.totalAmount)}</span>

@@ -73,6 +73,24 @@ function getPaymentBillCashAllocations(p) {
     .filter((a) => a.billId && a.cashAmount > 0);
 }
 
+/** Synthetic invoice id for a customer's opening balance (`pastBill`). */
+function openingBalanceBillId(customerId) {
+  return `${String(customerId ?? '').trim()}-opening`;
+}
+
+function isOpeningBalanceBillId(billId, customerId) {
+  const id = String(billId ?? '').trim();
+  const cid = String(customerId ?? '').trim();
+  return Boolean(id && cid && id === `${cid}-opening`);
+}
+
+function openingBalanceBillDate(customer) {
+  const created = String(customer?.createdAt ?? '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(created)) return created;
+  const due = String(customer?.dueDate ?? '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : '';
+}
+
 function effectiveBillTotal(bill, promotions = []) {
   const base = toNonNegMoney(bill?.totalAmount);
   const discount = sumInvoiceDiscountForBill(promotions, bill?.id);
@@ -99,6 +117,8 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
 
   const pastOwed = toNonNegMoney(customer.pastBill);
   let pastPaid = 0;
+  const openingId = openingBalanceBillId(customer.id);
+  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
 
   const custPayments = (Array.isArray(payments) ? payments : [])
     .filter((p) => p.customerId === customer.id)
@@ -111,6 +131,13 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
+        if (openingId && billId === openingId) {
+          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
+          const toward = Math.min(room, cashAmount);
+          pastPaid = roundMoney(pastPaid + toward);
+          paidByBillId.set(openingId, pastPaid);
+          continue;
+        }
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
         const total = effectiveBillTotal(bill, promotions);
@@ -125,6 +152,7 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
     let remaining = credit;
     const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
     pastPaid = roundMoney(pastPaid + towardPast);
+    if (openingId) paidByBillId.set(openingId, pastPaid);
     remaining = roundMoney(remaining - towardPast);
 
     for (const bill of custBills) {
@@ -161,6 +189,8 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotio
 
   const pastOwed = toNonNegMoney(customer.pastBill);
   let pastPaid = 0;
+  const openingId = openingBalanceBillId(customer.id);
+  if (pastOwed > 0 && openingId) runningPaid.set(openingId, 0);
 
   for (const p of custPayments) {
     const credit = paymentCreditToCustomer(p);
@@ -171,6 +201,14 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotio
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
+        if (openingId && billId === openingId) {
+          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
+          const toward = Math.min(room, cashAmount);
+          pastPaid = roundMoney(pastPaid + toward);
+          runningPaid.set(openingId, pastPaid);
+          if (pastOwed > 0 && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
+          continue;
+        }
         if (!runningPaid.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
         const total = effectiveBillTotal(bill, promotions);
@@ -188,6 +226,9 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotio
     const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
     pastPaid = roundMoney(pastPaid + towardPast);
     remaining = roundMoney(remaining - towardPast);
+    if (openingId && pastOwed > 0 && pastPaid >= pastOwed - 0.009) {
+      settledByBillId.set(openingId, payDate);
+    }
 
     for (const bill of custBills) {
       if (remaining <= 0) break;
@@ -253,4 +294,7 @@ module.exports = {
   computeBillPaymentAllocation,
   buildSettledDateByBillIdForCustomer,
   effectiveBillTotal,
+  openingBalanceBillId,
+  isOpeningBalanceBillId,
+  openingBalanceBillDate,
 };

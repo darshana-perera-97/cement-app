@@ -11,6 +11,8 @@ import {
 import {
   billDetailsLine,
   buildCustomerOutstandingBills,
+  openingBalanceBillDate,
+  openingBalanceBillId,
 } from './pendingBills';
 
 const apiBase = getApiBase();
@@ -248,14 +250,27 @@ export default function RecordPaymentModal({
     for (const id of form.appliedBillIds) {
       if (byId.has(id)) continue;
       const bill = bills.find((b) => b.id === id);
-      if (!bill) continue;
-      byId.set(id, {
-        id: bill.id,
-        billDate: bill.date,
-        outstandingAmount: 0,
-        billTotal: Number(bill.totalAmount) || 0,
-        details: billDetailsLine(bill),
-      });
+      if (bill) {
+        byId.set(id, {
+          id: bill.id,
+          billDate: bill.date,
+          outstandingAmount: 0,
+          billTotal: Number(bill.totalAmount) || 0,
+          details: billDetailsLine(bill),
+        });
+        continue;
+      }
+      const cust = customers.find((c) => String(c.id ?? '').trim() === String(form.customerId ?? '').trim());
+      if (cust && id === openingBalanceBillId(cust.id)) {
+        byId.set(id, {
+          id,
+          isOpeningBalance: true,
+          billDate: openingBalanceBillDate(cust),
+          outstandingAmount: 0,
+          billTotal: Number(cust.pastBill) || 0,
+          details: 'Opening balance',
+        });
+      }
     }
     return [...byId.values()].sort((a, b) => String(a.billDate).localeCompare(String(b.billDate)));
   }, [form.customerId, form.appliedBillIds, customers, bills, payments, editPayment?.id]);
@@ -503,8 +518,8 @@ export default function RecordPaymentModal({
                       Credit bills this payment is for
                     </legend>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      Optional. Select one or more outstanding bills. Customer balances still follow opening balance
-                      first, then oldest bills.
+                      Optional. Select opening balance and/or outstanding bills. Customer balances still follow
+                      opening balance first, then oldest bills, unless you allocate amounts per invoice.
                     </p>
                     {customerBillOptions.length === 0 ? (
                       <p className="mt-3 text-sm text-slate-500">No outstanding credit bills for this customer.</p>
@@ -525,7 +540,14 @@ export default function RecordPaymentModal({
                               >
                                 <span className="min-w-0 flex-1">
                                   <span className="flex flex-col gap-0.5 sm:block">
-                                    <span className="font-medium tabular-nums text-slate-900">{b.billDate || '—'}</span>
+                                    <span className="font-medium tabular-nums text-slate-900">
+                                      {b.billDate || '—'}
+                                      {b.isOpeningBalance ? (
+                                        <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                                          Opening
+                                        </span>
+                                      ) : null}
+                                    </span>
                                     <span className="font-semibold tabular-nums text-emerald-800 sm:ml-2 sm:inline">
                                       {b.outstandingAmount > 0
                                         ? `${money(b.outstandingAmount)} due`

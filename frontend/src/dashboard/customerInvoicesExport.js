@@ -152,7 +152,7 @@ export function downloadCustomerInvoicesPdf(customer, rows, options = {}) {
   doc.text(range, MARGIN, metaY);
   metaY += 5;
   doc.text(
-    `Credit bills · settle within ${settlementDays} day${settlementDays === 1 ? '' : 's'} of bill date. Payments apply to opening balance first, then oldest bills.`,
+    `Credit bills and opening balance · settle within ${settlementDays} day${settlementDays === 1 ? '' : 's'} of bill date. Payments apply to opening balance first, then oldest bills.`,
     MARGIN,
     metaY,
   );

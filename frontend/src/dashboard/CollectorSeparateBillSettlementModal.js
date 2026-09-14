@@ -783,7 +783,14 @@ export default function CollectorSeparateBillSettlementModal({
                             className="rounded-lg bg-white px-3 py-3 ring-1 ring-slate-200 sm:flex sm:items-center sm:gap-4"
                           >
                             <div className="min-w-0 flex-1">
-                              <p className="font-medium tabular-nums text-slate-900">{b.billDate || '—'}</p>
+                              <p className="font-medium tabular-nums text-slate-900">
+                                {b.billDate || '—'}
+                                {b.isOpeningBalance ? (
+                                  <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                                    Opening
+                                  </span>
+                                ) : null}
+                              </p>
                               <p className="mt-0.5 text-sm font-semibold tabular-nums text-emerald-800">
                                 {money(b.outstandingAmount)} due
                                 {b.billTotal > 0 ? (

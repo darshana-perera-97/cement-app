@@ -50,6 +50,30 @@ function getPaymentBillCashAllocations(p) {
     .filter((a) => a.billId && a.cashAmount > 0);
 }
 
+/** Synthetic invoice id for a customer's opening balance (`pastBill`). */
+export function openingBalanceBillId(customerId) {
+  return `${String(customerId ?? '').trim()}-opening`;
+}
+
+export function isOpeningBalanceBillId(billId, customerId) {
+  const id = String(billId ?? '').trim();
+  const cid = String(customerId ?? '').trim();
+  return Boolean(id && cid && id === `${cid}-opening`);
+}
+
+export function openingBalanceBillDate(customer) {
+  const created = String(customer?.createdAt ?? '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(created)) return created;
+  const due = String(customer?.dueDate ?? '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : '';
+}
+
+function openingBalanceDueDate(customer, billDate, settlementDays) {
+  const due = String(customer?.dueDate ?? '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) return due;
+  return addDaysToYmd(billDate, settlementDays);
+}
+
 function comparePaymentsChronological(a, b) {
   const cmp = String(a.date ?? '').localeCompare(String(b.date ?? ''));
   if (cmp !== 0) return cmp;
@@ -76,6 +100,8 @@ function computeBillPaymentAllocation(customer, bills, payments) {
 
   const pastOwed = toNonNegMoney(customer.pastBill);
   let pastPaid = 0;
+  const openingId = openingBalanceBillId(customer.id);
+  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
 
   const custPayments = (Array.isArray(payments) ? payments : [])
     .filter((p) => p.customerId === customer.id)
@@ -88,6 +114,13 @@ function computeBillPaymentAllocation(customer, bills, payments) {
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
+        if (openingId && billId === openingId) {
+          const room = Math.max(0, toNonNegMoney(pastOwed - pastPaid));
+          const toward = Math.min(room, cashAmount);
+          pastPaid = toNonNegMoney(pastPaid + toward);
+          paidByBillId.set(openingId, pastPaid);
+          continue;
+        }
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
         const total = toNonNegMoney(bill?.totalAmount);
@@ -102,6 +135,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
     let remaining = credit;
     const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
     pastPaid = toNonNegMoney(pastPaid + towardPast);
+    if (openingId) paidByBillId.set(openingId, pastPaid);
     remaining = toNonNegMoney(remaining - towardPast);
 
     for (const bill of custBills) {
@@ -165,6 +199,7 @@ export function listCustomerBillPaymentAllocations(customer, bills, payments) {
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
+        if (isOpeningBalanceBillId(billId, customer.id)) continue;
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
         const total = toNonNegMoney(bill?.totalAmount);
@@ -274,7 +309,7 @@ function sortBillsChronological(bills) {
 }
 
 /** Payment date (YYYY-MM-DD) when each bill was fully cleared. */
-function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0) {
+function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, customerId = '') {
   const settledByBillId = new Map();
   const sortedBills = sortBillsChronological(custBills);
   const runningPaid = new Map();
@@ -285,6 +320,8 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0) {
 
   const pastOwed = toNonNegMoney(pastBillAmount);
   let pastPaid = 0;
+  const openingId = customerId ? openingBalanceBillId(customerId) : '';
+  if (pastOwed > 0 && openingId) runningPaid.set(openingId, 0);
 
   for (const p of [...custPayments].sort(comparePaymentsChronological)) {
     let credit = paymentCreditToCustomer(p);
@@ -295,6 +332,14 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0) {
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
+        if (openingId && billId === openingId) {
+          const room = Math.max(0, toNonNegMoney(pastOwed - pastPaid));
+          const toward = Math.min(room, cashAmount);
+          pastPaid = toNonNegMoney(pastPaid + toward);
+          runningPaid.set(openingId, pastPaid);
+          if (pastOwed > 0 && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
+          continue;
+        }
         if (!runningPaid.has(billId)) continue;
         const bill = sortedBills.find((b) => String(b.id ?? '').trim() === billId);
         const total = toNonNegMoney(bill?.totalAmount);
@@ -312,6 +357,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0) {
       const toward = Math.min(pastOwed - pastPaid, credit);
       pastPaid = toNonNegMoney(pastPaid + toward);
       credit = toNonNegMoney(credit - toward);
+      if (openingId && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
     }
 
     for (const bill of sortedBills) {
@@ -342,7 +388,7 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
   const custPayments = (Array.isArray(payments) ? payments : []).filter(
     (p) => p.customerId === customer.id,
   );
-  return buildSettledDateByBillId(custBills, custPayments, customer.pastBill);
+  return buildSettledDateByBillId(custBills, custPayments, customer.pastBill, customer.id);
 }
 
 /** Map bill id → settled date when fully paid (FIFO or explicit allocations). */
@@ -445,7 +491,26 @@ export function buildPendingBillRows(
 
   for (const cust of safeCustomers) {
     const settlementDays = settlementDaysForCustomer(cust);
-    const { paidByBillId, custBills } = computeBillPaymentAllocation(cust, safeBills, safePayments);
+    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(cust, safeBills, safePayments);
+
+    const pastOwed = toNonNegMoney(cust.pastBill);
+    const openingRemaining = Math.round((pastOwed - pastPaid) * 100) / 100;
+    if (openingRemaining > 0) {
+      const billDate = openingBalanceBillDate(cust);
+      const due = openingBalanceDueDate(cust, billDate, settlementDays);
+      pushRow({
+        id: openingBalanceBillId(cust.id),
+        customerName: cust.name,
+        billDate,
+        dueDate: due,
+        daysFromBillDate: daysBetweenYmd(billDate, todayYmd),
+        outstandingAmount: openingRemaining,
+        billTotal: pastOwed,
+        details: 'Opening balance',
+        settlementDays,
+        isOpeningBalance: true,
+      });
+    }
 
     for (const bill of custBills) {
       const total = toNonNegMoney(bill.totalAmount);
@@ -526,9 +591,45 @@ export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
   const todayYmd = todayYmdLocal();
   const settlementDays = settlementDaysForCustomer(customer);
   const settledByBillId = buildSettledDateByBillIdForCustomer(customer, bills, payments);
-  const { paidByBillId, custBills } = computeBillPaymentAllocation(customer, bills, payments);
+  const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(customer, bills, payments);
 
   const rows = [];
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  if (pastOwed > 0) {
+    const openingId = openingBalanceBillId(customer.id);
+    const paidTowardOpening = toNonNegMoney(pastPaid);
+    const outstanding = Math.round((pastOwed - paidTowardOpening) * 100) / 100;
+    const billDate = openingBalanceBillDate(customer);
+    const dueDate = openingBalanceDueDate(customer, billDate, settlementDays);
+    const isOverdue = Boolean(dueDate && todayYmd > dueDate && outstanding > 0);
+    let status = 'open';
+    if (outstanding <= 0) status = 'settled';
+    else if (paidTowardOpening > 0) status = 'partial';
+    const settledDate = openingId ? settledByBillId.get(openingId) || '' : '';
+    const billDateYmd = String(billDate ?? '').slice(0, 10);
+    const daysToSettle =
+      settledDate && /^\d{4}-\d{2}-\d{2}$/.test(billDateYmd)
+        ? daysBetweenYmd(billDateYmd, settledDate)
+        : null;
+    rows.push({
+      id: openingId,
+      isOpeningBalance: true,
+      billDate,
+      dueDate,
+      settlementDays,
+      settledDate,
+      daysToSettle,
+      billTotal: pastOwed,
+      paidAmount: paidTowardOpening,
+      outstandingAmount: outstanding,
+      status,
+      details: 'Opening balance',
+      daysLeftUntilDue: dueDate && todayYmd <= dueDate ? daysBetweenYmd(todayYmd, dueDate) : 0,
+      daysOverdue: isOverdue ? daysBetweenYmd(dueDate, todayYmd) : 0,
+      isOverdue,
+    });
+  }
+
   for (const bill of custBills) {
     const total = toNonNegMoney(bill.totalAmount);
     const id = String(bill.id ?? '').trim();
@@ -565,7 +666,12 @@ export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
     });
   }
 
-  rows.sort((a, b) => String(b.billDate).localeCompare(String(a.billDate)));
+  rows.sort((a, b) => {
+    if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
+      return a.isOpeningBalance ? -1 : 1;
+    }
+    return String(b.billDate).localeCompare(String(a.billDate));
+  });
   return rows;
 }
 
