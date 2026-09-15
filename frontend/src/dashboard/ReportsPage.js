@@ -16,7 +16,7 @@ import {
   stickyFirstTh,
   stickyThead,
 } from './tableToolbar';
-import { buildChequeTableRows, cdmPortion, chequePortion, onlineTransferPortion } from './paymentCheques';
+import { buildChequeTableRows, cdmPortion, chequePortion, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from './paymentCheques';
 import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import {
@@ -720,17 +720,19 @@ function buildDailyCollectionCdmRows(payments, ymd, users = []) {
   for (const p of payments) {
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) continue;
-    const amount = cdmPortion(p);
-    if (amount <= 0) continue;
-    rows.push({
-      id: p.id || `${payDate}-${rows.length}`,
-      customerName: String(p.customerName ?? '').trim() || '—',
-      amount,
-      cdmNumber: String(p.cdmNumber ?? '').trim() || '—',
-      bankAccount: bankAccountSnapLabel(p.cdmBankAccount, p.cdmBankAccountId),
-      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
-      approval: paymentApprovalLabel(p),
-      recordedBy: recordedByDisplay(p, users),
+    const deposits = getPaymentCdmDeposits(p);
+    if (deposits.length === 0) continue;
+    deposits.forEach((d, i) => {
+      rows.push({
+        id: `${p.id || `${payDate}-${rows.length}`}::${d.id || i}`,
+        customerName: String(p.customerName ?? '').trim() || '—',
+        amount: d.amount,
+        cdmNumber: String(d.cdmNumber ?? '').trim() || '—',
+        bankAccount: bankAccountSnapLabel(d.bankAccount, d.bankAccountId),
+        billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+        approval: paymentApprovalLabel(p),
+        recordedBy: recordedByDisplay(p, users),
+      });
     });
   }
   return sortDailyCollectionDetailRows(rows);
@@ -742,17 +744,19 @@ function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
   for (const p of payments) {
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) continue;
-    const amount = onlineTransferPortion(p);
-    if (amount <= 0) continue;
-    rows.push({
-      id: p.id || `${payDate}-${rows.length}`,
-      customerName: String(p.customerName ?? '').trim() || '—',
-      amount,
-      reference: String(p.onlineTransferReference ?? '').trim() || '—',
-      bankAccount: bankAccountSnapLabel(p.onlineTransferBankAccount, p.onlineTransferBankAccountId),
-      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
-      approval: paymentApprovalLabel(p),
-      recordedBy: recordedByDisplay(p, users),
+    const transfers = getPaymentOnlineTransfers(p);
+    if (transfers.length === 0) continue;
+    transfers.forEach((t, i) => {
+      rows.push({
+        id: `${p.id || `${payDate}-${rows.length}`}::${t.id || i}`,
+        customerName: String(p.customerName ?? '').trim() || '—',
+        amount: t.amount,
+        reference: String(t.reference ?? '').trim() || '—',
+        bankAccount: bankAccountSnapLabel(t.bankAccount, t.bankAccountId),
+        billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+        approval: paymentApprovalLabel(p),
+        recordedBy: recordedByDisplay(p, users),
+      });
     });
   }
   return sortDailyCollectionDetailRows(rows);

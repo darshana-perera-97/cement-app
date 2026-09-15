@@ -23,7 +23,7 @@ import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
-import { getPaymentCheques } from './paymentCheques';
+import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { usePrinter } from '../printer/PrinterProvider';
 
 const apiBase = getApiBase();
@@ -121,6 +121,8 @@ export default function PaymentsPage() {
           r.recordedBy,
           String(r.amount),
           ...getPaymentCheques(r).flatMap((c) => [c.chequeDate, c.chequeNumber]),
+          ...getPaymentCdmDeposits(r).flatMap((d) => [d.cdmNumber, d.bankAccountId]),
+          ...getPaymentOnlineTransfers(r).flatMap((t) => [t.reference, t.bankAccountId]),
         ])
       ) {
         return false;

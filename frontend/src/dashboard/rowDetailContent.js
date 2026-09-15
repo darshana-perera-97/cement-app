@@ -15,8 +15,8 @@ import {
   formatMoney,
 } from './detailModalShared';
 import { useBagProducts } from './BagProductsContext';
-import { formatProductNameWithCode } from './brandTheme';
-import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
+import { formatBrandLabel, formatProductNameWithCode } from './brandTheme';
+import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, cdmPortion, onlineTransferPortion } from './paymentCheques';
 import { getPaymentReceiptInvoices } from './paymentReceipt';
 import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment, isPoBankTransferPayment } from './poChequeDisplay';
 import { poLineItems } from './poItems';
@@ -60,6 +60,14 @@ export function getRowDetailMeta(variant, row) {
         subtitle: [row.date, row.customerName, row.billNumber ? `#${row.billNumber}` : null]
           .filter(Boolean)
           .join(' · ') || null,
+      };
+    case 'promotionRule':
+      return {
+        title: 'Promotion rule',
+        subtitle:
+          [row.customerName, row.startDate && row.endDate ? `${row.startDate} – ${row.endDate}` : row.startDate || row.endDate]
+            .filter(Boolean)
+            .join(' · ') || null,
       };
     case 'unloadRequest':
       return {
@@ -184,6 +192,8 @@ export function RowDetailContent({ variant, row }) {
       return <PaymentDetailContent row={row} />;
     case 'promotion':
       return <PromotionDetailContent row={row} />;
+    case 'promotionRule':
+      return <PromotionRuleDetailContent row={row} />;
     case 'unloadRequest':
       return <UnloadRequestDetailContent row={row} />;
     case 'purchaseOrder':
@@ -290,6 +300,7 @@ function IncentiveDetailContent({ row }) {
         <SummaryField label="Date" value={displayText(row.date)} />
         <SummaryField label="Stock ID" value={displayText(row.stockId)} />
         <SummaryField label="Bag type" value={displayText(row.brandLabel)} />
+        <SummaryField label="Door step" value={row.doorStep ? 'Yes' : 'No'} />
         <SummaryField label="Vehicle" value={displayText(row.vehicleNumber)} />
         <SummaryField label="Added by" value={displayText(row.addedBy)} />
         <SummaryField label="Bag amounts" value={Number(row.bags || 0).toLocaleString()} valueClassName="tabular-nums" />
@@ -568,6 +579,8 @@ function PaymentDetailContent({ row }) {
   const cdm = cdmPortion(row);
   const onlineTransfer = onlineTransferPortion(row);
   const chequeLines = getPaymentCheques(row);
+  const cdmDeposits = getPaymentCdmDeposits(row);
+  const onlineTransfers = getPaymentOnlineTransfers(row);
   const receiptInvoices = getPaymentReceiptInvoices(row);
 
   return (
@@ -601,38 +614,16 @@ function PaymentDetailContent({ row }) {
         ) : null}
         {cdm > 0 ? (
           <SummaryField
-            label="CDM deposit"
+            label={cdmDeposits.length > 1 ? 'CDM deposits' : 'CDM deposit'}
             value={formatMoney(cdm)}
             valueClassName="tabular-nums text-sky-800"
           />
         ) : null}
-        {row.cdmNumber ? (
-          <SummaryField label="CDM number" value={displayText(row.cdmNumber)} valueClassName="font-mono" />
-        ) : null}
-        {cdm > 0 && (row.cdmBankAccount || row.cdmBankAccountId) ? (
-          <SummaryField
-            label="CDM bank account"
-            value={bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId)}
-          />
-        ) : null}
         {onlineTransfer > 0 ? (
           <SummaryField
-            label="Online transfer"
+            label={onlineTransfers.length > 1 ? 'Online transfers' : 'Online transfer'}
             value={formatMoney(onlineTransfer)}
             valueClassName="tabular-nums text-sky-800"
-          />
-        ) : null}
-        {row.onlineTransferReference ? (
-          <SummaryField
-            label="Transfer reference"
-            value={displayText(row.onlineTransferReference)}
-            valueClassName="font-mono"
-          />
-        ) : null}
-        {onlineTransfer > 0 && (row.onlineTransferBankAccount || row.onlineTransferBankAccountId) ? (
-          <SummaryField
-            label="Online transfer bank account"
-            value={bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId)}
           />
         ) : null}
         <SummaryField
@@ -642,6 +633,48 @@ function PaymentDetailContent({ row }) {
           valueClassName="font-semibold text-emerald-800 tabular-nums"
         />
       </SummaryGrid>
+      {cdmDeposits.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            CDM deposit{cdmDeposits.length > 1 ? 's' : ''}
+          </p>
+          {cdmDeposits.map((d, i) => (
+            <div
+              key={d.id || i}
+              className="rounded-xl bg-sky-50/80 px-3 py-2.5 text-sm ring-1 ring-sky-100"
+            >
+              <p className="font-semibold tabular-nums text-sky-900">{formatMoney(d.amount)}</p>
+              <p className="mt-1 text-xs text-slate-600">
+                #{d.cdmNumber || '—'}
+                {d.bankAccount || d.bankAccountId
+                  ? ` · ${bankAccountSnapLabel(d.bankAccount, d.bankAccountId)}`
+                  : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {onlineTransfers.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Online transfer{onlineTransfers.length > 1 ? 's' : ''}
+          </p>
+          {onlineTransfers.map((t, i) => (
+            <div
+              key={t.id || i}
+              className="rounded-xl bg-teal-50/80 px-3 py-2.5 text-sm ring-1 ring-teal-100"
+            >
+              <p className="font-semibold tabular-nums text-teal-900">{formatMoney(t.amount)}</p>
+              <p className="mt-1 text-xs text-slate-600">
+                {t.reference || '—'}
+                {t.bankAccount || t.bankAccountId
+                  ? ` · ${bankAccountSnapLabel(t.bankAccount, t.bankAccountId)}`
+                  : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {chequeLines.length > 0 ? (
         <div className="mt-4 space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -733,7 +766,13 @@ function PromotionDetailContent({ row }) {
   const { brands } = useBagProducts();
   const type = String(row?.type ?? '').trim();
   const promoKind =
-    type === 'invoice_discount' ? 'Invoice discount' : type === 'target_promotion' ? 'Target promotion' : 'Free bag issue';
+    type === 'invoice_discount'
+      ? 'Invoice discount'
+      : type === 'target_promotion'
+        ? 'Target promotion'
+        : type === 'rule_cashback'
+          ? 'Cashback'
+          : 'Free bag issue';
   const totalBags = brands.reduce((sum, b) => sum + (Number(row[`${b.key}Bags`]) || 0), 0);
   const amount = Number(row.discountAmount) || 0;
 
@@ -776,6 +815,23 @@ function PromotionDetailContent({ row }) {
           }
         />
       ) : null}
+      {type === 'rule_cashback' && Array.isArray(row.cashbackLines) && row.cashbackLines.length > 0 ? (
+        <BrandSections title="Cashback by product">
+          {row.cashbackLines.map((line) => {
+            const brand = brands.find((b) => b.key === line.key);
+            const label = brand ? formatBrandLabel(brand) || brand.label : line.key;
+            return (
+              <div key={line.key} className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+                <p className="mt-1 text-sm tabular-nums text-slate-800">
+                  {Number(line.bags || 0).toLocaleString()} bags × {formatMoney(line.rate)} ={' '}
+                  <span className="font-semibold text-emerald-900">{formatMoney(line.amount)}</span>
+                </p>
+              </div>
+            );
+          })}
+        </BrandSections>
+      ) : null}
       {type === 'free_bags' || !type ? (
         <BrandSections title="Free bags by brand">
           {brands.map((b) => {
@@ -791,6 +847,62 @@ function PromotionDetailContent({ row }) {
           })}
         </BrandSections>
       ) : null}
+    </>
+  );
+}
+
+function PromotionRuleDetailContent({ row }) {
+  const { brands } = useBagProducts();
+  const stored = row?.cashbacks && typeof row.cashbacks === 'object' ? row.cashbacks : {};
+  const seen = new Set(brands.map((b) => b.key));
+  const extraKeys = Object.keys(stored).filter((key) => !seen.has(key) && (Number(stored[key]) || 0) > 0);
+  const total = [...brands.map((b) => Number(stored[b.key]) || 0), ...extraKeys.map((key) => Number(stored[key]) || 0)].reduce(
+    (s, n) => s + n,
+    0,
+  );
+
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
+        <SummaryField label="Start date" value={displayText(row.startDate)} valueClassName="tabular-nums" />
+        <SummaryField label="End date" value={displayText(row.endDate)} valueClassName="tabular-nums" />
+        <SummaryField label="Recorded by" value={displayText(row.enteredBy || row.updatedBy)} />
+        <SummaryField
+          label="Total cashback"
+          value={formatMoney(total)}
+          className="col-span-2 bg-emerald-50 ring-emerald-100"
+          valueClassName="tabular-nums font-semibold text-emerald-900"
+        />
+      </SummaryGrid>
+      <BrandSections title="Cashback by product">
+        {brands.map((b) => {
+          const amount = Number(stored[b.key]) || 0;
+          const active = amount > 0;
+          return (
+            <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No cashback for this product">
+              <dl className="grid grid-cols-1 gap-px bg-slate-100">
+                <BrandFieldCell
+                  brand={b}
+                  lead
+                  label="Cashback"
+                  value={formatMoney(amount)}
+                  valueClassName="tabular-nums font-semibold text-emerald-900"
+                />
+              </dl>
+            </BrandSectionShell>
+          );
+        })}
+        {extraKeys.map((key) => {
+          const amount = Number(stored[key]) || 0;
+          return (
+            <div key={key} className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{key}</p>
+              <p className="mt-1 text-sm font-semibold tabular-nums text-emerald-900">{formatMoney(amount)}</p>
+            </div>
+          );
+        })}
+      </BrandSections>
     </>
   );
 }

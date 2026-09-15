@@ -1,4 +1,5 @@
 const { activeBagProductsOnRecord, totalBagsFromRecord, formatProductLabel } = require('./bagProducts');
+const { getPaymentCdmDeposits, getPaymentOnlineTransfers } = require('./paymentOtherMethods');
 
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
@@ -179,17 +180,30 @@ function buildPaymentEmail({ customer, payment, remainingAmount, company, hideFi
     rows.push({ label: 'Amount received', value: formatMoney(payment.amount) });
     const cash = Number(payment.cashAmount) || 0;
     if (cash > 0) rows.push({ label: 'Cash', value: formatMoney(cash) });
-    const cdm = Number(payment.cdmAmount) || 0;
-    if (cdm > 0) {
-      let s = formatMoney(cdm);
-      if (payment.cdmNumber) s += ` · ${payment.cdmNumber}`;
-      rows.push({ label: 'CDM deposit', value: s });
+    const cdmDeposits = getPaymentCdmDeposits(payment);
+    if (cdmDeposits.length > 0) {
+      const cdmSummary = cdmDeposits
+        .map((d) => {
+          let s = formatMoney(d.amount);
+          if (d.cdmNumber) s += ` · ${d.cdmNumber}`;
+          return s;
+        })
+        .join('; ');
+      rows.push({ label: cdmDeposits.length > 1 ? 'CDM deposits' : 'CDM deposit', value: cdmSummary });
     }
-    const onlineTransfer = Number(payment.onlineTransferAmount) || 0;
-    if (onlineTransfer > 0) {
-      let s = formatMoney(onlineTransfer);
-      if (payment.onlineTransferReference) s += ` · ${payment.onlineTransferReference}`;
-      rows.push({ label: 'Online transfer', value: s });
+    const onlineTransfers = getPaymentOnlineTransfers(payment);
+    if (onlineTransfers.length > 0) {
+      const onlineSummary = onlineTransfers
+        .map((t) => {
+          let s = formatMoney(t.amount);
+          if (t.reference) s += ` · ${t.reference}`;
+          return s;
+        })
+        .join('; ');
+      rows.push({
+        label: onlineTransfers.length > 1 ? 'Online transfers' : 'Online transfer',
+        value: onlineSummary,
+      });
     }
     if (payment.cheques?.length) {
       const chequeSummary = payment.cheques

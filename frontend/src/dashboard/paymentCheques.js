@@ -62,11 +62,74 @@ export function cashPortion(p) {
   return Math.max(0, Number(p.cashAmount) || 0);
 }
 
+function bankSnapFromLine(line) {
+  const snap = line?.bankAccount || line?.cdmBankAccount || line?.onlineTransferBankAccount;
+  return snap && typeof snap === 'object' ? snap : null;
+}
+
+/** All CDM deposits on a payment (supports legacy single-CDM fields). */
+export function getPaymentCdmDeposits(p) {
+  if (!p || typeof p !== 'object') return [];
+  if (Array.isArray(p.cdmDeposits) && p.cdmDeposits.length > 0) {
+    return p.cdmDeposits
+      .map((d) => ({
+        id: String(d?.id ?? '').trim() || '_legacy',
+        amount: Math.max(0, Number(d?.amount) || 0),
+        cdmNumber: String(d?.cdmNumber ?? '').trim(),
+        bankAccountId: String(d?.bankAccountId ?? d?.cdmBankAccountId ?? '').trim(),
+        bankAccount: bankSnapFromLine(d),
+      }))
+      .filter((d) => d.amount > 0);
+  }
+  const amount = Math.max(0, Number(p.cdmAmount) || 0);
+  if (amount <= 0) return [];
+  return [
+    {
+      id: '_legacy',
+      amount,
+      cdmNumber: String(p.cdmNumber ?? '').trim(),
+      bankAccountId: String(p.cdmBankAccountId ?? '').trim(),
+      bankAccount: p.cdmBankAccount,
+    },
+  ];
+}
+
+/** All online transfers on a payment (supports legacy single-transfer fields). */
+export function getPaymentOnlineTransfers(p) {
+  if (!p || typeof p !== 'object') return [];
+  if (Array.isArray(p.onlineTransfers) && p.onlineTransfers.length > 0) {
+    return p.onlineTransfers
+      .map((t) => ({
+        id: String(t?.id ?? '').trim() || '_legacy',
+        amount: Math.max(0, Number(t?.amount) || 0),
+        reference: String(t?.reference ?? t?.onlineTransferReference ?? '').trim(),
+        bankAccountId: String(t?.bankAccountId ?? t?.onlineTransferBankAccountId ?? '').trim(),
+        bankAccount: bankSnapFromLine(t),
+      }))
+      .filter((t) => t.amount > 0);
+  }
+  const amount = Math.max(0, Number(p.onlineTransferAmount) || 0);
+  if (amount <= 0) return [];
+  return [
+    {
+      id: '_legacy',
+      amount,
+      reference: String(p.onlineTransferReference ?? '').trim(),
+      bankAccountId: String(p.onlineTransferBankAccountId ?? '').trim(),
+      bankAccount: p.onlineTransferBankAccount,
+    },
+  ];
+}
+
 export function cdmPortion(p) {
+  const fromArray = getPaymentCdmDeposits(p).reduce((s, d) => s + d.amount, 0);
+  if (fromArray > 0) return fromArray;
   return Math.max(0, Number(p?.cdmAmount) || 0);
 }
 
 export function onlineTransferPortion(p) {
+  const fromArray = getPaymentOnlineTransfers(p).reduce((s, t) => s + t.amount, 0);
+  if (fromArray > 0) return fromArray;
   return Math.max(0, Number(p?.onlineTransferAmount) || 0);
 }
 

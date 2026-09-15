@@ -1,4 +1,5 @@
 const { activeBagProductsOnRecord, totalBagsFromRecord, formatProductLabel } = require('./bagProducts');
+const { getPaymentCdmDeposits, getPaymentOnlineTransfers } = require('./paymentOtherMethods');
 
 const BRAND_LABELS = {
   tokyo: 'Tokyo',
@@ -106,17 +107,27 @@ function buildPaymentWhatsApp({ customer, payment, remainingAmount, company, hid
   if (!hideFinancialDetails) {
     lines.push(`Amount received: ${formatMoney(payment.amount)}`);
     if (cash > 0) lines.push(`Cash: ${formatMoney(cash)}`);
-    const cdm = Number(payment.cdmAmount) || 0;
-    if (cdm > 0) {
-      let s = formatMoney(cdm);
-      if (payment.cdmNumber) s += ` · ${payment.cdmNumber}`;
-      lines.push(`CDM deposit: ${s}`);
+    const cdmDeposits = getPaymentCdmDeposits(payment);
+    if (cdmDeposits.length > 0) {
+      const cdmSummary = cdmDeposits
+        .map((d) => {
+          let s = formatMoney(d.amount);
+          if (d.cdmNumber) s += ` · ${d.cdmNumber}`;
+          return s;
+        })
+        .join('; ');
+      lines.push(`CDM deposit${cdmDeposits.length > 1 ? 's' : ''}: ${cdmSummary}`);
     }
-    const onlineTransfer = Number(payment.onlineTransferAmount) || 0;
-    if (onlineTransfer > 0) {
-      let s = formatMoney(onlineTransfer);
-      if (payment.onlineTransferReference) s += ` · ${payment.onlineTransferReference}`;
-      lines.push(`Online transfer: ${s}`);
+    const onlineTransfers = getPaymentOnlineTransfers(payment);
+    if (onlineTransfers.length > 0) {
+      const onlineSummary = onlineTransfers
+        .map((t) => {
+          let s = formatMoney(t.amount);
+          if (t.reference) s += ` · ${t.reference}`;
+          return s;
+        })
+        .join('; ');
+      lines.push(`Online transfer${onlineTransfers.length > 1 ? 's' : ''}: ${onlineSummary}`);
     }
     if (payment.cheques?.length) {
       const chequeSummary = payment.cheques

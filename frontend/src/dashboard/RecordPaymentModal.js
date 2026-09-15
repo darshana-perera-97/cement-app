@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch, getUsername, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
-import { getPaymentCheques } from './paymentCheques';
+import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
 import {
   normalizePaymentReceiptInput,
@@ -46,6 +46,32 @@ function newChequeLine(overrides = {}) {
     chequeBankCode: '',
     chequeBranchCode: '',
     chequeDeposited: false,
+    ...overrides,
+  };
+}
+
+let cdmKeySeq = 0;
+function newCdmLine(overrides = {}) {
+  cdmKeySeq += 1;
+  return {
+    key: `cdm-${cdmKeySeq}`,
+    id: '',
+    amount: '',
+    cdmNumber: '',
+    bankAccountId: '',
+    ...overrides,
+  };
+}
+
+let onlineTransferKeySeq = 0;
+function newOnlineTransferLine(overrides = {}) {
+  onlineTransferKeySeq += 1;
+  return {
+    key: `ot-${onlineTransferKeySeq}`,
+    id: '',
+    amount: '',
+    reference: '',
+    bankAccountId: '',
     ...overrides,
   };
 }
@@ -95,10 +121,14 @@ function lastOtherMethodBankDefaults(payments, customerId) {
   let onlineTransferBankAccountId = '';
   for (const payment of sorted) {
     if (!cdmBankAccountId) {
-      cdmBankAccountId = String(payment.cdmBankAccountId ?? '').trim();
+      const deposits = getPaymentCdmDeposits(payment);
+      const last = deposits[deposits.length - 1];
+      if (last?.bankAccountId) cdmBankAccountId = last.bankAccountId;
     }
     if (!onlineTransferBankAccountId) {
-      onlineTransferBankAccountId = String(payment.onlineTransferBankAccountId ?? '').trim();
+      const transfers = getPaymentOnlineTransfers(payment);
+      const last = transfers[transfers.length - 1];
+      if (last?.bankAccountId) onlineTransferBankAccountId = last.bankAccountId;
     }
     if (cdmBankAccountId && onlineTransferBankAccountId) break;
   }
@@ -110,12 +140,8 @@ const emptyForm = (receiptNumber = '') => ({
   billNumber: receiptNumber,
   appliedBillIds: [],
   cashAmount: '',
-  cdmAmount: '',
-  cdmNumber: '',
-  cdmBankAccountId: '',
-  onlineTransferAmount: '',
-  onlineTransferReference: '',
-  onlineTransferBankAccountId: '',
+  cdmDeposits: [newCdmLine()],
+  onlineTransfers: [newOnlineTransferLine()],
   cheques: [newChequeLine()],
   date: todayYmdLocal(),
   note: '',
@@ -138,6 +164,30 @@ function formFromPayment(payment) {
           }),
         )
       : [newChequeLine()];
+  const cdmRows = getPaymentCdmDeposits(payment);
+  const cdmDeposits =
+    cdmRows.length > 0
+      ? cdmRows.map((d) =>
+          newCdmLine({
+            id: d.id === '_legacy' ? '' : d.id || '',
+            amount: String(d.amount),
+            cdmNumber: d.cdmNumber || '',
+            bankAccountId: d.bankAccountId || '',
+          }),
+        )
+      : [newCdmLine()];
+  const onlineRows = getPaymentOnlineTransfers(payment);
+  const onlineTransfers =
+    onlineRows.length > 0
+      ? onlineRows.map((t) =>
+          newOnlineTransferLine({
+            id: t.id === '_legacy' ? '' : t.id || '',
+            amount: String(t.amount),
+            reference: t.reference || '',
+            bankAccountId: t.bankAccountId || '',
+          }),
+        )
+      : [newOnlineTransferLine()];
   const billNumber = String(payment.billNumber ?? '').trim();
   const appliedBillIds = Array.isArray(payment.appliedBillIds)
     ? payment.appliedBillIds.map(String)
@@ -149,15 +199,8 @@ function formFromPayment(payment) {
     billNumber,
     appliedBillIds,
     cashAmount: payment.cashAmount != null && payment.cashAmount !== '' ? String(payment.cashAmount) : '',
-    cdmAmount: payment.cdmAmount != null && payment.cdmAmount !== '' ? String(payment.cdmAmount) : '',
-    cdmNumber: payment.cdmNumber || '',
-    cdmBankAccountId: String(payment.cdmBankAccountId ?? '').trim(),
-    onlineTransferAmount:
-      payment.onlineTransferAmount != null && payment.onlineTransferAmount !== ''
-        ? String(payment.onlineTransferAmount)
-        : '',
-    onlineTransferReference: payment.onlineTransferReference || '',
-    onlineTransferBankAccountId: String(payment.onlineTransferBankAccountId ?? '').trim(),
+    cdmDeposits,
+    onlineTransfers,
     cheques,
     date: payment.date || todayYmdLocal(),
     note: payment.note || '',
@@ -251,8 +294,8 @@ export default function RecordPaymentModal({
     setForm({
       ...emptyForm(suggestNextPaymentReceiptNumber(payments)),
       customerId: prefillCustomerId || '',
-      cdmBankAccountId: bankDefaults.cdmBankAccountId,
-      onlineTransferBankAccountId: bankDefaults.onlineTransferBankAccountId,
+      cdmDeposits: [newCdmLine({ bankAccountId: bankDefaults.cdmBankAccountId })],
+      onlineTransfers: [newOnlineTransferLine({ bankAccountId: bankDefaults.onlineTransferBankAccountId })],
       cheques: [newChequeLine(defaults || {})],
     });
   }, [open, editPayment, prefillCustomerId, payments]);
@@ -279,8 +322,14 @@ export default function RecordPaymentModal({
         ...f,
         customerId: value,
         appliedBillIds: [],
-        cdmBankAccountId: bankDefaults.cdmBankAccountId || f.cdmBankAccountId,
-        onlineTransferBankAccountId: bankDefaults.onlineTransferBankAccountId || f.onlineTransferBankAccountId,
+        cdmDeposits: [
+          newCdmLine({ bankAccountId: bankDefaults.cdmBankAccountId || f.cdmDeposits[0]?.bankAccountId || '' }),
+        ],
+        onlineTransfers: [
+          newOnlineTransferLine({
+            bankAccountId: bankDefaults.onlineTransferBankAccountId || f.onlineTransfers[0]?.bankAccountId || '',
+          }),
+        ],
         cheques: [newChequeLine(defaults || {})],
       }));
       return;
@@ -375,9 +424,60 @@ export default function RecordPaymentModal({
     });
   };
 
+  const handleCdmChange = (key, field, value) => {
+    setForm((f) => ({
+      ...f,
+      cdmDeposits: f.cdmDeposits.map((line) => (line.key === key ? { ...line, [field]: value } : line)),
+    }));
+  };
+
+  const addCdmLine = () => {
+    setForm((f) => {
+      const template = f.cdmDeposits[0];
+      return {
+        ...f,
+        cdmDeposits: [...f.cdmDeposits, newCdmLine({ bankAccountId: template?.bankAccountId || '' })],
+      };
+    });
+  };
+
+  const removeCdmLine = (key) => {
+    setForm((f) => {
+      const next = f.cdmDeposits.filter((line) => line.key !== key);
+      return { ...f, cdmDeposits: next.length > 0 ? next : [newCdmLine()] };
+    });
+  };
+
+  const handleOnlineTransferChange = (key, field, value) => {
+    setForm((f) => ({
+      ...f,
+      onlineTransfers: f.onlineTransfers.map((line) => (line.key === key ? { ...line, [field]: value } : line)),
+    }));
+  };
+
+  const addOnlineTransferLine = () => {
+    setForm((f) => {
+      const template = f.onlineTransfers[0];
+      return {
+        ...f,
+        onlineTransfers: [
+          ...f.onlineTransfers,
+          newOnlineTransferLine({ bankAccountId: template?.bankAccountId || '' }),
+        ],
+      };
+    });
+  };
+
+  const removeOnlineTransferLine = (key) => {
+    setForm((f) => {
+      const next = f.onlineTransfers.filter((line) => line.key !== key);
+      return { ...f, onlineTransfers: next.length > 0 ? next : [newOnlineTransferLine()] };
+    });
+  };
+
   const chequeTotalPreview = form.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const cdmTotalPreview = Number(form.cdmAmount) || 0;
-  const onlineTransferTotalPreview = Number(form.onlineTransferAmount) || 0;
+  const cdmTotalPreview = form.cdmDeposits.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const onlineTransferTotalPreview = form.onlineTransfers.reduce((s, t) => s + (Number(t.amount) || 0), 0);
   const paymentTotalPreview =
     (Number(form.cashAmount) || 0) + chequeTotalPreview + cdmTotalPreview + onlineTransferTotalPreview;
 
@@ -407,24 +507,50 @@ export default function RecordPaymentModal({
       return;
     }
     const cash = Number(form.cashAmount) || 0;
-    const cdm = Number(form.cdmAmount) || 0;
-    const onlineTransfer = Number(form.onlineTransferAmount) || 0;
-    if (cdm > 0 && !String(form.cdmNumber).trim()) {
-      setSaveError('Enter a CDM number when CDM deposit amount is greater than 0.');
-      return;
+    const cdmLines = [];
+    for (let i = 0; i < form.cdmDeposits.length; i++) {
+      const line = form.cdmDeposits[i];
+      const amount = Number(line.amount) || 0;
+      if (amount <= 0) continue;
+      if (!String(line.cdmNumber).trim()) {
+        setSaveError(`CDM deposit ${i + 1}: enter a CDM number.`);
+        return;
+      }
+      if (!String(line.bankAccountId).trim()) {
+        setSaveError(`CDM deposit ${i + 1}: select a bank account.`);
+        return;
+      }
+      const entry = {
+        amount,
+        cdmNumber: String(line.cdmNumber).trim(),
+        bankAccountId: String(line.bankAccountId).trim(),
+      };
+      if (line.id) entry.id = line.id;
+      cdmLines.push(entry);
     }
-    if (cdm > 0 && !String(form.cdmBankAccountId).trim()) {
-      setSaveError('Select a bank account when CDM deposit amount is greater than 0.');
-      return;
+    const onlineLines = [];
+    for (let i = 0; i < form.onlineTransfers.length; i++) {
+      const line = form.onlineTransfers[i];
+      const amount = Number(line.amount) || 0;
+      if (amount <= 0) continue;
+      if (!String(line.reference).trim()) {
+        setSaveError(`Online transfer ${i + 1}: enter a transfer reference number.`);
+        return;
+      }
+      if (!String(line.bankAccountId).trim()) {
+        setSaveError(`Online transfer ${i + 1}: select a bank account.`);
+        return;
+      }
+      const entry = {
+        amount,
+        reference: String(line.reference).trim(),
+        bankAccountId: String(line.bankAccountId).trim(),
+      };
+      if (line.id) entry.id = line.id;
+      onlineLines.push(entry);
     }
-    if (onlineTransfer > 0 && !String(form.onlineTransferReference).trim()) {
-      setSaveError('Enter an online transfer reference number when online transfer amount is greater than 0.');
-      return;
-    }
-    if (onlineTransfer > 0 && !String(form.onlineTransferBankAccountId).trim()) {
-      setSaveError('Select a bank account when online transfer amount is greater than 0.');
-      return;
-    }
+    const cdm = cdmLines.reduce((s, d) => s + d.amount, 0);
+    const onlineTransfer = onlineLines.reduce((s, t) => s + t.amount, 0);
     const chequeLines = [];
     for (let i = 0; i < form.cheques.length; i++) {
       const line = form.cheques[i];
@@ -485,12 +611,8 @@ export default function RecordPaymentModal({
         billNumber: receiptNumber,
         appliedBillIds: form.appliedBillIds,
         cashAmount: cash,
-        cdmAmount: cdm,
-        cdmNumber: String(form.cdmNumber).trim(),
-        cdmBankAccountId: String(form.cdmBankAccountId).trim(),
-        onlineTransferAmount: onlineTransfer,
-        onlineTransferReference: String(form.onlineTransferReference).trim(),
-        onlineTransferBankAccountId: String(form.onlineTransferBankAccountId).trim(),
+        cdmDeposits: cdmLines,
+        onlineTransfers: onlineLines,
         cheques: chequeLines,
         date: lockDateToToday ? todayYmdLocal() : form.date,
         note: form.note.trim(),
@@ -709,102 +831,160 @@ export default function RecordPaymentModal({
                   />
                 </label>
                 <fieldset className="rounded-xl bg-sky-50/70 p-3 ring-1 ring-sky-100 sm:p-4">
-                  <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposit</legend>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Enter amount, CDM number, and the shop bank account. Credited when a manager approves.
-                  </p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="block text-sm font-medium text-slate-600">
-                      Amount (LKR)
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={form.cdmAmount}
-                        onChange={(e) => handleChange('cdmAmount', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="0"
-                      />
-                    </label>
-                    <label className="block text-sm font-medium text-slate-600">
-                      CDM number <span className="text-rose-600">*</span>
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        value={form.cdmNumber}
-                        onChange={(e) => handleChange('cdmNumber', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="e.g. CDM receipt / slip no."
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-3 block text-sm font-medium text-slate-600">
-                    Bank account <span className="text-rose-600">*</span>
-                    <select
-                      value={form.cdmBankAccountId}
-                      onChange={(e) => handleChange('cdmBankAccountId', e.target.value)}
-                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                      disabled={bankAccounts.length === 0}
+                  <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposits</legend>
+                  <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
+                    <p className="text-xs text-slate-500">
+                      Enter amount, CDM number, and the shop bank account. Credited when a manager approves.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={addCdmLine}
+                      className="shrink-0 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 shadow-sm transition hover:bg-sky-50"
                     >
-                      <option value="">
-                        {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
-                      </option>
-                      {bankAccounts.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {bankAccountOptionLabel(a)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      + Add CDM
+                    </button>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {form.cdmDeposits.map((line, index) => (
+                      <div key={line.key} className="rounded-xl bg-white/80 p-3 ring-1 ring-sky-100 sm:p-4">
+                        <div className="mb-3 flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            CDM {index + 1}
+                          </p>
+                          {form.cdmDeposits.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => removeCdmLine(line.key)}
+                              className="text-xs font-medium text-slate-500 hover:text-rose-600"
+                            >
+                              Remove
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="block text-sm font-medium text-slate-600">
+                            Amount (LKR)
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={line.amount}
+                              onChange={(e) => handleCdmChange(line.key, 'amount', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="0"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600">
+                            CDM number <span className="text-rose-600">*</span>
+                            <input
+                              type="text"
+                              autoComplete="off"
+                              value={line.cdmNumber}
+                              onChange={(e) => handleCdmChange(line.key, 'cdmNumber', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="e.g. CDM receipt / slip no."
+                            />
+                          </label>
+                        </div>
+                        <label className="mt-3 block text-sm font-medium text-slate-600">
+                          Bank account <span className="text-rose-600">*</span>
+                          <select
+                            value={line.bankAccountId}
+                            onChange={(e) => handleCdmChange(line.key, 'bankAccountId', e.target.value)}
+                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            disabled={bankAccounts.length === 0}
+                          >
+                            <option value="">
+                              {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                            </option>
+                            {bankAccounts.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {bankAccountOptionLabel(a)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </fieldset>
                 <fieldset className="rounded-xl bg-teal-50/70 p-3 ring-1 ring-teal-100 sm:p-4">
-                  <legend className="px-1 text-sm font-semibold text-slate-800">Online transfer</legend>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Enter amount, bank reference, and the shop bank account. Credited when a manager approves.
-                  </p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="block text-sm font-medium text-slate-600">
-                      Amount (LKR)
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={form.onlineTransferAmount}
-                        onChange={(e) => handleChange('onlineTransferAmount', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="0"
-                      />
-                    </label>
-                    <label className="block text-sm font-medium text-slate-600">
-                      Transfer reference # <span className="text-rose-600">*</span>
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        value={form.onlineTransferReference}
-                        onChange={(e) => handleChange('onlineTransferReference', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="e.g. bank ref / transaction ID"
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-3 block text-sm font-medium text-slate-600">
-                    Bank account <span className="text-rose-600">*</span>
-                    <select
-                      value={form.onlineTransferBankAccountId}
-                      onChange={(e) => handleChange('onlineTransferBankAccountId', e.target.value)}
-                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                      disabled={bankAccounts.length === 0}
+                  <legend className="px-1 text-sm font-semibold text-slate-800">Online transfers</legend>
+                  <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
+                    <p className="text-xs text-slate-500">
+                      Enter amount, bank reference, and the shop bank account. Credited when a manager approves.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={addOnlineTransferLine}
+                      className="shrink-0 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-semibold text-teal-800 shadow-sm transition hover:bg-teal-50"
                     >
-                      <option value="">
-                        {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
-                      </option>
-                      {bankAccounts.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {bankAccountOptionLabel(a)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      + Add transfer
+                    </button>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {form.onlineTransfers.map((line, index) => (
+                      <div key={line.key} className="rounded-xl bg-white/80 p-3 ring-1 ring-teal-100 sm:p-4">
+                        <div className="mb-3 flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Transfer {index + 1}
+                          </p>
+                          {form.onlineTransfers.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => removeOnlineTransferLine(line.key)}
+                              className="text-xs font-medium text-slate-500 hover:text-rose-600"
+                            >
+                              Remove
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="block text-sm font-medium text-slate-600">
+                            Amount (LKR)
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={line.amount}
+                              onChange={(e) => handleOnlineTransferChange(line.key, 'amount', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="0"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600">
+                            Transfer reference # <span className="text-rose-600">*</span>
+                            <input
+                              type="text"
+                              autoComplete="off"
+                              value={line.reference}
+                              onChange={(e) => handleOnlineTransferChange(line.key, 'reference', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              placeholder="e.g. bank ref / transaction ID"
+                            />
+                          </label>
+                        </div>
+                        <label className="mt-3 block text-sm font-medium text-slate-600">
+                          Bank account <span className="text-rose-600">*</span>
+                          <select
+                            value={line.bankAccountId}
+                            onChange={(e) => handleOnlineTransferChange(line.key, 'bankAccountId', e.target.value)}
+                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            disabled={bankAccounts.length === 0}
+                          >
+                            <option value="">
+                              {bankAccounts.length === 0 ? 'No accounts — add under Shop' : 'Select account…'}
+                            </option>
+                            {bankAccounts.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {bankAccountOptionLabel(a)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </fieldset>
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">

@@ -215,10 +215,13 @@ const {
 const {
   parseOtherPaymentMethodsFromBody,
   resolveOtherMethodBankAccounts,
+  resolveApprovalBankAccounts,
   attachOtherPaymentMethodsToRow,
   attachApprovalMetaToRow,
   cdmPortion,
   onlineTransferPortion,
+  getPaymentCdmDeposits,
+  getPaymentOnlineTransfers,
   isPaymentApprovalPending,
   isPaymentCreditActive,
 } = require('./models/paymentOtherMethods');
@@ -315,6 +318,12 @@ const {
   promotionCreditAmount,
   computeInvoiceDiscountAmount,
 } = require('./models/promotionsStore');
+const {
+  readPromotionRules,
+  writePromotionRules,
+  buildPromotionRuleRow,
+  computeBillRuleCashback,
+} = require('./models/promotionRulesStore');
 const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./models/unloadsStore');
 const {
   getBagProducts,
@@ -1116,14 +1125,14 @@ function paymentSettlementSummary(p) {
   }
   const parts = [];
   if (cash > 0) parts.push(`cash LKR ${cash}`);
-  if (cdm > 0) {
-    let s = `CDM LKR ${cdm}`;
-    if (p.cdmNumber) s += ` #${p.cdmNumber}`;
+  for (const d of getPaymentCdmDeposits(p)) {
+    let s = `CDM LKR ${d.amount}`;
+    if (d.cdmNumber) s += ` #${d.cdmNumber}`;
     parts.push(s);
   }
-  if (onlineTransfer > 0) {
-    let s = `online transfer LKR ${onlineTransfer}`;
-    if (p.onlineTransferReference) s += ` ref ${p.onlineTransferReference}`;
+  for (const t of getPaymentOnlineTransfers(p)) {
+    let s = `online transfer LKR ${t.amount}`;
+    if (t.reference) s += ` ref ${t.reference}`;
     parts.push(s);
   }
   for (const line of chequeLines) {
@@ -1324,6 +1333,65 @@ function ensureBillInvoiceNumbers(bills) {
     changed = true;
   }
   return changed;
+}
+
+async function syncBillRuleCashback(bill, { enteredBy, products, promotions }) {
+  const promoRows = Array.isArray(promotions) ? promotions : await readPromotions();
+  const existingIdx = promoRows.findIndex(
+    (p) =>
+      promotionType(p) === PROMOTION_TYPES.RULE_CASHBACK &&
+      String(p.billId ?? '').trim() === String(bill?.id ?? '').trim(),
+  );
+
+  const customers = await readCustomers();
+  const cust = customers.find(
+    (c) => normalizeCustomerName(c.name) === normalizeCustomerName(bill?.customerName),
+  );
+  const rules = await readPromotionRules();
+  const computed = cust
+    ? computeBillRuleCashback(bill, rules, cust.id, products)
+    : { discountAmount: 0, lines: [], ruleIds: [] };
+
+  if (computed.discountAmount <= 0) {
+    if (existingIdx >= 0) {
+      promoRows.splice(existingIdx, 1);
+      await writePromotions(promoRows);
+    }
+    return promoRows;
+  }
+
+  if (!cust) return promoRows;
+
+  const payload = {
+    type: PROMOTION_TYPES.RULE_CASHBACK,
+    date: bill.date,
+    customerId: cust.id,
+    customerName: cust.name,
+    billId: bill.id,
+    invoiceNumber: bill.invoiceNumber || '',
+    discountAmount: computed.discountAmount,
+    cashbackLines: computed.lines,
+    ruleIds: computed.ruleIds,
+    reason: 'Promotion rule cashback',
+  };
+
+  if (existingIdx >= 0) {
+    promoRows[existingIdx] = {
+      ...promoRows[existingIdx],
+      ...payload,
+      updatedBy: enteredBy,
+      updatedAt: new Date().toISOString(),
+    };
+  } else {
+    promoRows.push({
+      id: `promo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...payload,
+      enteredBy,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  await writePromotions(promoRows);
+  return promoRows;
 }
 
 async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameKeys) {
@@ -2213,6 +2281,8 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
     };
     await writeUnloads(unloads);
 
+    await syncBillRuleCashback(billRow, { enteredBy, products, promotions });
+
     const paymentsList = await readPayments();
     await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
 
@@ -2350,17 +2420,9 @@ app.post('/api/payment-requests/:id/approve', async (req, res) => {
       return res.status(400).json({ error: 'This payment request is no longer pending' });
     }
     const shopForBanks = await readShopData();
-    const resolvedBanks = resolveOtherMethodBankAccounts(
-      {
-        cdmAmount: cdmPortion(existing),
-        cdmNumber: String(existing.cdmNumber ?? '').trim(),
-        cdmBankAccountId: String(body.cdmBankAccountId ?? existing.cdmBankAccountId ?? '').trim(),
-        onlineTransferAmount: onlineTransferPortion(existing),
-        onlineTransferReference: String(existing.onlineTransferReference ?? '').trim(),
-        onlineTransferBankAccountId: String(
-          body.onlineTransferBankAccountId ?? existing.onlineTransferBankAccountId ?? '',
-        ).trim(),
-      },
+    const resolvedBanks = resolveApprovalBankAccounts(
+      existing,
+      body,
       shopForBanks.bankAccounts || [],
     );
     if (resolvedBanks.error) {
@@ -2769,9 +2831,12 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
         typeLabel = 'Invoice discount';
       } else if (pType === PROMOTION_TYPES.TARGET_PROMOTION) {
         typeLabel = 'Target promotion';
+      } else if (pType === PROMOTION_TYPES.RULE_CASHBACK) {
+        typeLabel = 'Cashback';
       }
       const details = [
-        pType === PROMOTION_TYPES.INVOICE_DISCOUNT && promo.invoiceNumber
+        (pType === PROMOTION_TYPES.INVOICE_DISCOUNT || pType === PROMOTION_TYPES.RULE_CASHBACK) &&
+        promo.invoiceNumber
           ? `Invoice ${promo.invoiceNumber}`
           : null,
         promo.reason,
@@ -4106,6 +4171,131 @@ app.delete('/api/promotions/:id', async (req, res) => {
   }
 });
 
+/** Promotion rules: per-customer cashback amounts by product for a date range. */
+async function resolvePromotionRuleCustomer(body) {
+  const customerId = String(body.customerId ?? '').trim();
+  if (!customerId) {
+    return { ok: false, error: 'customerId is required' };
+  }
+  const customers = await readCustomers();
+  const cust = customers.find((c) => c.id === customerId);
+  if (!cust) {
+    return { ok: false, error: 'Customer not found' };
+  }
+  return { ok: true, cust };
+}
+
+app.get('/api/promotion-rules', async (req, res) => {
+  try {
+    const rows = await readPromotionRules();
+    const sorted = [...rows].sort((a, b) => {
+      const sa = String(a.startDate || '');
+      const sb = String(b.startDate || '');
+      if (sa !== sb) return sb.localeCompare(sa);
+      const ea = String(a.endDate || '');
+      const eb = String(b.endDate || '');
+      if (ea !== eb) return eb.localeCompare(ea);
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read promotion rules' });
+  }
+});
+
+app.post('/api/promotion-rules', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const enteredBy = String(body.enteredBy ?? '').trim();
+    if (!enteredBy) {
+      return res.status(400).json({ error: 'enteredBy (username) is required' });
+    }
+    const customer = await resolvePromotionRuleCustomer(body);
+    if (!customer.ok) {
+      return res.status(400).json({ error: customer.error });
+    }
+    const products = await getBagProducts();
+    const built = buildPromotionRuleRow(body, { customer: customer.cust, products });
+    if (!built.ok) {
+      return res.status(400).json({ error: built.error });
+    }
+    const row = {
+      id: `prule-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...built.row,
+      enteredBy,
+      createdAt: new Date().toISOString(),
+    };
+    const rules = await readPromotionRules();
+    rules.push(row);
+    await writePromotionRules(rules);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save promotion rule' });
+  }
+});
+
+app.patch('/api/promotion-rules/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Promotion rule id is required' });
+    }
+    const body = req.body || {};
+    const updatedBy = String(body.updatedBy ?? body.enteredBy ?? '').trim();
+    if (!updatedBy) {
+      return res.status(400).json({ error: 'updatedBy (username) is required' });
+    }
+    const rules = await readPromotionRules();
+    const idx = rules.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Promotion rule not found' });
+    }
+    const customer = await resolvePromotionRuleCustomer(body);
+    if (!customer.ok) {
+      return res.status(400).json({ error: customer.error });
+    }
+    const products = await getBagProducts();
+    const built = buildPromotionRuleRow(body, { customer: customer.cust, products });
+    if (!built.ok) {
+      return res.status(400).json({ error: built.error });
+    }
+    const row = {
+      ...rules[idx],
+      ...built.row,
+      updatedBy,
+      updatedAt: new Date().toISOString(),
+    };
+    rules[idx] = row;
+    await writePromotionRules(rules);
+    res.json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update promotion rule' });
+  }
+});
+
+app.delete('/api/promotion-rules/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Promotion rule id is required' });
+    }
+    const rules = await readPromotionRules();
+    const idx = rules.findIndex((r) => r.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Promotion rule not found' });
+    }
+    rules.splice(idx, 1);
+    await writePromotionRules(rules);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to delete promotion rule' });
+  }
+});
+
 app.get('/api/activity', async (req, res) => {
   try {
     const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit), 10) || 5));
@@ -4252,6 +4442,8 @@ app.post('/api/bills', async (req, res) => {
     bills.push(row);
     await writeBills(bills);
 
+    await syncBillRuleCashback(row, { enteredBy, products, promotions });
+
     const paymentsList = await readPayments();
     await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
 
@@ -4348,6 +4540,8 @@ app.patch('/api/bills/:id', async (req, res) => {
     };
     bills[idx] = row;
     await writeBills(bills);
+
+    await syncBillRuleCashback(row, { enteredBy: updatedBy, products, promotions });
 
     const paymentsList = await readPayments();
     await refreshCustomerBalancesForBillNames(

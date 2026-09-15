@@ -10,16 +10,23 @@ const PROMOTION_TYPES = {
   FREE_BAGS: 'free_bags',
   INVOICE_DISCOUNT: 'invoice_discount',
   TARGET_PROMOTION: 'target_promotion',
+  RULE_CASHBACK: 'rule_cashback',
 };
 
 function roundMoney(n) {
   return Math.round(n * 100) / 100;
 }
 
-/** @returns {'free_bags' | 'invoice_discount' | 'target_promotion'} */
+/** @returns {'free_bags' | 'invoice_discount' | 'target_promotion' | 'rule_cashback'} */
 function promotionType(row) {
   const t = String(row?.type ?? '').trim();
-  if (t === PROMOTION_TYPES.INVOICE_DISCOUNT || t === PROMOTION_TYPES.TARGET_PROMOTION) return t;
+  if (
+    t === PROMOTION_TYPES.INVOICE_DISCOUNT ||
+    t === PROMOTION_TYPES.TARGET_PROMOTION ||
+    t === PROMOTION_TYPES.RULE_CASHBACK
+  ) {
+    return t;
+  }
   return PROMOTION_TYPES.FREE_BAGS;
 }
 
@@ -27,24 +34,38 @@ function isFreeBagPromotion(row) {
   return promotionType(row) === PROMOTION_TYPES.FREE_BAGS;
 }
 
-function promotionCreditAmount(row) {
+function isLedgerCreditPromotion(row) {
   const type = promotionType(row);
-  if (type === PROMOTION_TYPES.INVOICE_DISCOUNT || type === PROMOTION_TYPES.TARGET_PROMOTION) {
-    return toNonNegMoney(row.discountAmount);
-  }
-  return 0;
+  return (
+    type === PROMOTION_TYPES.INVOICE_DISCOUNT ||
+    type === PROMOTION_TYPES.TARGET_PROMOTION ||
+    type === PROMOTION_TYPES.RULE_CASHBACK
+  );
 }
 
-function sumInvoiceDiscountForBill(promotions, billId) {
+function promotionCreditAmount(row) {
+  if (!isLedgerCreditPromotion(row)) return 0;
+  return toNonNegMoney(row.discountAmount);
+}
+
+function sumPromotionCreditsForBill(promotions, billId, type) {
   const id = String(billId ?? '').trim();
   if (!id) return 0;
   let sum = 0;
   for (const row of Array.isArray(promotions) ? promotions : []) {
-    if (promotionType(row) !== PROMOTION_TYPES.INVOICE_DISCOUNT) continue;
+    if (promotionType(row) !== type) continue;
     if (String(row.billId ?? '').trim() !== id) continue;
     sum += promotionCreditAmount(row);
   }
   return roundMoney(sum);
+}
+
+function sumInvoiceDiscountForBill(promotions, billId) {
+  return sumPromotionCreditsForBill(promotions, billId, PROMOTION_TYPES.INVOICE_DISCOUNT);
+}
+
+function sumRuleCashbackForBill(promotions, billId) {
+  return sumPromotionCreditsForBill(promotions, billId, PROMOTION_TYPES.RULE_CASHBACK);
 }
 
 function totalBagsOnBill(bill, products) {
@@ -119,8 +140,10 @@ module.exports = {
   PROMOTION_TYPES,
   promotionType,
   isFreeBagPromotion,
+  isLedgerCreditPromotion,
   promotionCreditAmount,
   sumInvoiceDiscountForBill,
+  sumRuleCashbackForBill,
   computeInvoiceDiscountAmount,
   totalBagsOnBill,
 };

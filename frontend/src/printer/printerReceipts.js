@@ -1,5 +1,5 @@
 import { formatBrandLabel, getCachedBrands } from '../dashboard/brandTheme';
-import { cashPortion, cdmPortion, chequePortion, getPaymentCheques, onlineTransferPortion } from '../dashboard/paymentCheques';
+import { cashPortion, cdmPortion, chequePortion, getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from '../dashboard/paymentCheques';
 import { getPaymentReceiptInvoices } from '../dashboard/paymentReceipt';
 import { printEscPosLines } from './bluetoothPrinter';
 
@@ -223,6 +223,8 @@ export function buildPaymentReceiptLines(payment, shop) {
   const cdm = cdmPortion(payment);
   const online = onlineTransferPortion(payment);
   const cheques = getPaymentCheques(payment);
+  const cdmDeposits = getPaymentCdmDeposits(payment);
+  const onlineTransfers = getPaymentOnlineTransfers(payment);
   const lines = [
     ...shopLines(shop),
     { kind: 'align', value: 'center' },
@@ -263,23 +265,32 @@ export function buildPaymentReceiptLines(payment, shop) {
       });
     }
   }
-  if (cdm > 0 && (payment?.cdmNumber || payment?.cdmBankAccount || payment?.cdmBankAccountId)) {
+  if (cdmDeposits.length > 0) {
     lines.push({ kind: 'blank' });
-    lines.push({ text: 'CDM details', bold: true });
-    if (payment?.cdmNumber) {
-      lines.push({ kind: 'cols', left: 'Slip no.', right: display(payment.cdmNumber) });
+    lines.push({ text: cdmDeposits.length === 1 ? 'CDM details' : 'CDM deposits', bold: true });
+    for (const d of cdmDeposits) {
+      const bits = [d.cdmNumber ? `#${d.cdmNumber}` : null].filter(Boolean);
+      const bank = bankAccountLabel(d.bankAccount, d.bankAccountId);
+      lines.push({
+        kind: 'cols',
+        left: bits.join('  ') || 'CDM deposit',
+        right: money(d.amount),
+      });
+      if (bank) lines.push({ kind: 'cols', left: 'Bank', right: bank });
     }
-    const cdmBank = bankAccountLabel(payment?.cdmBankAccount, payment?.cdmBankAccountId);
-    if (cdmBank) lines.push({ kind: 'cols', left: 'Bank', right: cdmBank });
   }
-  if (online > 0 && (payment?.onlineTransferReference || payment?.onlineTransferBankAccount || payment?.onlineTransferBankAccountId)) {
+  if (onlineTransfers.length > 0) {
     lines.push({ kind: 'blank' });
-    lines.push({ text: 'Transfer details', bold: true });
-    if (payment?.onlineTransferReference) {
-      lines.push({ kind: 'cols', left: 'Reference', right: display(payment.onlineTransferReference) });
+    lines.push({ text: onlineTransfers.length === 1 ? 'Transfer details' : 'Online transfers', bold: true });
+    for (const t of onlineTransfers) {
+      lines.push({
+        kind: 'cols',
+        left: t.reference ? `Ref ${t.reference}` : 'Online transfer',
+        right: money(t.amount),
+      });
+      const onlineBank = bankAccountLabel(t.bankAccount, t.bankAccountId);
+      if (onlineBank) lines.push({ kind: 'cols', left: 'Bank', right: onlineBank });
     }
-    const onlineBank = bankAccountLabel(payment?.onlineTransferBankAccount, payment?.onlineTransferBankAccountId);
-    if (onlineBank) lines.push({ kind: 'cols', left: 'Bank', right: onlineBank });
   }
 
   lines.push({ kind: 'rule', char: '=' });

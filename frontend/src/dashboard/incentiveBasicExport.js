@@ -11,6 +11,7 @@ const TABLE_HEAD = [
     'StockID',
     'Invoice number',
     'Bag type',
+    'Door step',
     'No. Bags',
     'Bag Price in Invoice',
     'Transport Cost',
@@ -20,6 +21,10 @@ const TABLE_HEAD = [
     'Total Incentive',
   ],
 ];
+
+function doorStepLabel(doorStep) {
+  return doorStep ? 'Yes' : 'No';
+}
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -147,6 +152,7 @@ export function buildLoadBasedBasicIncentiveRows(loadRows) {
       cutOffPrice: r.cutOffPrice,
       totalCostPerBag,
       invoiceNumber: r.invoiceNumber ?? '—',
+      doorStep: !!r.doorStep,
       basicIncentivePerBag,
       basicTotalIncentive,
     };
@@ -286,6 +292,7 @@ export function buildStockWiseExportRows(rows) {
         transportPerBag: row.transportPerBag,
         cutOffPrice: row.cutOffPrice,
         totalCostPerBag: row.totalCostPerBag,
+        doorStep: !!row.doorStep,
         basicIncentivePerBag: row.basicIncentivePerBag,
         basicTotalIncentive: incentive != null ? Number(incentive) : null,
       });
@@ -371,6 +378,7 @@ function rowToCells(r) {
       '',
       `${String(r.shopLocation ?? r.shop ?? '')} total`,
       '',
+      '',
       Number(r.bags) || 0,
       '',
       '',
@@ -384,6 +392,7 @@ function rowToCells(r) {
     return [
       '',
       `${String(r.stockId ?? '')} total`,
+      '',
       '',
       '',
       Number(r.bags) || 0,
@@ -400,6 +409,7 @@ function rowToCells(r) {
     String(r.stockId ?? ''),
     String(r.invoiceNumber ?? r.shopLocation ?? r.shop ?? '—'),
     String(r.brandLabel ?? ''),
+    doorStepLabel(r.doorStep),
     Number(r.bags) || 0,
     r.perBagPrice,
     r.transportPerBag,
@@ -416,6 +426,7 @@ const STOCK_WISE_TABLE_HEAD = [
     'StockID',
     'Invoice number',
     'Bag type',
+    'Door step',
     'No. Bags',
     'Bag Price in Invoice',
     'Transport Cost',
@@ -434,6 +445,7 @@ function stockWiseRowToCells(r) {
       `${String(r.stockId ?? '')} total`,
       '',
       '',
+      '',
       Number(r.bags) || 0,
       '',
       '',
@@ -449,6 +461,7 @@ function stockWiseRowToCells(r) {
     String(r.stockId ?? ''),
     String(r.invoiceNumber ?? '—'),
     String(r.brandLabel ?? ''),
+    doorStepLabel(r.doorStep),
     Number(r.bags) || 0,
     r.perBagPrice,
     r.transportPerBag,
@@ -501,11 +514,12 @@ function renderStockWiseTable(doc, groupedRows, options = {}) {
   const body =
     safeRows.length > 0
       ? safeRows.map(stockWiseRowToCells)
-      : [['—', '—', '—', '—', 0, '', '', '', '', '', '', '']];
+      : [['—', '—', '—', '—', '—', 0, '', '', '', '', '', '', '']];
   const totals = computeGrandTotals(safeRows);
   const foot = [
     [
       'Grand total',
+      '',
       '',
       '',
       '',
@@ -520,8 +534,8 @@ function renderStockWiseTable(doc, groupedRows, options = {}) {
     ],
   ];
 
-  const ratios = [0.07, 0.07, 0.08, 0.07, 0.06, 0.09, 0.08, 0.09, 0.09, 0.08, 0.08, 0.09];
-  const amountCols = new Set([4, 5, 6, 7, 8, 9, 10, 11]);
+  const ratios = [0.06, 0.07, 0.08, 0.07, 0.06, 0.06, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.12];
+  const amountCols = new Set([6, 7, 8, 9, 10, 11, 12]);
   const formatAmounts = amountCellHook(amountCols);
 
   autoTable(doc, {
@@ -550,7 +564,7 @@ function renderStockWiseTable(doc, groupedRows, options = {}) {
         index,
         {
           cellWidth: contentW * ratio,
-          ...(index >= 4 ? { halign: 'right' } : {}),
+          ...(index >= 5 ? { halign: 'right' } : {}),
         },
       ]),
     ),
@@ -561,7 +575,7 @@ function renderStockWiseTable(doc, groupedRows, options = {}) {
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.fillColor = [241, 245, 249];
       }
-      if (data.column.index === 4) {
+      if (data.column.index === 5) {
         const raw = data.cell.raw;
         if (raw != null && raw !== '' && raw !== '—') {
           data.cell.text = [String(Number(raw) || 0)];
@@ -612,11 +626,12 @@ function renderBasicIncentiveTable(doc, groupedRows, options = {}) {
   doc.setTextColor(0, 0, 0);
 
   const body =
-    safeRows.length > 0 ? safeRows.map(rowToCells) : [['—', '—', '—', '—', 0, '', '', '', '', '', '']];
+    safeRows.length > 0 ? safeRows.map(rowToCells) : [['—', '—', '—', '—', '—', 0, '', '', '', '', '', '']];
   const totals = computeGrandTotals(safeRows);
   const foot = [
     [
       'Grand total',
+      '',
       '',
       '',
       '',
@@ -630,8 +645,8 @@ function renderBasicIncentiveTable(doc, groupedRows, options = {}) {
     ],
   ];
 
-  const ratios = [0.08, 0.07, 0.14, 0.08, 0.06, 0.09, 0.08, 0.09, 0.09, 0.09, 0.13];
-  const amountCols = new Set([5, 6, 7, 8, 9, 10]);
+  const ratios = [0.07, 0.07, 0.12, 0.08, 0.07, 0.06, 0.08, 0.08, 0.09, 0.09, 0.09, 0.10];
+  const amountCols = new Set([6, 7, 8, 9, 10, 11]);
   const formatAmounts = amountCellHook(amountCols);
 
   autoTable(doc, {
@@ -659,7 +674,7 @@ function renderBasicIncentiveTable(doc, groupedRows, options = {}) {
         index,
         {
           cellWidth: contentW * ratio,
-          ...(index >= 4 ? { halign: 'right' } : {}),
+          ...(index >= 5 ? { halign: 'right' } : {}),
         },
       ]),
     ),
@@ -670,7 +685,7 @@ function renderBasicIncentiveTable(doc, groupedRows, options = {}) {
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.fillColor = [241, 245, 249];
       }
-      if (data.column.index === 4) {
+      if (data.column.index === 5) {
         const raw = data.cell.raw;
         if (raw != null && raw !== '' && raw !== '—') {
           data.cell.text = [String(Number(raw) || 0)];
@@ -706,6 +721,7 @@ function writeBasicIncentiveExcel(groupedRows, options = {}) {
     { wch: 12 },
     { wch: 36 },
     { wch: 14 },
+    { wch: 12 },
     { wch: 10 },
     { wch: 18 },
     { wch: 14 },
@@ -745,6 +761,7 @@ function writeStockWiseIncentiveExcel(groupedRows, options = {}) {
             '',
             '',
             '',
+            '',
             totals.bags,
             '',
             '',
@@ -763,6 +780,7 @@ function writeStockWiseIncentiveExcel(groupedRows, options = {}) {
     { wch: 12 },
     { wch: 14 },
     { wch: 14 },
+    { wch: 12 },
     { wch: 10 },
     { wch: 18 },
     { wch: 14 },

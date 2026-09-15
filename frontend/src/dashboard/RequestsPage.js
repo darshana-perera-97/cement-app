@@ -21,7 +21,7 @@ import {
   modalPanelClass,
   ModalBackdrop,
 } from './tableToolbar';
-import { getPaymentCheques, cdmPortion, onlineTransferPortion } from './paymentCheques';
+import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 
 const apiBase = getApiBase();
@@ -67,20 +67,18 @@ function bankAccountSnapLabel(snap, fallbackId = '') {
 
 function paymentRequestSummary(row) {
   const parts = [];
-  const cdm = cdmPortion(row);
-  const online = onlineTransferPortion(row);
-  if (cdm > 0) {
-    const bank = bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId);
+  const cdmDeposits = getPaymentCdmDeposits(row);
+  const onlineTransfers = getPaymentOnlineTransfers(row);
+  for (const d of cdmDeposits) {
+    const bank = bankAccountSnapLabel(d.bankAccount, d.bankAccountId);
     parts.push(
-      `CDM ${money(cdm)}${row.cdmNumber ? ` · ${row.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      `CDM ${money(d.amount)}${d.cdmNumber ? ` · ${d.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     );
   }
-  if (online > 0) {
-    const bank = bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId);
+  for (const t of onlineTransfers) {
+    const bank = bankAccountSnapLabel(t.bankAccount, t.bankAccountId);
     parts.push(
-      `Online ${money(online)}${row.onlineTransferReference ? ` · ${row.onlineTransferReference}` : ''}${
-        bank !== '—' ? ` · ${bank}` : ''
-      }`,
+      `Online ${money(t.amount)}${t.reference ? ` · ${t.reference}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     );
   }
   const cheques = getPaymentCheques(row);
@@ -100,22 +98,20 @@ function paymentApprovalBreakdown(row) {
   const lines = [];
   const cash = Number(row.cashAmount) || 0;
   if (cash > 0) lines.push({ label: 'Cash', value: money(cash) });
-  const cdm = cdmPortion(row);
-  if (cdm > 0) {
-    const bank = bankAccountSnapLabel(row.cdmBankAccount, row.cdmBankAccountId);
+  const cdmDeposits = getPaymentCdmDeposits(row);
+  for (const d of cdmDeposits) {
+    const bank = bankAccountSnapLabel(d.bankAccount, d.bankAccountId);
     lines.push({
       label: 'CDM deposit',
-      value: `${money(cdm)}${row.cdmNumber ? ` · #${row.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      value: `${money(d.amount)}${d.cdmNumber ? ` · #${d.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     });
   }
-  const online = onlineTransferPortion(row);
-  if (online > 0) {
-    const bank = bankAccountSnapLabel(row.onlineTransferBankAccount, row.onlineTransferBankAccountId);
+  const onlineTransfers = getPaymentOnlineTransfers(row);
+  for (const t of onlineTransfers) {
+    const bank = bankAccountSnapLabel(t.bankAccount, t.bankAccountId);
     lines.push({
       label: 'Online transfer',
-      value: `${money(online)}${row.onlineTransferReference ? ` · ref ${row.onlineTransferReference}` : ''}${
-        bank !== '—' ? ` · ${bank}` : ''
-      }`,
+      value: `${money(t.amount)}${t.reference ? ` · ref ${t.reference}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     });
   }
   for (const c of getPaymentCheques(row)) {
@@ -197,8 +193,8 @@ export default function RequestsPage() {
   const [rejectingId, setRejectingId] = useState(null);
   const [detailRow, setDetailRow] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
-  const [approveCdmBankAccountId, setApproveCdmBankAccountId] = useState('');
-  const [approveOnlineBankAccountId, setApproveOnlineBankAccountId] = useState('');
+  const [approveCdmBanks, setApproveCdmBanks] = useState({});
+  const [approveOnlineBanks, setApproveOnlineBanks] = useState({});
 
   const load = useCallback(async () => {
     setError(null);
@@ -271,8 +267,12 @@ export default function RequestsPage() {
       setPriceForm({});
       setLastPreview(null);
       setLastPopupOpen(false);
-      setApproveCdmBankAccountId(String(row.cdmBankAccountId ?? '').trim());
-      setApproveOnlineBankAccountId(String(row.onlineTransferBankAccountId ?? '').trim());
+      setApproveCdmBanks(
+        Object.fromEntries(getPaymentCdmDeposits(row).map((d) => [d.id, String(d.bankAccountId ?? '').trim()])),
+      );
+      setApproveOnlineBanks(
+        Object.fromEntries(getPaymentOnlineTransfers(row).map((t) => [t.id, String(t.bankAccountId ?? '').trim()])),
+      );
       return;
     }
     setPriceForm(emptyPriceForm(row, brands));
@@ -336,17 +336,29 @@ export default function RequestsPage() {
     setSaveError(null);
     try {
       if (approveRow.requestKind === 'payment') {
-        const cdm = cdmPortion(approveRow);
-        const online = onlineTransferPortion(approveRow);
-        if (cdm > 0 && !String(approveCdmBankAccountId).trim()) {
-          setSaveError('Select a bank account for CDM deposit.');
-          setSaving(false);
-          return;
+        const cdmDeposits = getPaymentCdmDeposits(approveRow);
+        const onlineTransfers = getPaymentOnlineTransfers(approveRow);
+        for (const d of cdmDeposits) {
+          if (!String(approveCdmBanks[d.id] ?? '').trim()) {
+            setSaveError(
+              cdmDeposits.length > 1
+                ? `Select a bank account for CDM ${d.cdmNumber ? `#${d.cdmNumber}` : 'deposit'}.`
+                : 'Select a bank account for CDM deposit.',
+            );
+            setSaving(false);
+            return;
+          }
         }
-        if (online > 0 && !String(approveOnlineBankAccountId).trim()) {
-          setSaveError('Select a bank account for online transfer.');
-          setSaving(false);
-          return;
+        for (const t of onlineTransfers) {
+          if (!String(approveOnlineBanks[t.id] ?? '').trim()) {
+            setSaveError(
+              onlineTransfers.length > 1
+                ? `Select a bank account for online transfer${t.reference ? ` ${t.reference}` : ''}.`
+                : 'Select a bank account for online transfer.',
+            );
+            setSaving(false);
+            return;
+          }
         }
         const res = await authFetch(
           `${apiBase}/api/payment-requests/${encodeURIComponent(approveRow.id)}/approve`,
@@ -355,8 +367,16 @@ export default function RequestsPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               approvedBy: getUsername(),
-              cdmBankAccountId: String(approveCdmBankAccountId).trim(),
-              onlineTransferBankAccountId: String(approveOnlineBankAccountId).trim(),
+              cdmDeposits: cdmDeposits.map((d) => ({
+                id: d.id,
+                bankAccountId: String(approveCdmBanks[d.id] ?? '').trim(),
+              })),
+              onlineTransfers: onlineTransfers.map((t) => ({
+                id: t.id,
+                bankAccountId: String(approveOnlineBanks[t.id] ?? '').trim(),
+              })),
+              cdmBankAccountId: String(approveCdmBanks[cdmDeposits[0]?.id] ?? '').trim(),
+              onlineTransferBankAccountId: String(approveOnlineBanks[onlineTransfers[0]?.id] ?? '').trim(),
             }),
           },
         );
@@ -625,18 +645,21 @@ export default function RequestsPage() {
                   </ul>
                 </div>
 
-                {cdmPortion(approveRow) > 0 ? (
-                  <div className="mt-3 rounded-xl bg-sky-50 px-3 py-2.5 text-sm ring-1 ring-sky-100">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">CDM deposit</p>
-                    {approveRow.cdmNumber ? (
-                      <p className="mt-1 font-mono text-sky-950">{approveRow.cdmNumber}</p>
-                    ) : null}
+                {getPaymentCdmDeposits(approveRow).map((d, index, list) => (
+                  <div key={d.id || index} className="mt-3 rounded-xl bg-sky-50 px-3 py-2.5 text-sm ring-1 ring-sky-100">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
+                      {list.length > 1 ? `CDM deposit ${index + 1}` : 'CDM deposit'}
+                    </p>
+                    <p className="mt-1 font-semibold tabular-nums text-sky-950">{money(d.amount)}</p>
+                    {d.cdmNumber ? <p className="mt-0.5 font-mono text-sky-950">{d.cdmNumber}</p> : null}
                     <label className="mt-2 block text-xs font-medium text-sky-800">
                       Credit to bank account <span className="text-rose-600">*</span>
                       <select
                         required
-                        value={approveCdmBankAccountId}
-                        onChange={(e) => setApproveCdmBankAccountId(e.target.value)}
+                        value={approveCdmBanks[d.id] || ''}
+                        onChange={(e) =>
+                          setApproveCdmBanks((prev) => ({ ...prev, [d.id]: e.target.value }))
+                        }
                         className="mt-1 w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-sky-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
                         disabled={bankAccounts.length === 0}
                       >
@@ -651,19 +674,22 @@ export default function RequestsPage() {
                       </select>
                     </label>
                   </div>
-                ) : null}
-                {onlineTransferPortion(approveRow) > 0 ? (
-                  <div className="mt-3 rounded-xl bg-teal-50 px-3 py-2.5 text-sm ring-1 ring-teal-100">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Online transfer</p>
-                    {approveRow.onlineTransferReference ? (
-                      <p className="mt-1 font-mono text-teal-950">{approveRow.onlineTransferReference}</p>
-                    ) : null}
+                ))}
+                {getPaymentOnlineTransfers(approveRow).map((t, index, list) => (
+                  <div key={t.id || index} className="mt-3 rounded-xl bg-teal-50 px-3 py-2.5 text-sm ring-1 ring-teal-100">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+                      {list.length > 1 ? `Online transfer ${index + 1}` : 'Online transfer'}
+                    </p>
+                    <p className="mt-1 font-semibold tabular-nums text-teal-950">{money(t.amount)}</p>
+                    {t.reference ? <p className="mt-0.5 font-mono text-teal-950">{t.reference}</p> : null}
                     <label className="mt-2 block text-xs font-medium text-teal-800">
                       Credit to bank account <span className="text-rose-600">*</span>
                       <select
                         required
-                        value={approveOnlineBankAccountId}
-                        onChange={(e) => setApproveOnlineBankAccountId(e.target.value)}
+                        value={approveOnlineBanks[t.id] || ''}
+                        onChange={(e) =>
+                          setApproveOnlineBanks((prev) => ({ ...prev, [t.id]: e.target.value }))
+                        }
                         className="mt-1 w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-teal-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
                         disabled={bankAccounts.length === 0}
                       >
@@ -678,7 +704,7 @@ export default function RequestsPage() {
                       </select>
                     </label>
                   </div>
-                ) : null}
+                ))}
                 {approveRow.note ? (
                   <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-100">
                     <span className="font-medium text-slate-500">Note: </span>

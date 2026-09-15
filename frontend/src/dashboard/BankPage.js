@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
 import { authFetch, canEditDetails, getUsername } from '../auth';
-import { buildChequeTableRows, cdmPortion, onlineTransferPortion } from './paymentCheques';
+import { buildChequeTableRows, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import CashBookExpenseModal from './CashBookExpenseModal';
 import CashBookChequeDepositModal from './CashBookChequeDepositModal';
 import CashBookCompanyChequeModal from './CashBookCompanyChequeModal';
@@ -258,24 +258,26 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
         detailPayload: p,
       });
     };
-    const cdmNum = String(p.cdmNumber ?? '').trim();
-    addOtherMethod(
-      'cdm',
-      'CDM deposit',
-      cdmPortion(p),
-      p.cdmBankAccountId,
-      p.cdmBankAccount,
-      cdmNum ? `#${cdmNum}` : '',
-    );
-    const onlineRef = String(p.onlineTransferReference ?? '').trim();
-    addOtherMethod(
-      'online',
-      'Online transfer',
-      onlineTransferPortion(p),
-      p.onlineTransferBankAccountId,
-      p.onlineTransferBankAccount,
-      onlineRef ? `ref ${onlineRef}` : '',
-    );
+    for (const d of getPaymentCdmDeposits(p)) {
+      addOtherMethod(
+        `cdm-${d.id}`,
+        'CDM deposit',
+        d.amount,
+        d.bankAccountId,
+        d.bankAccount,
+        d.cdmNumber ? `#${d.cdmNumber}` : '',
+      );
+    }
+    for (const t of getPaymentOnlineTransfers(p)) {
+      addOtherMethod(
+        `online-${t.id}`,
+        'Online transfer',
+        t.amount,
+        t.bankAccountId,
+        t.bankAccount,
+        t.reference ? `ref ${t.reference}` : '',
+      );
+    }
   }
 
   buildChequeTableRows(payments, (p, c, flat) => {

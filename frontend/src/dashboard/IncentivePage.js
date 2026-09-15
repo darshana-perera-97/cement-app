@@ -92,6 +92,8 @@ function filterLoadIncentiveRows(rows, filters) {
       r.stockId,
       r.invoiceNumber,
       r.brandLabel,
+      doorStepLabel(r.doorStep),
+      r.doorStep ? 'door step' : '',
       String(r.bags),
       String(r.perBagPrice),
       String(r.cutOffPrice),
@@ -297,6 +299,30 @@ function moneyOrDashStyled(n) {
   return formatted;
 }
 
+function doorStepLabel(doorStep) {
+  return doorStep ? 'Yes' : 'No';
+}
+
+function DoorStepCell({ doorStep }) {
+  return (
+    <span
+      className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+        doorStep ? 'bg-indigo-50 text-indigo-800' : 'bg-slate-100 text-slate-600'
+      }`}
+    >
+      {doorStepLabel(doorStep)}
+    </span>
+  );
+}
+
+function loadIsDoorStep(load, poById) {
+  const poIds = (Array.isArray(load.purchaseOrderIds) ? load.purchaseOrderIds : [])
+    .map((id) => String(id).trim())
+    .filter(Boolean);
+  if (poIds.some((id) => poById.get(id)?.doorStock)) return true;
+  return Number(load.doorStockTransportCostPerBag) > 0;
+}
+
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
@@ -423,13 +449,17 @@ function loadTransportPerBag(load, hasLoadPricing) {
 }
 
 /** One row per stock load × brand (bags > 0). */
-function buildIncentiveRows(loads) {
+function buildIncentiveRows(loads, purchaseOrders) {
+  const poById = new Map(
+    (Array.isArray(purchaseOrders) ? purchaseOrders : []).map((po) => [String(po.id), po]),
+  );
   const rows = [];
   for (const load of loads) {
     const stockId = String(load.stockId ?? '').trim() || '—';
     const loadDate = String(load.date ?? '').slice(0, 10);
     const hasLoadPricing = loadHasIncentivePricing(load);
     const transportPerBagStored = loadTransportPerBag(load, hasLoadPricing);
+    const doorStep = loadIsDoorStep(load, poById);
     const marginPerBagRaw = load.marginPerBag;
     const marginPerBagForLoad = round2(
       marginPerBagRaw === '' || marginPerBagRaw == null
@@ -452,7 +482,7 @@ function buildIncentiveRows(loads) {
       const cutOffNumber = cutOffRaw == null || cutOffRaw === '' ? null : Number(cutOffRaw);
       const hasCutOff = cutOffNumber != null && Number.isFinite(cutOffNumber);
 
-      const transportPerBag = round2(transportPerBagStored ?? 0);
+      const transportPerBag = doorStep ? 0 : round2(transportPerBagStored ?? 0);
       const transportCost = round2(transportPerBag * bags);
       const margin = marginPerBagForLoad;
       const unloadingPrice = round2(perBagCost + transportPerBag + margin);
@@ -474,6 +504,7 @@ function buildIncentiveRows(loads) {
         margin,
         cutOffPrice: hasCutOff ? round2(cutOffNumber) : null,
         unloadingPrice,
+        doorStep,
         vehicleNumber: String(load.vehicleNumber ?? '').trim() || '—',
         addedBy: String(load.addedBy ?? '').trim() || '—',
         totalLoadAmount: Number(load.totalAmount) || 0,
@@ -741,7 +772,7 @@ export default function IncentivePage() {
     load();
   }, [load]);
 
-  const tableRows = useMemo(() => buildIncentiveRows(loads), [loads]);
+  const tableRows = useMemo(() => buildIncentiveRows(loads, purchaseOrders), [loads, purchaseOrders]);
   const distributionRows = useMemo(() => buildDistributionRows(loads, bills), [loads, bills]);
 
   const customerLocationMap = useMemo(() => {
@@ -763,6 +794,8 @@ export default function IncentivePage() {
         r.invoiceNumber,
         r.chequeNumber,
         r.convertingDate,
+        doorStepLabel(r.doorStep),
+        r.doorStep ? 'door step' : '',
         String(r.bags),
         String(r.totalCost),
         String(r.perBagCost),
@@ -1246,6 +1279,7 @@ export default function IncentivePage() {
                   </span>
                 }
                 fields={[
+                  { label: 'Door step', value: doorStepLabel(r.doorStep) },
                   { label: 'Per bag', value: moneyOrDashStyled(r.perBagCost) },
                   { label: 'Cut-off', value: moneyOrDashStyled(r.cutOffPrice) },
                   { label: 'Transport', value: moneyOrDashStyled(r.transportPerBag) },
@@ -1260,11 +1294,12 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[1100px] data-table border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1180px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
               <th className="whitespace-nowrap px-4 py-3">Bag type</th>
+              <th className="whitespace-nowrap px-4 py-3">Door step</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Bags</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Per bag price</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Cut-off price (per bag)</th>
@@ -1278,19 +1313,19 @@ export default function IncentivePage() {
           <tbody className="divide-y divide-slate-100 text-slate-800">
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   <LoadingSpinner />
                 </td>
               </tr>
             ) : tableRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   No stock loads yet. Add loads on the Loads page to see incentive data here.
                 </td>
               </tr>
             ) : filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                   No rows match your search or filters.
                 </td>
               </tr>
@@ -1313,6 +1348,9 @@ export default function IncentivePage() {
                         {r.brandLabel}
                       </span>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <DoorStepCell doorStep={r.doorStep} />
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.bags.toLocaleString()}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyOrDashStyled(r.perBagCost)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyOrDashStyled(r.cutOffPrice)}</td>
@@ -1329,7 +1367,7 @@ export default function IncentivePage() {
           {!loading && filteredRows.length > 0 ? (
             <tfoot>
               <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                <td colSpan={2} className="px-4 py-3">
+                <td colSpan={3} className="px-4 py-3">
                   Totals (filtered)
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">{filteredTotals.bags.toLocaleString()}</td>
@@ -1467,6 +1505,7 @@ export default function IncentivePage() {
                 }
                 fields={[
                   { label: 'Invoice', value: r.invoiceNumber ?? '—' },
+                  { label: 'Door step', value: doorStepLabel(r.doorStep) },
                   { label: 'Bags', value: r.bags.toLocaleString() },
                   { label: 'Cost / bag', value: moneyOrDashStyled(r.totalCostPerBag) },
                   { label: 'Inc. / bag', value: moneyOrDashStyled(r.basicIncentivePerBag) },
@@ -1479,13 +1518,14 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[1480px] data-table border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1580px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="border-b border-slate-100 bg-slate-50/90 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
               <th className="whitespace-nowrap px-4 py-3">StockID</th>
               <th className="whitespace-nowrap px-4 py-3">Invoice number</th>
               <th className="whitespace-nowrap px-4 py-3">Bag type</th>
+              <th className="whitespace-nowrap px-4 py-3">Door step</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">No. Bags</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Bag Price in Invoice</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Transport Cost</th>
@@ -1498,19 +1538,19 @@ export default function IncentivePage() {
           <tbody className="divide-y divide-slate-100 text-slate-800">
             {loading ? (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
                   <LoadingSpinner />
                 </td>
               </tr>
             ) : loadBasicIncentiveRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
                   No stock loads yet. Add loads on the Loads page to see incentive data here.
                 </td>
               </tr>
             ) : basicIncentiveRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
                   No rows match your search or filters.
                 </td>
               </tr>
@@ -1526,6 +1566,7 @@ export default function IncentivePage() {
                       <td colSpan={2} className="px-4 py-3">
                         {r.stockId} total
                       </td>
+                      <td className="px-4 py-3" />
                       <td className="px-4 py-3" />
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.bags.toLocaleString()}</td>
                       <td className="px-4 py-3" />
@@ -1555,6 +1596,9 @@ export default function IncentivePage() {
                         {r.brandLabel}
                       </span>
                     </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <DoorStepCell doorStep={r.doorStep} />
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{r.bags.toLocaleString()}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                       {moneyOrDashStyled(r.perBagPrice)}
@@ -1582,7 +1626,7 @@ export default function IncentivePage() {
           {!loading && basicIncentiveRows.length > 0 ? (
             <tfoot>
               <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                <td colSpan={4} className="px-4 py-3">
+                <td colSpan={5} className="px-4 py-3">
                   Grand total (filtered)
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">{basicIncentiveTotals.bags.toLocaleString()}</td>

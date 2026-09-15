@@ -1,7 +1,11 @@
 const { toNonNegMoney } = require('./customersStore');
 const { poLineItems } = require('./purchaseOrdersStore');
 const { getPaymentCheques } = require('./paymentCheques');
-const { cdmPortion, onlineTransferPortion, isPaymentCreditActive } = require('./paymentOtherMethods');
+const {
+  getPaymentCdmDeposits,
+  getPaymentOnlineTransfers,
+  isPaymentCreditActive,
+} = require('./paymentOtherMethods');
 
 function todayYmdUtc() {
   return new Date().toISOString().slice(0, 10);
@@ -110,8 +114,12 @@ function sumApprovedOtherMethodsByAccount(payments) {
   };
   for (const p of Array.isArray(payments) ? payments : []) {
     if (!isPaymentCreditActive(p)) continue;
-    add(p.cdmBankAccountId, cdmPortion(p));
-    add(p.onlineTransferBankAccountId, onlineTransferPortion(p));
+    for (const d of getPaymentCdmDeposits(p)) {
+      add(d.bankAccountId, d.amount);
+    }
+    for (const t of getPaymentOnlineTransfers(p)) {
+      add(t.bankAccountId, t.amount);
+    }
   }
   return totals;
 }

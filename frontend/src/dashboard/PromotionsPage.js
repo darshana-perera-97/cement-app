@@ -21,6 +21,7 @@ import {
   modalPanelClass,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { formatBrandLabel } from './brandTheme';
 
 const apiBase = getApiBase();
 
@@ -30,9 +31,86 @@ const PROMO_TYPES = [
   { id: 'target_promotion', label: 'Target promotion' },
 ];
 
+const PAGE_TABS = [
+  { id: 'special', label: 'Special Promotions' },
+  { id: 'rules', label: 'Promotion Rules' },
+];
+
+function emptyRuleForm(brands) {
+  const cashbacks = {};
+  for (const b of brands) {
+    cashbacks[b.key] = '';
+  }
+  return {
+    customerId: '',
+    startDate: '',
+    endDate: '',
+    cashbacks,
+  };
+}
+
+function formFromRule(rule, brands) {
+  const stored = rule?.cashbacks && typeof rule.cashbacks === 'object' ? rule.cashbacks : {};
+  const cashbacks = {};
+  for (const b of brands) {
+    const v = stored[b.key];
+    cashbacks[b.key] = v != null && v !== '' ? String(v) : '';
+  }
+  return {
+    customerId: rule?.customerId || '',
+    startDate: rule?.startDate || '',
+    endDate: rule?.endDate || '',
+    cashbacks,
+  };
+}
+
+function ruleCashbackEntries(row, brands) {
+  const stored = row?.cashbacks && typeof row.cashbacks === 'object' ? row.cashbacks : {};
+  const seen = new Set();
+  const entries = [];
+  for (const b of brands) {
+    seen.add(b.key);
+    const amount = Number(stored[b.key]) || 0;
+    if (amount > 0) {
+      entries.push({ key: b.key, label: formatBrandLabel(b) || b.label, amount });
+    }
+  }
+  for (const [key, value] of Object.entries(stored)) {
+    if (seen.has(key)) continue;
+    const amount = Number(value) || 0;
+    if (amount > 0) entries.push({ key, label: key, amount });
+  }
+  return entries;
+}
+
+function withRuleRowSpans(items) {
+  const counts = new Map();
+  for (const item of items) {
+    const id = item.rule?.id;
+    if (!id) continue;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  const seen = new Set();
+  return items.map((item) => {
+    const id = item.rule?.id;
+    const first = Boolean(id) && !seen.has(id);
+    if (first) seen.add(id);
+    return { ...item, ruleRowSpan: first ? counts.get(id) : 0 };
+  });
+}
+
+function rulePeriodOverlaps(start, end, from, to) {
+  if (!from && !to) return true;
+  const s = String(start ?? '');
+  const e = String(end ?? '');
+  if (from && e && e < from) return false;
+  if (to && s && s > to) return false;
+  return true;
+}
+
 function promoType(row) {
   const t = String(row?.type ?? '').trim();
-  if (t === 'invoice_discount' || t === 'target_promotion') return t;
+  if (t === 'invoice_discount' || t === 'target_promotion' || t === 'rule_cashback') return t;
   return 'free_bags';
 }
 
@@ -158,7 +236,7 @@ function computePreviewDiscount(form, selectedBill, brands) {
   return Math.min(Math.round(value * bags * 100) / 100, billTotal);
 }
 
-export default function PromotionsPage() {
+function SpecialPromotionsPanel() {
   const { brands } = useBagProducts();
   const [rows, setRows] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -199,7 +277,7 @@ export default function PromotionsPage() {
       const res = await fetch(`${apiBase}/api/promotions`);
       if (!res.ok) throw new Error('Failed to load promotions');
       const data = await res.json();
-      setRows(Array.isArray(data) ? data : []);
+      setRows(Array.isArray(data) ? data.filter((r) => promoType(r) !== 'rule_cashback') : []);
     } catch (e) {
       setError(e.message || 'Could not load data');
       setRows([]);
@@ -929,6 +1007,602 @@ export default function PromotionsPage() {
           ) : null
         }
       />
+    </div>
+  );
+}
+
+function PromotionRulesPanel() {
+  const { brands, loading: productsLoading } = useBagProducts();
+  const [rows, setRows] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editRule, setEditRule] = useState(null);
+  const [form, setForm] = useState(() => emptyRuleForm([]));
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const [detailRow, setDetailRow] = useState(null);
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
+
+  const loadCustomers = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/customers`);
+      if (!res.ok) throw new Error('Failed to load customers');
+      const data = await res.json();
+      setCustomers(Array.isArray(data) ? data : []);
+    } catch {
+      setCustomers([]);
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/promotion-rules`);
+      if (!res.ok) throw new Error('Failed to load promotion rules');
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e.message || 'Could not load data');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    setForm((f) => {
+      const next = { ...f.cashbacks };
+      let changed = false;
+      for (const b of brands) {
+        if (!(b.key in next)) {
+          next[b.key] = '';
+          changed = true;
+        }
+      }
+      return changed ? { ...f, cashbacks: next } : f;
+    });
+  }, [modalOpen, brands]);
+
+  const filteredRows = useMemo(() => {
+    const items = [];
+    for (const r of rows) {
+      if (!rulePeriodOverlaps(r.startDate, r.endDate, dateFrom, dateTo)) continue;
+      if (customerFilter && r.customerId !== customerFilter) continue;
+      const entries = ruleCashbackEntries(r, brands);
+      for (const e of entries) {
+        items.push({
+          rowKey: `${r.id}-${e.key}`,
+          rule: r,
+          productKey: e.key,
+          productLabel: e.label,
+          amount: e.amount,
+        });
+      }
+    }
+    return items.filter((item) =>
+      rowMatchesQuery(search, [
+        item.rule.customerName,
+        item.rule.startDate,
+        item.rule.endDate,
+        item.rule.enteredBy,
+        item.productLabel,
+        String(item.amount),
+      ]),
+    );
+  }, [rows, search, dateFrom, dateTo, customerFilter, brands]);
+
+  const pagination = useTablePagination(filteredRows.length, [search, dateFrom, dateTo, customerFilter]);
+  const pagedRows = useMemo(
+    () => withRuleRowSpans(filteredRows.slice(pagination.offset, pagination.offset + pagination.pageSize)),
+    [filteredRows, pagination.offset, pagination.pageSize],
+  );
+
+  const openModal = () => {
+    setEditRule(null);
+    setForm(emptyRuleForm(brands));
+    setSaveError(null);
+    loadCustomers();
+    setModalOpen(true);
+  };
+
+  const openRuleEdit = (rule) => {
+    if (!rule?.id) return;
+    setSaveError(null);
+    loadCustomers();
+    setEditRule(rule);
+    setForm(formFromRule(rule, brands));
+    setDetailRow(null);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setEditRule(null);
+    setSaveError(null);
+  };
+
+  const handleCashbackChange = (key, value) => {
+    setForm((f) => ({
+      ...f,
+      cashbacks: { ...f.cashbacks, [key]: value },
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const username = getUsername();
+    if (!username) {
+      setSaveError('You need to be signed in with a username.');
+      return;
+    }
+    if (!form.customerId) {
+      setSaveError('Select a customer.');
+      return;
+    }
+    if (!form.startDate || !form.endDate) {
+      setSaveError('Select a start date and end date.');
+      return;
+    }
+    if (form.endDate < form.startDate) {
+      setSaveError('End date must be on or after start date.');
+      return;
+    }
+    const cashbacks = {};
+    let anyPositive = false;
+    for (const b of brands) {
+      const amount = Number(form.cashbacks[b.key]);
+      const n = Number.isFinite(amount) && amount > 0 ? amount : 0;
+      cashbacks[b.key] = n;
+      if (n > 0) anyPositive = true;
+    }
+    if (!anyPositive) {
+      setSaveError('Enter a cashback amount for at least one product.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const payload = {
+        customerId: form.customerId,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        cashbacks,
+      };
+      const isEdit = !!editRule?.id;
+      const res = await fetch(
+        isEdit
+          ? `${apiBase}/api/promotion-rules/${encodeURIComponent(editRule.id)}`
+          : `${apiBase}/api/promotion-rules`,
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isEdit ? { ...payload, updatedBy: username } : { ...payload, enteredBy: username },
+          ),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSaveError(data.error || 'Save failed');
+        return;
+      }
+      await load();
+      closeModal();
+    } catch {
+      setSaveError('Could not reach the server.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (rule) => {
+    if (!rule?.id) return;
+    const username = getUsername();
+    if (!username) {
+      alert('You need to be signed in.');
+      return;
+    }
+    const label = rule.customerName ? ` for ${rule.customerName}` : '';
+    if (!window.confirm(`Delete this promotion rule${label}?`)) return;
+    setDeletingId(rule.id);
+    try {
+      const res = await fetch(`${apiBase}/api/promotion-rules/${encodeURIComponent(rule.id)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Could not delete the rule.');
+        return;
+      }
+      setDetailRow(null);
+      await load();
+    } catch {
+      alert('Could not reach the server.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-slate-500">
+          Set per-product cashback amounts for a customer over a date range.
+        </p>
+        <button
+          type="button"
+          onClick={openModal}
+          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+        >
+          Add a rule
+        </button>
+      </div>
+
+      {error ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <TableFiltersBar
+        hint={
+          !loading && rows.length > 0
+            ? `Showing ${filteredRows.length} product row${filteredRows.length === 1 ? '' : 's'}`
+            : null
+        }
+      >
+        <label className={filterLabel}>
+          Search
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Customer, product, amount…"
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          From date
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          To date
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabel}>
+          Customer
+          <select
+            value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+            className={filterControl}
+          >
+            <option value="">All customers</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </TableFiltersBar>
+
+      <div className="space-y-3">
+        <div className={mobileCardList}>
+          {loading ? (
+            <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+              <LoadingSpinner />
+            </p>
+          ) : rows.length === 0 ? (
+            <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+              No promotion rules yet. Use &quot;Add a rule&quot; to set cashback amounts for a customer.
+            </p>
+          ) : filteredRows.length === 0 ? (
+            <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+              No rows match your search or filters.
+            </p>
+          ) : (
+            pagedRows.map((item) => (
+              <MobileRowCard
+                key={item.rowKey}
+                title={item.rule.customerName || '—'}
+                subtitle={`${item.rule.startDate || '—'} – ${item.rule.endDate || '—'}`}
+                onClick={() => setDetailRow(item.rule)}
+                fields={[
+                  { label: 'Product', value: item.productLabel },
+                  { label: 'Cashback', value: money(item.amount) },
+                ]}
+              />
+            ))
+          )}
+        </div>
+        <div className={`hidden sm:block ${scrollTableWrap}`}>
+          <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Customer</th>
+                <th className="whitespace-nowrap px-4 py-3">Start date</th>
+                <th className="whitespace-nowrap px-4 py-3">End date</th>
+                <th className="px-4 py-3">Product</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Cashback</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">
+                    <LoadingSpinner />
+                  </td>
+                </tr>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">
+                    No promotion rules yet. Use &quot;Add a rule&quot; to set cashback amounts for a customer.
+                  </td>
+                </tr>
+              ) : filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">
+                    No rows match your search or filters.
+                  </td>
+                </tr>
+              ) : (
+                pagedRows.map((item) => (
+                  <tr
+                    key={item.rowKey}
+                    {...detailRowAttrs(() => setDetailRow(item.rule), 'hover:bg-slate-50/80')}
+                    aria-label={`Promotion rule ${item.rule.customerName || ''} ${item.productLabel}`}
+                  >
+                    {item.ruleRowSpan > 0 ? (
+                      <td
+                        rowSpan={item.ruleRowSpan}
+                        className={`px-4 py-3 align-middle font-medium text-slate-900 ${stickyFirstTd}`}
+                      >
+                        {item.rule.customerName || '—'}
+                      </td>
+                    ) : null}
+                    {item.ruleRowSpan > 0 ? (
+                      <td rowSpan={item.ruleRowSpan} className="whitespace-nowrap px-4 py-3 align-middle tabular-nums">
+                        {item.rule.startDate || '—'}
+                      </td>
+                    ) : null}
+                    {item.ruleRowSpan > 0 ? (
+                      <td rowSpan={item.ruleRowSpan} className="whitespace-nowrap px-4 py-3 align-middle tabular-nums">
+                        {item.rule.endDate || '—'}
+                      </td>
+                    ) : null}
+                    <td className="px-4 py-3 text-slate-800">{item.productLabel}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-indigo-800">
+                      {money(item.amount)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        {!loading && rows.length > 0 ? (
+          <TablePaginationBar
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            pageSize={pagination.pageSize}
+            totalCount={filteredRows.length}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={pagination.setPageSize}
+          />
+        ) : null}
+      </div>
+
+      {modalOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="promo-rule-modal-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={closeModal}
+          />
+          <div className={`${modalPanelClass} max-h-[90vh] overflow-y-auto`}>
+            <h2 id="promo-rule-modal-title" className="text-lg font-bold text-slate-900">
+              {editRule ? 'Edit promotion rule' : 'Add a rule'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Logged in as {getUsername() || '—'}. Choose a customer, period, and cashback per product.
+            </p>
+            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+              {saveError ? (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
+              ) : null}
+              <label className="block text-sm font-medium text-slate-600">
+                Customer
+                <select
+                  required
+                  value={form.customerId}
+                  onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))}
+                  className={filterControl}
+                >
+                  <option value="">Select customer</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-slate-600">
+                  Start date
+                  <input
+                    type="date"
+                    required
+                    value={form.startDate}
+                    onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+                    className={filterControl}
+                  />
+                </label>
+                <label className="block text-sm font-medium text-slate-600">
+                  End date
+                  <input
+                    type="date"
+                    required
+                    value={form.endDate}
+                    min={form.startDate || undefined}
+                    onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))}
+                    className={filterControl}
+                  />
+                </label>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-600">Cashback by product (LKR)</p>
+                {productsLoading ? (
+                  <p className="mt-2 text-sm text-slate-500">
+                    <LoadingSpinner />
+                  </p>
+                ) : brands.length === 0 ? (
+                  <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-100">
+                    No products in the catalog yet. Add products in Shop first.
+                  </p>
+                ) : (
+                  <div className="mt-2 divide-y divide-slate-100 overflow-hidden rounded-xl ring-1 ring-slate-200">
+                    {brands.map((b) => (
+                      <label
+                        key={b.key}
+                        className="flex items-center justify-between gap-3 bg-white px-3 py-2.5 text-sm"
+                      >
+                        <span className="min-w-0 font-medium text-slate-800">
+                          {formatBrandLabel(b) || b.label}
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={form.cashbacks[b.key] ?? ''}
+                          onChange={(e) => handleCashbackChange(b.key, e.target.value)}
+                          className="mt-0 w-28 shrink-0 rounded-xl border-0 bg-slate-100 px-3 py-2 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                          placeholder="0.00"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={saving || productsLoading || brands.length === 0}
+                  className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : editRule ? 'Save changes' : 'Save rule'}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      <RowDetailModal
+        open={!!detailRow}
+        row={detailRow}
+        variant="promotionRule"
+        onClose={() => setDetailRow(null)}
+        actions={
+          detailRow?.id && canEditDetails() ? (
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => openRuleEdit(detailRow)}
+                className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+              >
+                Edit rule
+              </button>
+              <button
+                type="button"
+                disabled={deletingId === detailRow.id}
+                onClick={() => handleDelete(detailRow)}
+                className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 ring-1 ring-rose-100 hover:bg-rose-100 disabled:opacity-50"
+              >
+                {deletingId === detailRow.id ? 'Deleting…' : 'Delete rule'}
+              </button>
+            </div>
+          ) : null
+        }
+      />
+    </div>
+  );
+}
+
+export default function PromotionsPage() {
+  const [tab, setTab] = useState('special');
+
+  return (
+    <div className="space-y-5">
+      <div
+        className="rounded-[20px] bg-white p-2 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-2.5"
+        role="tablist"
+        aria-label="Promotion sections"
+      >
+        <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+          {PAGE_TABS.map(({ id, label }) => {
+            const active = tab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(id)}
+                className={`rounded-xl py-3.5 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 sm:py-4 sm:text-base ${
+                  active
+                    ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {tab === 'special' ? <SpecialPromotionsPanel /> : null}
+      {tab === 'rules' ? <PromotionRulesPanel /> : null}
     </div>
   );
 }

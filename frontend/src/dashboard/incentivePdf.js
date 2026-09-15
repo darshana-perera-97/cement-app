@@ -203,13 +203,14 @@ function drawSectionTitle(doc, title, subtitle, startY, contentW) {
 function drawCostCalculatorTable(doc, rows, startY, contentW) {
   const safeRows = rows || [];
   const head = [
-    ['Date', 'Bag type', 'Bags', 'Per bag price', 'Cut-off price (per bag)', 'Transport', 'Margin', 'Total cost per bag'],
+    ['Date', 'Bag type', 'Door step', 'Bags', 'Per bag price', 'Cut-off price (per bag)', 'Transport', 'Margin', 'Total cost per bag'],
   ];
   const body =
     safeRows.length > 0
       ? safeRows.map((r) => [
           String(r.date ?? ''),
           String(r.brandLabel ?? ''),
+          r.doorStep ? 'Yes' : 'No',
           Number(r.bags) || 0,
           r.perBagCost,
           r.cutOffPrice,
@@ -217,13 +218,13 @@ function drawCostCalculatorTable(doc, rows, startY, contentW) {
           r.margin,
           r.unloadingPrice,
         ])
-      : [['—', '—', 0, '', '', '', '', '']];
+      : [['—', '—', '—', 0, '', '', '', '', '']];
 
   const totals = computeCostTotals(safeRows);
-  const foot = [['Totals', '', totals.bags, '', '', totals.transportCost, totals.margin, '']];
+  const foot = [['Totals', '', '', totals.bags, '', '', totals.transportCost, totals.margin, '']];
 
-  const ratios = [0.1, 0.11, 0.07, 0.12, 0.12, 0.11, 0.11, 0.26];
-  const numericCols = new Set([2, 3, 4, 5, 6, 7]);
+  const ratios = [0.09, 0.10, 0.08, 0.07, 0.11, 0.12, 0.10, 0.10, 0.23];
+  const numericCols = new Set([3, 4, 5, 6, 7, 8]);
 
   autoTable(doc, {
     ...TABLE_STYLES,
@@ -237,12 +238,13 @@ function drawCostCalculatorTable(doc, rows, startY, contentW) {
     columnStyles: {
       0: { cellWidth: contentW * ratios[0] },
       1: { cellWidth: contentW * ratios[1] },
-      2: { halign: 'right', cellWidth: contentW * ratios[2] },
+      2: { cellWidth: contentW * ratios[2] },
       3: { halign: 'right', cellWidth: contentW * ratios[3] },
       4: { halign: 'right', cellWidth: contentW * ratios[4] },
       5: { halign: 'right', cellWidth: contentW * ratios[5] },
       6: { halign: 'right', cellWidth: contentW * ratios[6] },
-      7: { halign: 'right', cellWidth: contentW * ratios[7], fontStyle: 'bold' },
+      7: { halign: 'right', cellWidth: contentW * ratios[7] },
+      8: { halign: 'right', cellWidth: contentW * ratios[8], fontStyle: 'bold' },
     },
     didParseCell: amountCellHook(numericCols),
   });

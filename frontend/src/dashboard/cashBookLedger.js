@@ -219,12 +219,17 @@ export function buildCashBookSourceEntries(payments, cashBookEntries, promotions
 
   for (const promo of Array.isArray(promotions) ? promotions : []) {
     const type = String(promo.type ?? '').trim();
-    if (type !== 'invoice_discount' && type !== 'target_promotion') continue;
+    if (type !== 'invoice_discount' && type !== 'target_promotion' && type !== 'rule_cashback') continue;
     const amt = Math.max(0, Number(promo.discountAmount) || 0);
     if (amt <= 0) continue;
     const date = String(promo.date ?? '').slice(0, 10);
     const customerName = String(promo.customerName ?? '').trim() || '—';
-    const label = type === 'invoice_discount' ? 'Invoice discount' : 'Target promotion';
+    const label =
+      type === 'invoice_discount'
+        ? 'Invoice discount'
+        : type === 'target_promotion'
+          ? 'Target promotion'
+          : 'Cashback';
     entries.push({
       id: `out:promo:${promo.id}`,
       kind: 'promotion_out',
@@ -233,7 +238,9 @@ export function buildCashBookSourceEntries(payments, cashBookEntries, promotions
       type: label,
       details: [
         customerName !== '—' ? customerName : '',
-        type === 'invoice_discount' && promo.invoiceNumber ? `Invoice ${promo.invoiceNumber}` : '',
+        (type === 'invoice_discount' || type === 'rule_cashback') && promo.invoiceNumber
+          ? `Invoice ${promo.invoiceNumber}`
+          : '',
         String(promo.reason ?? '').trim(),
       ]
         .filter(Boolean)

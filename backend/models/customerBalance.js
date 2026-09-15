@@ -1,7 +1,7 @@
 const { toNonNegMoney } = require('./customersStore');
 const { getPaymentCheques } = require('./paymentCheques');
 const { cdmPortion, onlineTransferPortion, isPaymentCreditActive } = require('./paymentOtherMethods');
-const { promotionCreditAmount, promotionType, sumInvoiceDiscountForBill, PROMOTION_TYPES } = require('./promotionsStore');
+const { promotionCreditAmount, promotionType, sumInvoiceDiscountForBill, sumRuleCashbackForBill, PROMOTION_TYPES } = require('./promotionsStore');
 
 function normalizeCustomerName(s) {
   return String(s ?? '')
@@ -93,7 +93,9 @@ function openingBalanceBillDate(customer) {
 
 function effectiveBillTotal(bill, promotions = []) {
   const base = toNonNegMoney(bill?.totalAmount);
-  const discount = sumInvoiceDiscountForBill(promotions, bill?.id);
+  const discount = roundMoney(
+    sumInvoiceDiscountForBill(promotions, bill?.id) + sumRuleCashbackForBill(promotions, bill?.id),
+  );
   return Math.max(0, roundMoney(base - discount));
 }
 
