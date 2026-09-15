@@ -76,6 +76,7 @@ export function getPaymentCdmDeposits(p) {
         id: String(d?.id ?? '').trim() || '_legacy',
         amount: Math.max(0, Number(d?.amount) || 0),
         cdmNumber: String(d?.cdmNumber ?? '').trim(),
+        cdmDate: String(d?.cdmDate ?? d?.date ?? p.date ?? '').slice(0, 10),
         bankAccountId: String(d?.bankAccountId ?? d?.cdmBankAccountId ?? '').trim(),
         bankAccount: bankSnapFromLine(d),
       }))
@@ -88,6 +89,7 @@ export function getPaymentCdmDeposits(p) {
       id: '_legacy',
       amount,
       cdmNumber: String(p.cdmNumber ?? '').trim(),
+      cdmDate: String(p.cdmDate ?? p.date ?? '').slice(0, 10),
       bankAccountId: String(p.cdmBankAccountId ?? '').trim(),
       bankAccount: p.cdmBankAccount,
     },
@@ -103,6 +105,7 @@ export function getPaymentOnlineTransfers(p) {
         id: String(t?.id ?? '').trim() || '_legacy',
         amount: Math.max(0, Number(t?.amount) || 0),
         reference: String(t?.reference ?? t?.onlineTransferReference ?? '').trim(),
+        transferDate: String(t?.transferDate ?? t?.date ?? p.date ?? '').slice(0, 10),
         bankAccountId: String(t?.bankAccountId ?? t?.onlineTransferBankAccountId ?? '').trim(),
         bankAccount: bankSnapFromLine(t),
       }))
@@ -115,6 +118,7 @@ export function getPaymentOnlineTransfers(p) {
       id: '_legacy',
       amount,
       reference: String(p.onlineTransferReference ?? '').trim(),
+      transferDate: String(p.onlineTransferDate ?? p.date ?? '').slice(0, 10),
       bankAccountId: String(p.onlineTransferBankAccountId ?? '').trim(),
       bankAccount: p.onlineTransferBankAccount,
     },

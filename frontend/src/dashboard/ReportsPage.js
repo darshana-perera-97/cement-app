@@ -728,6 +728,7 @@ function buildDailyCollectionCdmRows(payments, ymd, users = []) {
         customerName: String(p.customerName ?? '').trim() || '—',
         amount: d.amount,
         cdmNumber: String(d.cdmNumber ?? '').trim() || '—',
+        cdmDate: String(d.cdmDate ?? p.date ?? '').slice(0, 10) || '—',
         bankAccount: bankAccountSnapLabel(d.bankAccount, d.bankAccountId),
         billNumber: p.billNumber != null ? String(p.billNumber) : '—',
         approval: paymentApprovalLabel(p),
@@ -752,6 +753,7 @@ function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
         customerName: String(p.customerName ?? '').trim() || '—',
         amount: t.amount,
         reference: String(t.reference ?? '').trim() || '—',
+        transferDate: String(t.transferDate ?? p.date ?? '').slice(0, 10) || '—',
         bankAccount: bankAccountSnapLabel(t.bankAccount, t.bankAccountId),
         billNumber: p.billNumber != null ? String(p.billNumber) : '—',
         approval: paymentApprovalLabel(p),
@@ -2495,6 +2497,7 @@ export default function ReportsPage() {
                       subtitle={r.cdmNumber}
                       fields={[
                         { label: 'Amount', value: money(r.amount) },
+                        { label: 'Deposit date', value: r.cdmDate },
                         { label: 'Bank account', value: r.bankAccount },
                         { label: 'Bill #', value: r.billNumber },
                         { label: 'Approval', value: r.approval },
@@ -2510,6 +2513,7 @@ export default function ReportsPage() {
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      <th className="whitespace-nowrap px-4 py-3">Deposit date</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">CDM #</th>
                       <th className="px-4 py-3">Bank account</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
@@ -2523,7 +2527,7 @@ export default function ReportsPage() {
                     {dailyReportCdmRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          colSpan={showDailyReportRecordedBy ? 8 : 7}
                           className="px-4 py-8 text-center text-slate-500"
                         >
                           No CDM deposits on this day.
@@ -2536,6 +2540,7 @@ export default function ReportsPage() {
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-amber-800">
                             {money(r.amount)}
                           </td>
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.cdmDate}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.cdmNumber}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
@@ -2559,7 +2564,7 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
                           {money(dailyReportCdmTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 6 : 5} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -2584,6 +2589,7 @@ export default function ReportsPage() {
                       subtitle={r.reference}
                       fields={[
                         { label: 'Amount', value: money(r.amount) },
+                        { label: 'Transfer date', value: r.transferDate },
                         { label: 'Bank account', value: r.bankAccount },
                         { label: 'Bill #', value: r.billNumber },
                         { label: 'Approval', value: r.approval },
@@ -2599,6 +2605,7 @@ export default function ReportsPage() {
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      <th className="whitespace-nowrap px-4 py-3">Transfer date</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Reference #</th>
                       <th className="px-4 py-3">Bank account</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
@@ -2612,7 +2619,7 @@ export default function ReportsPage() {
                     {dailyReportBankTransferRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          colSpan={showDailyReportRecordedBy ? 8 : 7}
                           className="px-4 py-8 text-center text-slate-500"
                         >
                           No bank transfers on this day.
@@ -2625,6 +2632,7 @@ export default function ReportsPage() {
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-teal-800">
                             {money(r.amount)}
                           </td>
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.transferDate}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.reference}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
@@ -2648,7 +2656,7 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
                           {money(dailyReportBankTransferTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 6 : 5} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -4374,7 +4382,7 @@ export default function ReportsPage() {
             disabled={loading || !!error}
             className={downloadBtnClass}
           >
-            Download PDF for CS
+            Download for Distribution
           </button>
           <button
             type="button"

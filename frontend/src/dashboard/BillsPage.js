@@ -5,7 +5,7 @@ import { usePrinter } from '../printer/PrinterProvider';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel } from './brandTheme';
-import { downloadBillsInvoicesPdf } from './billsInvoicesPdf';
+import { billsInvoicesPdfBlobUrl, downloadBillsInvoicesPdf } from './billsInvoicesPdf';
 import {
   BILL_INVOICE_NUMBER_PATTERN,
   isBillInvoiceNumberTaken,
@@ -32,6 +32,7 @@ import {
   stickyTheadTransparent,
   useTablePagination,
   modalPanelClass3xl,
+  modalPanelClass4xl,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 
@@ -328,7 +329,11 @@ export default function BillsPage() {
   const [unloads, setUnloads] = useState([]);
   const [promotions, setPromotions] = useState([]);
   const [hoverNote, setHoverNote] = useState(null);
+  const [invoicePreviewUrl, setInvoicePreviewUrl] = useState(null);
+  const [invoicePreviewFilename, setInvoicePreviewFilename] = useState('');
+  const [invoicePreviewBusy, setInvoicePreviewBusy] = useState(false);
   const invoiceNumberTouched = useRef(false);
+  const invoicePreviewUrlRef = useRef(null);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -454,7 +459,21 @@ export default function BillsPage() {
     [filteredRows, pagination.offset, pagination.pageSize]
   );
 
-  const handleDownloadInvoices = useCallback(async () => {
+  const invoicePdfOpts = useCallback(
+    () => ({
+      ...shopDetails,
+      shopName: shopDetails.shopName || DEFAULT_SHOP_NAME,
+      loads,
+      unloads,
+      customers,
+      promotions,
+      dateFrom,
+      dateTo,
+    }),
+    [shopDetails, loads, unloads, customers, promotions, dateFrom, dateTo],
+  );
+
+  const loadBillsForInvoicePdf = useCallback(async () => {
     let billsForPdf = filteredRows;
     try {
       const res = await fetch(`${apiBase}/api/bills`);
@@ -468,17 +487,48 @@ export default function BillsPage() {
     } catch {
       /* use filteredRows already in state */
     }
-    downloadBillsInvoicesPdf(billsForPdf, {
-      ...shopDetails,
-      shopName: shopDetails.shopName || DEFAULT_SHOP_NAME,
-      loads,
-      unloads,
-      customers,
-      promotions,
-      dateFrom,
-      dateTo,
-    });
-  }, [filteredRows, filterBillRows, shopDetails, loads, unloads, customers, promotions, dateFrom, dateTo]);
+    return billsForPdf;
+  }, [filteredRows, filterBillRows]);
+
+  const closeInvoicePreview = useCallback(() => {
+    if (invoicePreviewUrlRef.current) {
+      URL.revokeObjectURL(invoicePreviewUrlRef.current);
+      invoicePreviewUrlRef.current = null;
+    }
+    setInvoicePreviewUrl(null);
+    setInvoicePreviewFilename('');
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (invoicePreviewUrlRef.current) {
+        URL.revokeObjectURL(invoicePreviewUrlRef.current);
+        invoicePreviewUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleDownloadInvoices = useCallback(async () => {
+    const billsForPdf = await loadBillsForInvoicePdf();
+    downloadBillsInvoicesPdf(billsForPdf, invoicePdfOpts());
+  }, [loadBillsForInvoicePdf, invoicePdfOpts]);
+
+  const handleViewInvoices = useCallback(async () => {
+    setInvoicePreviewBusy(true);
+    try {
+      const billsForPdf = await loadBillsForInvoicePdf();
+      const preview = billsInvoicesPdfBlobUrl(billsForPdf, invoicePdfOpts());
+      if (!preview) return;
+      if (invoicePreviewUrlRef.current) {
+        URL.revokeObjectURL(invoicePreviewUrlRef.current);
+      }
+      invoicePreviewUrlRef.current = preview.url;
+      setInvoicePreviewUrl(preview.url);
+      setInvoicePreviewFilename(preview.filename);
+    } finally {
+      setInvoicePreviewBusy(false);
+    }
+  }, [loadBillsForInvoicePdf, invoicePdfOpts]);
 
   const openAdd = () => {
     setSaveError(null);
@@ -759,14 +809,24 @@ export default function BillsPage() {
             className={filterControl}
           />
         </label>
-        <button
-          type="button"
-          onClick={handleDownloadInvoices}
-          disabled={loading || filteredRows.length === 0}
-          className="inline-flex shrink-0 items-center justify-center self-end rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 shadow-sm ring-1 ring-indigo-100 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Download invoices (PDF)
-        </button>
+        <div className="flex flex-wrap items-end gap-2 self-end">
+          <button
+            type="button"
+            onClick={handleDownloadInvoices}
+            disabled={loading || filteredRows.length === 0 || invoicePreviewBusy}
+            className="inline-flex shrink-0 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 shadow-sm ring-1 ring-indigo-100 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Download invoices (PDF)
+          </button>
+          <button
+            type="button"
+            onClick={handleViewInvoices}
+            disabled={loading || filteredRows.length === 0 || invoicePreviewBusy}
+            className="inline-flex shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {invoicePreviewBusy ? 'Generating…' : 'View Invoices'}
+          </button>
+        </div>
       </TableFiltersBar>
 
       <div className="space-y-3">
@@ -1065,6 +1125,51 @@ export default function BillsPage() {
           ) : null
         }
       />
+      {invoicePreviewUrl ? (
+        <div
+          className="fixed inset-0 z-[110] flex items-end justify-center p-0 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="invoices-preview-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={closeInvoicePreview}
+          />
+          <div
+            className={`${modalPanelClass4xl} flex max-h-[min(96dvh,calc(100dvh-env(safe-area-inset-bottom,0px)))] w-full max-w-none flex-col overflow-hidden !p-0 sm:max-w-5xl`}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
+              <h2 id="invoices-preview-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+                Invoices
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href={invoicePreviewUrl}
+                  download={invoicePreviewFilename || 'invoices.pdf'}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+                >
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={closeInvoicePreview}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <iframe
+              title="Invoices PDF preview"
+              src={invoicePreviewUrl}
+              className="min-h-[70vh] w-full flex-1 border-0 bg-slate-100"
+            />
+          </div>
+        </div>
+      ) : null}
       <BillRowNoteTooltip hover={hoverNote} />
     </div>
   );

@@ -289,15 +289,16 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   );
 
   const cdmHead = showRecordedBy
-    ? [['Shop', 'Amount', 'CDM #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
-    : [['Shop', 'Amount', 'CDM #', 'Bank account', 'Bill #', 'Approval']];
+    ? [['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
+    : [['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval']];
   const cdmBody =
     cdmRows.length === 0
-      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—']]
+      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—', '—']]
       : cdmRows.map((r) => {
           const row = [
             r.customerName || '—',
             moneyCell(r.amount),
+            r.cdmDate || '—',
             r.cdmNumber || '—',
             r.bankAccount || '—',
             r.billNumber || '—',
@@ -314,6 +315,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
           [
             `Total (${cdmRows.length} deposit${cdmRows.length === 1 ? '' : 's'})`,
             moneyCell(cdmTotal),
+            '',
             '',
             '',
             '',
@@ -341,15 +343,16 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   );
 
   const bankHead = showRecordedBy
-    ? [['Shop', 'Amount', 'Reference #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
-    : [['Shop', 'Amount', 'Reference #', 'Bank account', 'Bill #', 'Approval']];
+    ? [['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
+    : [['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval']];
   const bankBody =
     bankTransferRows.length === 0
-      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—']]
+      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—', '—']]
       : bankTransferRows.map((r) => {
           const row = [
             r.customerName || '—',
             moneyCell(r.amount),
+            r.transferDate || '—',
             r.reference || '—',
             r.bankAccount || '—',
             r.billNumber || '—',
@@ -366,6 +369,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
           [
             `Total (${bankTransferRows.length} transfer${bankTransferRows.length === 1 ? '' : 's'})`,
             moneyCell(bankTransferTotal),
+            '',
             '',
             '',
             '',

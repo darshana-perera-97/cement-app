@@ -31,7 +31,7 @@ const apiBase = getApiBase();
 const PrinterContext = createContext(null);
 
 const SCENARIO_TITLES = {
-  ...Object.fromEntries(PRINTER_SCENARIOS.map((s) => [s.key, s.label])),
+  ...Object.fromEntries(PRINTER_SCENARIOS.map((s) => [s.key, s.printTitle || s.label])),
   dailyCollections: 'Daily collections',
 };
 
@@ -356,7 +356,7 @@ function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onCon
               Bluetooth printer
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              The last connected 80mm XPrinter reconnects automatically when you open the app. Scan only if you need a different printer.
+              The printer reconnects automatically while this page stays open. After a refresh, tap Connect and pick the same 80mm XPrinter.
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-50">

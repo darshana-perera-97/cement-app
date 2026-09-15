@@ -72,13 +72,13 @@ function paymentRequestSummary(row) {
   for (const d of cdmDeposits) {
     const bank = bankAccountSnapLabel(d.bankAccount, d.bankAccountId);
     parts.push(
-      `CDM ${money(d.amount)}${d.cdmNumber ? ` · ${d.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      `CDM ${money(d.amount)}${d.cdmNumber ? ` · ${d.cdmNumber}` : ''}${d.cdmDate ? ` · ${d.cdmDate}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     );
   }
   for (const t of onlineTransfers) {
     const bank = bankAccountSnapLabel(t.bankAccount, t.bankAccountId);
     parts.push(
-      `Online ${money(t.amount)}${t.reference ? ` · ${t.reference}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      `Online ${money(t.amount)}${t.reference ? ` · ${t.reference}` : ''}${t.transferDate ? ` · ${t.transferDate}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     );
   }
   const cheques = getPaymentCheques(row);
@@ -103,7 +103,7 @@ function paymentApprovalBreakdown(row) {
     const bank = bankAccountSnapLabel(d.bankAccount, d.bankAccountId);
     lines.push({
       label: 'CDM deposit',
-      value: `${money(d.amount)}${d.cdmNumber ? ` · #${d.cdmNumber}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      value: `${money(d.amount)}${d.cdmNumber ? ` · #${d.cdmNumber}` : ''}${d.cdmDate ? ` · ${d.cdmDate}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     });
   }
   const onlineTransfers = getPaymentOnlineTransfers(row);
@@ -111,7 +111,7 @@ function paymentApprovalBreakdown(row) {
     const bank = bankAccountSnapLabel(t.bankAccount, t.bankAccountId);
     lines.push({
       label: 'Online transfer',
-      value: `${money(t.amount)}${t.reference ? ` · ref ${t.reference}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
+      value: `${money(t.amount)}${t.reference ? ` · ref ${t.reference}` : ''}${t.transferDate ? ` · ${t.transferDate}` : ''}${bank !== '—' ? ` · ${bank}` : ''}`,
     });
   }
   for (const c of getPaymentCheques(row)) {
@@ -127,7 +127,8 @@ function emptyPriceForm(row, brands) {
   const f = {};
   for (const b of brands) {
     const bags = Number(row[`${b.key}Bags`]) || 0;
-    f[`${b.key}UnitPrice`] = bags > 0 ? '' : '';
+    const stored = Number(row[`${b.key}UnitPrice`]);
+    f[`${b.key}UnitPrice`] = bags > 0 && Number.isFinite(stored) && stored > 0 ? String(stored) : '';
   }
   return f;
 }
@@ -652,6 +653,7 @@ export default function RequestsPage() {
                     </p>
                     <p className="mt-1 font-semibold tabular-nums text-sky-950">{money(d.amount)}</p>
                     {d.cdmNumber ? <p className="mt-0.5 font-mono text-sky-950">{d.cdmNumber}</p> : null}
+                    {d.cdmDate ? <p className="mt-0.5 text-xs text-sky-800">Deposit date {d.cdmDate}</p> : null}
                     <label className="mt-2 block text-xs font-medium text-sky-800">
                       Credit to bank account <span className="text-rose-600">*</span>
                       <select
@@ -682,6 +684,7 @@ export default function RequestsPage() {
                     </p>
                     <p className="mt-1 font-semibold tabular-nums text-teal-950">{money(t.amount)}</p>
                     {t.reference ? <p className="mt-0.5 font-mono text-teal-950">{t.reference}</p> : null}
+                    {t.transferDate ? <p className="mt-0.5 text-xs text-teal-800">Transfer date {t.transferDate}</p> : null}
                     <label className="mt-2 block text-xs font-medium text-teal-800">
                       Credit to bank account <span className="text-rose-600">*</span>
                       <select

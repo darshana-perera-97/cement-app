@@ -113,6 +113,7 @@ function buildPaymentWhatsApp({ customer, payment, remainingAmount, company, hid
         .map((d) => {
           let s = formatMoney(d.amount);
           if (d.cdmNumber) s += ` · ${d.cdmNumber}`;
+          if (d.cdmDate) s += ` · ${formatDate(d.cdmDate)}`;
           return s;
         })
         .join('; ');
@@ -124,6 +125,7 @@ function buildPaymentWhatsApp({ customer, payment, remainingAmount, company, hid
         .map((t) => {
           let s = formatMoney(t.amount);
           if (t.reference) s += ` · ${t.reference}`;
+          if (t.transferDate) s += ` · ${formatDate(t.transferDate)}`;
           return s;
         })
         .join('; ');

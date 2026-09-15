@@ -52,6 +52,7 @@ function newCdmLine(overrides = {}) {
     key: `cdm-${cdmKeySeq}`,
     amount: '',
     cdmNumber: '',
+    cdmDate: todayYmdLocal(),
     bankAccountId: '',
     ...overrides,
   };
@@ -64,6 +65,7 @@ function newOnlineTransferLine(overrides = {}) {
     key: `ot-${onlineTransferKeySeq}`,
     amount: '',
     reference: '',
+    transferDate: todayYmdLocal(),
     bankAccountId: '',
     ...overrides,
   };
@@ -358,7 +360,7 @@ export default function CollectorSeparateBillSettlementModal({
       const template = f.cdmDeposits[0];
       return {
         ...f,
-        cdmDeposits: [...f.cdmDeposits, newCdmLine({ bankAccountId: template?.bankAccountId || '' })],
+        cdmDeposits: [...f.cdmDeposits, newCdmLine({ bankAccountId: template?.bankAccountId || '', cdmDate: template?.cdmDate || todayYmdLocal() })],
       };
     });
   };
@@ -384,7 +386,10 @@ export default function CollectorSeparateBillSettlementModal({
         ...f,
         onlineTransfers: [
           ...f.onlineTransfers,
-          newOnlineTransferLine({ bankAccountId: template?.bankAccountId || '' }),
+          newOnlineTransferLine({
+            bankAccountId: template?.bankAccountId || '',
+            transferDate: template?.transferDate || todayYmdLocal(),
+          }),
         ],
       };
     });
@@ -432,6 +437,10 @@ export default function CollectorSeparateBillSettlementModal({
         setSaveError(`CDM deposit ${i + 1}: select a bank account.`);
         return false;
       }
+      if (!line.cdmDate || !/^\d{4}-\d{2}-\d{2}$/.test(line.cdmDate)) {
+        setSaveError(`CDM deposit ${i + 1}: enter a valid deposit date.`);
+        return false;
+      }
     }
     for (let i = 0; i < form.onlineTransfers.length; i++) {
       const line = form.onlineTransfers[i];
@@ -443,6 +452,10 @@ export default function CollectorSeparateBillSettlementModal({
       }
       if (!String(line.bankAccountId).trim()) {
         setSaveError(`Online transfer ${i + 1}: select a bank account.`);
+        return false;
+      }
+      if (!line.transferDate || !/^\d{4}-\d{2}-\d{2}$/.test(line.transferDate)) {
+        setSaveError(`Online transfer ${i + 1}: enter a valid transfer date.`);
         return false;
       }
     }
@@ -540,6 +553,7 @@ export default function CollectorSeparateBillSettlementModal({
       cdmLines.push({
         amount,
         cdmNumber: String(line.cdmNumber).trim(),
+        cdmDate: line.cdmDate,
         bankAccountId: String(line.bankAccountId).trim(),
       });
     }
@@ -550,6 +564,7 @@ export default function CollectorSeparateBillSettlementModal({
       onlineLines.push({
         amount,
         reference: String(line.reference).trim(),
+        transferDate: line.transferDate,
         bankAccountId: String(line.bankAccountId).trim(),
       });
     }
@@ -722,7 +737,7 @@ export default function CollectorSeparateBillSettlementModal({
                     <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposits</legend>
                     <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
                       <p className="text-xs text-slate-500">
-                        Amount, CDM number, and shop bank account. Credited when a manager approves.
+                        Amount, deposit date, CDM number, and shop bank account. Credited when a manager approves.
                       </p>
                       <button
                         type="button"
@@ -763,6 +778,15 @@ export default function CollectorSeparateBillSettlementModal({
                               />
                             </label>
                             <label className="block text-sm font-medium text-slate-600">
+                              Deposit date <span className="text-rose-600">*</span>
+                              <input
+                                type="date"
+                                value={line.cdmDate}
+                                onChange={(e) => handleCdmChange(line.key, 'cdmDate', e.target.value)}
+                                className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              />
+                            </label>
+                            <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                               CDM number <span className="text-rose-600">*</span>
                               <input
                                 type="text"
@@ -800,7 +824,7 @@ export default function CollectorSeparateBillSettlementModal({
                     <legend className="px-1 text-sm font-semibold text-slate-800">Online transfers</legend>
                     <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
                       <p className="text-xs text-slate-500">
-                        Amount, bank reference, and shop bank account. Credited when a manager approves.
+                        Amount, transfer date, bank reference, and shop bank account. Credited when a manager approves.
                       </p>
                       <button
                         type="button"
@@ -841,6 +865,15 @@ export default function CollectorSeparateBillSettlementModal({
                               />
                             </label>
                             <label className="block text-sm font-medium text-slate-600">
+                              Transfer date <span className="text-rose-600">*</span>
+                              <input
+                                type="date"
+                                value={line.transferDate}
+                                onChange={(e) => handleOnlineTransferChange(line.key, 'transferDate', e.target.value)}
+                                className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                              />
+                            </label>
+                            <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                               Transfer reference # <span className="text-rose-600">*</span>
                               <input
                                 type="text"

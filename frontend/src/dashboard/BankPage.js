@@ -232,15 +232,16 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
   for (const p of Array.isArray(payments) ? payments : []) {
     if (!isPaymentApprovedForBank(p)) continue;
     const date = String(p.date ?? '').slice(0, 10);
-    const addOtherMethod = (suffix, subLabel, amount, bankAccountId, snap, evidence) => {
+    const addOtherMethod = (suffix, subLabel, amount, bankAccountId, snap, evidence, lineDate) => {
       const amt = Math.max(0, Number(amount) || 0);
       const id = String(bankAccountId ?? '').trim();
       if (amt <= 0 || !id) return;
+      const txDate = String(lineDate || date || '').slice(0, 10);
       rows.push({
         id: `pay-${suffix}:${p.id}`,
         kind: 'deposit',
         direction: 'in',
-        date: date || '—',
+        date: txDate || '—',
         amount: amt,
         bankAccountIds: [id],
         accountLabel: accountLabelFromSnap(snap, id, bankAccounts) || '—',
@@ -253,7 +254,7 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
           .join(' · '),
         subLabel,
         recordedBy: String(p.approvedBy ?? p.recordedBy ?? '').trim() || '—',
-        sortAt: p.approvedAt || p.createdAt || `${date}T12:00:00`,
+        sortAt: p.approvedAt || p.createdAt || `${txDate}T12:00:00`,
         detailVariant: 'payment',
         detailPayload: p,
       });
@@ -266,6 +267,7 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
         d.bankAccountId,
         d.bankAccount,
         d.cdmNumber ? `#${d.cdmNumber}` : '',
+        d.cdmDate,
       );
     }
     for (const t of getPaymentOnlineTransfers(p)) {
@@ -276,6 +278,7 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
         t.bankAccountId,
         t.bankAccount,
         t.reference ? `ref ${t.reference}` : '',
+        t.transferDate,
       );
     }
   }

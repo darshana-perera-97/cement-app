@@ -165,16 +165,31 @@ function onBluetoothAvailability(event) {
   reconnectLastPrinter();
 }
 
+function canListPermittedDevices() {
+  return bluetoothAvailable() && typeof navigator.bluetooth.getDevices === 'function';
+}
+
 async function findRememberedDevice() {
-  if (!bluetoothAvailable() || typeof navigator.bluetooth.getDevices !== 'function') return null;
+  if (!canListPermittedDevices()) return null;
   const props = readProps();
   if (!props.lastDeviceId && !props.lastDeviceName) return null;
-  const devices = await navigator.bluetooth.getDevices();
-  return (
-    devices.find((d) => props.lastDeviceId && d.id === props.lastDeviceId) ||
-    devices.find((d) => props.lastDeviceName && d.name === props.lastDeviceName) ||
-    null
-  );
+  try {
+    const devices = await navigator.bluetooth.getDevices();
+    return (
+      devices.find((d) => props.lastDeviceId && d.id === props.lastDeviceId) ||
+      devices.find((d) => props.lastDeviceName && d.name === props.lastDeviceName) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function requestPrinterChooser() {
+  return navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: PRINTER_BLE_SERVICES,
+  });
 }
 
 async function watchRememberedDevice(btDevice) {
@@ -207,6 +222,7 @@ function onDisconnected() {
   if (!manualDisconnect && autoReconnectActive) {
     reconnectAttempt = 0;
     scheduleReconnect();
+    if (device) watchRememberedDevice(device);
     findRememberedDevice()
       .then((match) => {
         if (match && !manualDisconnect && !isLinkUp()) return watchRememberedDevice(match);
@@ -321,10 +337,7 @@ export async function connectBluetoothPrinter() {
   lastError = '';
   emit();
   try {
-    const nextDevice = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: PRINTER_BLE_SERVICES,
-    });
+    const nextDevice = await requestPrinterChooser();
     await bindDevice(nextDevice);
     emit();
     return getPrinterConnection();
@@ -347,12 +360,7 @@ export async function reconnectLastPrinter(options = {}) {
   if (reconnectInFlight) return reconnectInFlight;
   if (connecting) return getPrinterConnection();
   const props = readProps();
-  if (!props.lastDeviceId && !props.lastDeviceName) return getPrinterConnection();
-  if (typeof navigator.bluetooth.getDevices !== 'function') {
-    if (options.force) {
-      lastError = 'This browser cannot restore a printer automatically. Scan to connect.';
-      emit();
-    }
+  if (!device && !props.lastDeviceId && !props.lastDeviceName && !options.force) {
     return getPrinterConnection();
   }
 
@@ -362,13 +370,17 @@ export async function reconnectLastPrinter(options = {}) {
     lastError = '';
     emit();
     try {
-      const match = await findRememberedDevice();
+      let match = device?.gatt ? device : null;
+      if (!match) match = await findRememberedDevice();
+      if (!match && options.force) {
+        match = await requestPrinterChooser();
+      }
       if (generation !== connectGeneration) return getPrinterConnection();
       if (!match) {
         if (options.force) {
           lastError = props.lastDeviceName
-            ? `This browser has no saved access to ${props.lastDeviceName}. Scan once so it can reconnect automatically.`
-            : 'No remembered printer. Scan to connect.';
+            ? `Could not restore ${props.lastDeviceName}. Scan and select it once.`
+            : 'No printer selected.';
         }
         return getPrinterConnection();
       }
@@ -378,7 +390,10 @@ export async function reconnectLastPrinter(options = {}) {
       if (generation !== connectGeneration) return getPrinterConnection();
       reconnectAttempt += 1;
       if (options.force) {
-        lastError = e?.message || 'Could not restore the last printer.';
+        lastError =
+          e?.name === 'NotFoundError'
+            ? 'No printer selected.'
+            : e?.message || 'Could not restore the last printer.';
       } else {
         lastError = '';
       }
@@ -530,6 +545,18 @@ export function buildEscPosReceipt(lines, options = {}) {
       if (line.bold) pushBytes(out, 0x1b, 0x45, 0x00);
       continue;
     }
+    if (kind === 'cells') {
+      const rows = formatCells(line.items, width);
+      if (line.bold) pushBytes(out, 0x1b, 0x45, 0x01);
+      if (line.invert) pushBytes(out, 0x1d, 0x42, 0x01);
+      for (const row of rows) {
+        const padded = line.invert && row.length < width ? `${row}${' '.repeat(width - row.length)}` : row;
+        pushBytes(out, encodeText(padded), 0x0a);
+      }
+      if (line.invert) pushBytes(out, 0x1d, 0x42, 0x00);
+      if (line.bold) pushBytes(out, 0x1b, 0x45, 0x00);
+      continue;
+    }
     const text = String(line.text ?? '');
     const wide = Boolean(line.double);
     const tall = Boolean(line.tall) && !wide;
@@ -586,6 +613,49 @@ function formatCols(left, right, width) {
     const line = `${chunk}${' '.repeat(gap)}${r}`;
     return line.length > w ? `${chunk.slice(0, maxLeft)}${' '.repeat(w - maxLeft - r.length)}${r}` : line;
   });
+}
+
+function padAlign(text, width, align) {
+  const s = String(text ?? '');
+  const w = Math.max(1, Number(width) || 1);
+  if (s.length >= w) return s.slice(0, w);
+  const pad = ' '.repeat(w - s.length);
+  return align === 'right' ? `${pad}${s}` : `${s}${pad}`;
+}
+
+function formatCells(items, width) {
+  const cols = Array.isArray(items) ? items : [];
+  const w = Math.max(16, Number(width) || 48);
+  if (cols.length === 0) return [''];
+  const gaps = Math.max(0, cols.length - 1);
+  const parsed = cols.map((col) => ({
+    text: String(col?.text ?? ''),
+    align: col?.align === 'right' ? 'right' : 'left',
+    flex: Boolean(col?.flex),
+    width: Math.max(1, Math.floor(Number(col?.width) || 1)),
+  }));
+  let fixed = 0;
+  let flexN = 0;
+  for (const col of parsed) {
+    if (col.flex) flexN += 1;
+    else fixed += col.width;
+  }
+  const leftover = w - fixed - gaps;
+  const flexWidth = flexN > 0 ? Math.max(4, Math.floor(leftover / flexN)) : 0;
+  const widths = parsed.map((col) => (col.flex ? flexWidth : col.width));
+  const used = widths.reduce((sum, n) => sum + n, 0) + gaps;
+  if (used < w) {
+    const flexIndex = parsed.findIndex((col) => col.flex);
+    if (flexIndex >= 0) widths[flexIndex] += w - used;
+  }
+  const wrapped = parsed.map((col, i) => wrapText(col.text, widths[i]));
+  const rowCount = Math.max(1, ...wrapped.map((rows) => rows.length));
+  const lines = [];
+  for (let row = 0; row < rowCount; row += 1) {
+    const parts = parsed.map((col, i) => padAlign(wrapped[i][row] || '', widths[i], col.align));
+    lines.push(parts.join(' '));
+  }
+  return lines;
 }
 
 export async function printEscPosLines(lines) {

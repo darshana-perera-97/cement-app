@@ -377,6 +377,10 @@ function resolveCorsOrigin() {
 }
 
 app.use(cors({ origin: resolveCorsOrigin() }));
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'bluetooth=(self)');
+  next();
+});
 app.use(express.json());
 
 app.get('/api/health', (req, res) => {
@@ -1128,11 +1132,13 @@ function paymentSettlementSummary(p) {
   for (const d of getPaymentCdmDeposits(p)) {
     let s = `CDM LKR ${d.amount}`;
     if (d.cdmNumber) s += ` #${d.cdmNumber}`;
+    if (d.cdmDate) s += ` · ${d.cdmDate}`;
     parts.push(s);
   }
   for (const t of getPaymentOnlineTransfers(p)) {
     let s = `online transfer LKR ${t.amount}`;
     if (t.reference) s += ` ref ${t.reference}`;
+    if (t.transferDate) s += ` · ${t.transferDate}`;
     parts.push(s);
   }
   for (const line of chequeLines) {
@@ -2112,7 +2118,9 @@ app.get('/api/unloads', async (req, res) => {
       if (da !== db) return db.localeCompare(da);
       return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     });
-    res.json(sorted);
+    const products = await getBagProducts();
+    const bills = await readBills();
+    res.json(sorted.map((row) => attachLastPricesToUnload(row, bills, products)));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read unloads' });
@@ -2132,7 +2140,9 @@ app.get('/api/unload-requests', async (req, res) => {
     const sorted = [...rows].sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
     );
-    res.json(sorted);
+    const products = await getBagProducts();
+    const bills = await readBills();
+    res.json(sorted.map((row) => attachLastPricesToUnload(row, bills, products)));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read unload requests' });
@@ -2179,6 +2189,33 @@ function lastBillUnitPricesForCustomer(bills, customerName, products) {
     prices[p.unitPriceField] = unit;
   }
   return prices;
+}
+
+function attachLastPricesToUnload(row, bills, products) {
+  const last = lastBillUnitPricesForCustomer(bills, row?.customerName, products);
+  const next = { ...row };
+  let totalAmount = 0;
+  for (const p of products) {
+    const bags = toNonNegNumber(next[p.bagsField]);
+    let unit = toNonNegMoney(next[p.unitPriceField]);
+    if (!(unit > 0) && last) {
+      const fromLast = toNonNegMoney(last[p.unitPriceField]);
+      if (fromLast > 0) unit = fromLast;
+    }
+    if (unit > 0) next[p.unitPriceField] = unit;
+    const line = lineTotal(bags, unit);
+    next[`${p.key}Line`] = line;
+    totalAmount += line;
+  }
+  next.totalAmount = Math.round(totalAmount * 100) / 100;
+  return next;
+}
+
+function suggestNextInvoiceForUnload(bills, unloads) {
+  const pending = (Array.isArray(unloads) ? unloads : [])
+    .filter((r) => normalizeStatus(r.status) === 'pending')
+    .map((r) => ({ createdAt: r.createdAt, invoiceNumber: r.invoiceNumber }));
+  return suggestNextBillInvoiceNumber([...(Array.isArray(bills) ? bills : []), ...pending]);
 }
 
 app.get('/api/bills/last-unit-prices', async (req, res) => {
@@ -2257,12 +2294,16 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
     const customerName = String(requestRow.customerName ?? '').trim();
     const keys = products.map((p) => p.key);
     const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
+    let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
+    if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
+      invoiceNumber = suggestNextBillInvoiceNumber(bills);
+    }
     const billRow = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       date: String(requestRow.date ?? '').trim(),
       customerName,
       stockId,
-      invoiceNumber: suggestNextBillInvoiceNumber(bills),
+      invoiceNumber,
       ...fields,
       enteredBy,
       unloadRequestId: requestRow.id,
@@ -2276,6 +2317,7 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
       ...requestRow,
       status: 'approved',
       billId: billRow.id,
+      invoiceNumber: billRow.invoiceNumber,
       approvedAt: new Date().toISOString(),
       approvedBy: enteredBy,
     };
@@ -2564,18 +2606,24 @@ app.post('/api/unloads', async (req, res) => {
     }
 
     const note = String(body.note ?? '').trim();
-    const row = {
-      id: `unload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-      date,
-      customerId: cust.id,
-      customerName: cust.name,
-      ...fields,
-      recordedBy: auth.username,
-      driverName: auth.driverName || auth.name || auth.username,
-      note,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-    };
+    const bills = await readBills();
+    const row = attachLastPricesToUnload(
+      {
+        id: `unload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        date,
+        customerId: cust.id,
+        customerName: cust.name,
+        ...fields,
+        recordedBy: auth.username,
+        driverName: auth.driverName || auth.name || auth.username,
+        note,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      },
+      bills,
+      products,
+    );
+    row.invoiceNumber = suggestNextInvoiceForUnload(bills, unloadsExisting);
 
     const unloads = await readUnloads();
     unloads.push(row);

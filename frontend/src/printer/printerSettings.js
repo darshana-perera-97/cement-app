@@ -13,7 +13,8 @@ export const PRINTER_SCENARIOS = [
   {
     key: 'unload',
     label: 'Unloading',
-    description: 'Print a delivery slip when a shop unload is recorded.',
+    printTitle: 'Unloading invoice',
+    description: 'Print an unloading invoice when a shop unload is recorded.',
   },
   {
     key: 'cashCollection',

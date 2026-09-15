@@ -1,7 +1,14 @@
 const { toNonNegMoney } = require('./customersStore');
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function roundMoney(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function parseYmd(value) {
+  const s = String(value ?? '').trim().slice(0, 10);
+  return YMD_RE.test(s) ? s : '';
 }
 
 function newCdmId() {
@@ -41,6 +48,7 @@ function normalizeStoredCdmDeposit(d, legacyPayment) {
     id: String(d?.id ?? '').trim() || (legacyPayment ? '_legacy' : newCdmId()),
     amount,
     cdmNumber: String(d?.cdmNumber ?? '').trim(),
+    cdmDate: parseYmd(d?.cdmDate ?? d?.date),
     bankAccountId: String(d?.bankAccountId ?? d?.cdmBankAccountId ?? '').trim(),
   };
   const snap = d?.bankAccount || d?.cdmBankAccount;
@@ -57,6 +65,7 @@ function normalizeStoredOnlineTransfer(t, legacyPayment) {
     id: String(t?.id ?? '').trim() || (legacyPayment ? '_legacy' : newOnlineTransferId()),
     amount,
     reference: String(t?.reference ?? t?.onlineTransferReference ?? '').trim(),
+    transferDate: parseYmd(t?.transferDate ?? t?.date),
     bankAccountId: String(t?.bankAccountId ?? t?.onlineTransferBankAccountId ?? '').trim(),
   };
   const snap = t?.bankAccount || t?.onlineTransferBankAccount;
@@ -83,6 +92,7 @@ function getPaymentCdmDeposits(p) {
         id: '_legacy',
         amount,
         cdmNumber: p.cdmNumber,
+        cdmDate: p.cdmDate,
         bankAccountId: p.cdmBankAccountId,
         bankAccount: p.cdmBankAccount,
       },
@@ -107,6 +117,7 @@ function getPaymentOnlineTransfers(p) {
         id: '_legacy',
         amount,
         reference: p.onlineTransferReference,
+        transferDate: p.onlineTransferDate,
         bankAccountId: p.onlineTransferBankAccountId,
         bankAccount: p.onlineTransferBankAccount,
       },
@@ -135,11 +146,13 @@ function emptyOtherMethodsParse(error) {
   return {
     cdmAmount: 0,
     cdmNumber: '',
+    cdmDate: '',
     cdmBankAccountId: '',
     cdmBankAccount: null,
     cdmDeposits: [],
     onlineTransferAmount: 0,
     onlineTransferReference: '',
+    onlineTransferDate: '',
     onlineTransferBankAccountId: '',
     onlineTransferBankAccount: null,
     onlineTransfers: [],
@@ -156,9 +169,13 @@ function parseCdmDepositsFromBody(body) {
       const amount = toNonNegMoney(raw.amount);
       if (amount <= 0) continue;
       const cdmNumber = String(raw.cdmNumber ?? '').trim();
+      const cdmDate = parseYmd(raw.cdmDate ?? raw.date);
       const bankAccountId = String(raw.bankAccountId ?? raw.cdmBankAccountId ?? '').trim();
       if (!cdmNumber) {
         return { deposits: [], error: `CDM deposit ${i + 1}: CDM number is required.` };
+      }
+      if (!cdmDate) {
+        return { deposits: [], error: `CDM deposit ${i + 1}: enter a valid deposit date.` };
       }
       if (!bankAccountId) {
         return { deposits: [], error: `CDM deposit ${i + 1}: select a bank account.` };
@@ -167,6 +184,7 @@ function parseCdmDepositsFromBody(body) {
         id: String(raw.id ?? '').trim(),
         amount,
         cdmNumber,
+        cdmDate,
         bankAccountId,
       });
     }
@@ -176,15 +194,19 @@ function parseCdmDepositsFromBody(body) {
   const amount = toNonNegMoney(body?.cdmAmount ?? 0);
   if (amount <= 0) return { deposits: [] };
   const cdmNumber = String(body?.cdmNumber ?? '').trim();
+  const cdmDate = parseYmd(body?.cdmDate);
   const bankAccountId = String(body?.cdmBankAccountId ?? '').trim();
   if (!cdmNumber) {
     return { deposits: [], error: 'CDM number is required when CDM deposit amount is greater than 0.' };
+  }
+  if (!cdmDate) {
+    return { deposits: [], error: 'Enter a valid deposit date when CDM deposit amount is greater than 0.' };
   }
   if (!bankAccountId) {
     return { deposits: [], error: 'Select a bank account when CDM deposit amount is greater than 0.' };
   }
   return {
-    deposits: [{ amount, cdmNumber, bankAccountId }],
+    deposits: [{ amount, cdmNumber, cdmDate, bankAccountId }],
   };
 }
 
@@ -197,12 +219,16 @@ function parseOnlineTransfersFromBody(body) {
       const amount = toNonNegMoney(raw.amount);
       if (amount <= 0) continue;
       const reference = String(raw.reference ?? raw.onlineTransferReference ?? '').trim();
+      const transferDate = parseYmd(raw.transferDate ?? raw.date);
       const bankAccountId = String(raw.bankAccountId ?? raw.onlineTransferBankAccountId ?? '').trim();
       if (!reference) {
         return {
           transfers: [],
           error: `Online transfer ${i + 1}: reference number is required.`,
         };
+      }
+      if (!transferDate) {
+        return { transfers: [], error: `Online transfer ${i + 1}: enter a valid transfer date.` };
       }
       if (!bankAccountId) {
         return { transfers: [], error: `Online transfer ${i + 1}: select a bank account.` };
@@ -211,6 +237,7 @@ function parseOnlineTransfersFromBody(body) {
         id: String(raw.id ?? '').trim(),
         amount,
         reference,
+        transferDate,
         bankAccountId,
       });
     }
@@ -220,6 +247,7 @@ function parseOnlineTransfersFromBody(body) {
   const amount = toNonNegMoney(body?.onlineTransferAmount ?? 0);
   if (amount <= 0) return { transfers: [] };
   const reference = String(body?.onlineTransferReference ?? '').trim();
+  const transferDate = parseYmd(body?.onlineTransferDate ?? body?.transferDate);
   const bankAccountId = String(body?.onlineTransferBankAccountId ?? '').trim();
   if (!reference) {
     return {
@@ -227,11 +255,17 @@ function parseOnlineTransfersFromBody(body) {
       error: 'Online transfer reference number is required when online transfer amount is greater than 0.',
     };
   }
+  if (!transferDate) {
+    return {
+      transfers: [],
+      error: 'Enter a valid transfer date when online transfer amount is greater than 0.',
+    };
+  }
   if (!bankAccountId) {
     return { transfers: [], error: 'Select a bank account when online transfer amount is greater than 0.' };
   }
   return {
-    transfers: [{ amount, reference, bankAccountId }],
+    transfers: [{ amount, reference, transferDate, bankAccountId }],
   };
 }
 
@@ -253,10 +287,12 @@ function parseOtherPaymentMethodsFromBody(body) {
   return {
     cdmAmount,
     cdmNumber: firstCdm?.cdmNumber || '',
+    cdmDate: firstCdm?.cdmDate || '',
     cdmBankAccountId: firstCdm?.bankAccountId || '',
     cdmDeposits: cdm.deposits,
     onlineTransferAmount,
     onlineTransferReference: firstOnline?.reference || '',
+    onlineTransferDate: firstOnline?.transferDate || '',
     onlineTransferBankAccountId: firstOnline?.bankAccountId || '',
     onlineTransfers: online.transfers,
   };
@@ -284,6 +320,7 @@ function resolveOtherMethodBankAccounts(parsed, bankAccounts) {
             {
               amount: parsed.cdmAmount,
               cdmNumber: parsed.cdmNumber,
+              cdmDate: parsed.cdmDate,
               bankAccountId: parsed.cdmBankAccountId,
             },
           ]
@@ -299,13 +336,16 @@ function resolveOtherMethodBankAccounts(parsed, bankAccounts) {
           : 'Select a valid bank account for CDM deposit.',
       );
     }
-    next.cdmDeposits.push({
+    const cdmLine = {
       id: String(d.id ?? '').trim(),
       amount: toNonNegMoney(d.amount),
       cdmNumber: String(d.cdmNumber ?? '').trim(),
       bankAccountId: String(acct.id).trim(),
       bankAccount: bankAccountSnapshot(acct),
-    });
+    };
+    const cdmDate = parseYmd(d.cdmDate ?? d.date);
+    if (cdmDate) cdmLine.cdmDate = cdmDate;
+    next.cdmDeposits.push(cdmLine);
   }
 
   const sourceTransfers =
@@ -316,6 +356,7 @@ function resolveOtherMethodBankAccounts(parsed, bankAccounts) {
             {
               amount: parsed.onlineTransferAmount,
               reference: parsed.onlineTransferReference,
+              transferDate: parsed.onlineTransferDate || parsed.transferDate,
               bankAccountId: parsed.onlineTransferBankAccountId,
             },
           ]
@@ -331,22 +372,27 @@ function resolveOtherMethodBankAccounts(parsed, bankAccounts) {
           : 'Select a valid bank account for online transfer.',
       );
     }
-    next.onlineTransfers.push({
+    const transferLine = {
       id: String(t.id ?? '').trim(),
       amount: toNonNegMoney(t.amount),
       reference: String(t.reference ?? t.onlineTransferReference ?? '').trim(),
       bankAccountId: String(acct.id).trim(),
       bankAccount: bankAccountSnapshot(acct),
-    });
+    };
+    const transferDate = parseYmd(t.transferDate ?? t.date);
+    if (transferDate) transferLine.transferDate = transferDate;
+    next.onlineTransfers.push(transferLine);
   }
 
   next.cdmAmount = roundMoney(next.cdmDeposits.reduce((s, d) => s + d.amount, 0));
   if (next.cdmDeposits.length > 0) {
     next.cdmNumber = next.cdmDeposits[0].cdmNumber;
+    next.cdmDate = next.cdmDeposits[0].cdmDate || '';
     next.cdmBankAccountId = next.cdmDeposits[0].bankAccountId;
     next.cdmBankAccount = next.cdmDeposits[0].bankAccount;
   } else {
     next.cdmNumber = '';
+    next.cdmDate = '';
     next.cdmBankAccountId = '';
     next.cdmBankAccount = null;
   }
@@ -354,10 +400,12 @@ function resolveOtherMethodBankAccounts(parsed, bankAccounts) {
   next.onlineTransferAmount = roundMoney(next.onlineTransfers.reduce((s, t) => s + t.amount, 0));
   if (next.onlineTransfers.length > 0) {
     next.onlineTransferReference = next.onlineTransfers[0].reference;
+    next.onlineTransferDate = next.onlineTransfers[0].transferDate || '';
     next.onlineTransferBankAccountId = next.onlineTransfers[0].bankAccountId;
     next.onlineTransferBankAccount = next.onlineTransfers[0].bankAccount;
   } else {
     next.onlineTransferReference = '';
+    next.onlineTransferDate = '';
     next.onlineTransferBankAccountId = '';
     next.onlineTransferBankAccount = null;
   }
@@ -370,6 +418,7 @@ function applyLegacyCdmFields(row, deposits) {
   if (total <= 0) {
     delete row.cdmAmount;
     delete row.cdmNumber;
+    delete row.cdmDate;
     delete row.cdmBankAccountId;
     delete row.cdmBankAccount;
     return;
@@ -377,6 +426,8 @@ function applyLegacyCdmFields(row, deposits) {
   const first = deposits[0];
   row.cdmAmount = total;
   row.cdmNumber = String(first?.cdmNumber ?? '').trim();
+  if (first?.cdmDate) row.cdmDate = first.cdmDate;
+  else delete row.cdmDate;
   if (first?.bankAccountId) row.cdmBankAccountId = first.bankAccountId;
   else delete row.cdmBankAccountId;
   if (first?.bankAccount) row.cdmBankAccount = first.bankAccount;
@@ -388,6 +439,7 @@ function applyLegacyOnlineTransferFields(row, transfers) {
   if (total <= 0) {
     delete row.onlineTransferAmount;
     delete row.onlineTransferReference;
+    delete row.onlineTransferDate;
     delete row.onlineTransferBankAccountId;
     delete row.onlineTransferBankAccount;
     return;
@@ -395,6 +447,8 @@ function applyLegacyOnlineTransferFields(row, transfers) {
   const first = transfers[0];
   row.onlineTransferAmount = total;
   row.onlineTransferReference = String(first?.reference ?? '').trim();
+  if (first?.transferDate) row.onlineTransferDate = first.transferDate;
+  else delete row.onlineTransferDate;
   if (first?.bankAccountId) row.onlineTransferBankAccountId = first.bankAccountId;
   else delete row.onlineTransferBankAccountId;
   if (first?.bankAccount) row.onlineTransferBankAccount = first.bankAccount;
@@ -411,6 +465,8 @@ function attachOtherPaymentMethodsToRow(row, parsed) {
         cdmNumber: String(d.cdmNumber ?? '').trim(),
         bankAccountId: String(d.bankAccountId ?? '').trim(),
       };
+      const cdmDate = parseYmd(d.cdmDate ?? d.date);
+      if (cdmDate) line.cdmDate = cdmDate;
       if (d.bankAccount) line.bankAccount = d.bankAccount;
       return line;
     });
@@ -423,6 +479,8 @@ function attachOtherPaymentMethodsToRow(row, parsed) {
         reference: String(t.reference ?? t.onlineTransferReference ?? '').trim(),
         bankAccountId: String(t.bankAccountId ?? '').trim(),
       };
+      const transferDate = parseYmd(t.transferDate ?? t.date);
+      if (transferDate) line.transferDate = transferDate;
       if (t.bankAccount) line.bankAccount = t.bankAccount;
       return line;
     });
@@ -462,12 +520,14 @@ function resolveApprovalBankAccounts(existing, body, bankAccounts) {
         id: d.id,
         amount: d.amount,
         cdmNumber: d.cdmNumber,
+        cdmDate: d.cdmDate,
         bankAccountId: pickOverrideBankAccountId(d, i, bodyCdm, singleCdm, deposits.length === 1),
       })),
       onlineTransfers: transfers.map((t, i) => ({
         id: t.id,
         amount: t.amount,
         reference: t.reference,
+        transferDate: t.transferDate,
         bankAccountId: pickOverrideBankAccountId(t, i, bodyOnline, singleOnline, transfers.length === 1),
       })),
     },

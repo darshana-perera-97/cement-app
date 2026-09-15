@@ -58,6 +58,7 @@ function newCdmLine(overrides = {}) {
     id: '',
     amount: '',
     cdmNumber: '',
+    cdmDate: todayYmdLocal(),
     bankAccountId: '',
     ...overrides,
   };
@@ -71,6 +72,7 @@ function newOnlineTransferLine(overrides = {}) {
     id: '',
     amount: '',
     reference: '',
+    transferDate: todayYmdLocal(),
     bankAccountId: '',
     ...overrides,
   };
@@ -172,6 +174,7 @@ function formFromPayment(payment) {
             id: d.id === '_legacy' ? '' : d.id || '',
             amount: String(d.amount),
             cdmNumber: d.cdmNumber || '',
+            cdmDate: d.cdmDate || payment.date || todayYmdLocal(),
             bankAccountId: d.bankAccountId || '',
           }),
         )
@@ -184,6 +187,7 @@ function formFromPayment(payment) {
             id: t.id === '_legacy' ? '' : t.id || '',
             amount: String(t.amount),
             reference: t.reference || '',
+            transferDate: t.transferDate || payment.date || todayYmdLocal(),
             bankAccountId: t.bankAccountId || '',
           }),
         )
@@ -436,7 +440,7 @@ export default function RecordPaymentModal({
       const template = f.cdmDeposits[0];
       return {
         ...f,
-        cdmDeposits: [...f.cdmDeposits, newCdmLine({ bankAccountId: template?.bankAccountId || '' })],
+        cdmDeposits: [...f.cdmDeposits, newCdmLine({ bankAccountId: template?.bankAccountId || '', cdmDate: template?.cdmDate || todayYmdLocal() })],
       };
     });
   };
@@ -462,7 +466,10 @@ export default function RecordPaymentModal({
         ...f,
         onlineTransfers: [
           ...f.onlineTransfers,
-          newOnlineTransferLine({ bankAccountId: template?.bankAccountId || '' }),
+          newOnlineTransferLine({
+            bankAccountId: template?.bankAccountId || '',
+            transferDate: template?.transferDate || todayYmdLocal(),
+          }),
         ],
       };
     });
@@ -520,9 +527,14 @@ export default function RecordPaymentModal({
         setSaveError(`CDM deposit ${i + 1}: select a bank account.`);
         return;
       }
+      if (!line.cdmDate || !/^\d{4}-\d{2}-\d{2}$/.test(line.cdmDate)) {
+        setSaveError(`CDM deposit ${i + 1}: enter a valid deposit date.`);
+        return;
+      }
       const entry = {
         amount,
         cdmNumber: String(line.cdmNumber).trim(),
+        cdmDate: line.cdmDate,
         bankAccountId: String(line.bankAccountId).trim(),
       };
       if (line.id) entry.id = line.id;
@@ -541,9 +553,14 @@ export default function RecordPaymentModal({
         setSaveError(`Online transfer ${i + 1}: select a bank account.`);
         return;
       }
+      if (!line.transferDate || !/^\d{4}-\d{2}-\d{2}$/.test(line.transferDate)) {
+        setSaveError(`Online transfer ${i + 1}: enter a valid transfer date.`);
+        return;
+      }
       const entry = {
         amount,
         reference: String(line.reference).trim(),
+        transferDate: line.transferDate,
         bankAccountId: String(line.bankAccountId).trim(),
       };
       if (line.id) entry.id = line.id;
@@ -834,7 +851,7 @@ export default function RecordPaymentModal({
                   <legend className="px-1 text-sm font-semibold text-slate-800">CDM deposits</legend>
                   <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
                     <p className="text-xs text-slate-500">
-                      Enter amount, CDM number, and the shop bank account. Credited when a manager approves.
+                      Enter amount, deposit date, CDM number, and the shop bank account. Credited when a manager approves.
                     </p>
                     <button
                       type="button"
@@ -875,6 +892,15 @@ export default function RecordPaymentModal({
                             />
                           </label>
                           <label className="block text-sm font-medium text-slate-600">
+                            Deposit date <span className="text-rose-600">*</span>
+                            <input
+                              type="date"
+                              value={line.cdmDate}
+                              onChange={(e) => handleCdmChange(line.key, 'cdmDate', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                             CDM number <span className="text-rose-600">*</span>
                             <input
                               type="text"
@@ -912,7 +938,7 @@ export default function RecordPaymentModal({
                   <legend className="px-1 text-sm font-semibold text-slate-800">Online transfers</legend>
                   <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
                     <p className="text-xs text-slate-500">
-                      Enter amount, bank reference, and the shop bank account. Credited when a manager approves.
+                      Enter amount, transfer date, bank reference, and the shop bank account. Credited when a manager approves.
                     </p>
                     <button
                       type="button"
@@ -953,6 +979,15 @@ export default function RecordPaymentModal({
                             />
                           </label>
                           <label className="block text-sm font-medium text-slate-600">
+                            Transfer date <span className="text-rose-600">*</span>
+                            <input
+                              type="date"
+                              value={line.transferDate}
+                              onChange={(e) => handleOnlineTransferChange(line.key, 'transferDate', e.target.value)}
+                              className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
                             Transfer reference # <span className="text-rose-600">*</span>
                             <input
                               type="text"

@@ -121,8 +121,8 @@ export default function PaymentsPage() {
           r.recordedBy,
           String(r.amount),
           ...getPaymentCheques(r).flatMap((c) => [c.chequeDate, c.chequeNumber]),
-          ...getPaymentCdmDeposits(r).flatMap((d) => [d.cdmNumber, d.bankAccountId]),
-          ...getPaymentOnlineTransfers(r).flatMap((t) => [t.reference, t.bankAccountId]),
+          ...getPaymentCdmDeposits(r).flatMap((d) => [d.cdmNumber, d.cdmDate, d.bankAccountId]),
+          ...getPaymentOnlineTransfers(r).flatMap((t) => [t.reference, t.transferDate, t.bankAccountId]),
         ])
       ) {
         return false;

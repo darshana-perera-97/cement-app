@@ -646,6 +646,7 @@ function PaymentDetailContent({ row }) {
               <p className="font-semibold tabular-nums text-sky-900">{formatMoney(d.amount)}</p>
               <p className="mt-1 text-xs text-slate-600">
                 #{d.cdmNumber || '—'}
+                {d.cdmDate ? ` · ${d.cdmDate}` : ''}
                 {d.bankAccount || d.bankAccountId
                   ? ` · ${bankAccountSnapLabel(d.bankAccount, d.bankAccountId)}`
                   : ''}
@@ -667,6 +668,7 @@ function PaymentDetailContent({ row }) {
               <p className="font-semibold tabular-nums text-teal-900">{formatMoney(t.amount)}</p>
               <p className="mt-1 text-xs text-slate-600">
                 {t.reference || '—'}
+                {t.transferDate ? ` · ${t.transferDate}` : ''}
                 {t.bankAccount || t.bankAccountId
                   ? ` · ${bankAccountSnapLabel(t.bankAccount, t.bankAccountId)}`
                   : ''}

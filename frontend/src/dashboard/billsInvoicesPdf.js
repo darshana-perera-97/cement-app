@@ -391,7 +391,7 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
 }
 
 /**
- * Download one PDF with one invoice page per credit bill (one unload to a shop per day).
+ * Build one PDF with one invoice page per credit bill (one unload to a shop per day).
  * @param {Array} bills — filtered bill rows
  * @param {{
  *   shopName?: string,
@@ -409,10 +409,11 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
  *   dateTo?: string,
  *   generatedAt?: Date,
  * }} [opts]
+ * @returns {{ doc: import('jspdf').jsPDF, filename: string } | null}
  */
-export function downloadBillsInvoicesPdf(bills, opts = {}) {
+export function buildBillsInvoicesPdf(bills, opts = {}) {
   const list = sortBillsForExport(Array.isArray(bills) ? bills : []);
-  if (list.length === 0) return;
+  if (list.length === 0) return null;
 
   const loadByStockId = buildLoadByStockId(opts.loads);
   const unloadLookups = buildUnloadLookups(opts.unloads);
@@ -430,5 +431,20 @@ export function downloadBillsInvoicesPdf(bills, opts = {}) {
   const rangeSlug =
     dateFrom && dateTo ? `${dateFrom}_to_${dateTo}` : dateFrom || dateTo || 'all-dates';
   const stamp = generatedAt.toISOString().slice(0, 10);
-  doc.save(`invoices-${rangeSlug}-${stamp}.pdf`);
+  return { doc, filename: `invoices-${rangeSlug}-${stamp}.pdf` };
+}
+
+/** Download the generated invoices PDF. */
+export function downloadBillsInvoicesPdf(bills, opts = {}) {
+  const built = buildBillsInvoicesPdf(bills, opts);
+  if (!built) return;
+  built.doc.save(built.filename);
+}
+
+/** Create a blob URL for in-app preview. Caller must revoke with URL.revokeObjectURL. */
+export function billsInvoicesPdfBlobUrl(bills, opts = {}) {
+  const built = buildBillsInvoicesPdf(bills, opts);
+  if (!built) return null;
+  const blob = built.doc.output('blob');
+  return { url: URL.createObjectURL(blob), filename: built.filename };
 }

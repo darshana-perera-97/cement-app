@@ -96,6 +96,8 @@ function bagLinesFromRow(row) {
     if (bags <= 0) continue;
     const unitPrice = Number(row?.[`${brand.key}UnitPrice`]) || 0;
     items.push({
+      code: String(brand?.code ?? '').trim(),
+      name: String(brand?.label ?? '').trim() || brand.key,
       label: formatBrandLabel(brand) || brand.label || brand.key,
       bags,
       unitPrice,
@@ -103,6 +105,34 @@ function bagLinesFromRow(row) {
     });
   }
   return items;
+}
+
+function itemTableLines(items, { includeAmount = false } = {}) {
+  const qtyHeader = includeAmount ? 'QTY' : 'ITEMS';
+  const header = [
+    { text: 'CODE', width: 8 },
+    { text: 'ITEM NAME', flex: true },
+    { text: qtyHeader, width: 6, align: 'right' },
+  ];
+  if (includeAmount) header.push({ text: 'AMOUNT', width: 10, align: 'right' });
+  const lines = [
+    { kind: 'cells', bold: true, items: header },
+    { kind: 'rule' },
+  ];
+  if (!items.length) {
+    lines.push({ text: 'No items' });
+    return lines;
+  }
+  for (const item of items) {
+    const row = [
+      { text: item.code || '—', width: 8 },
+      { text: item.name, flex: true },
+      { text: String(item.bags), width: 6, align: 'right' },
+    ];
+    if (includeAmount) row.push({ text: money(item.amount), width: 10, align: 'right' });
+    lines.push({ kind: 'cells', items: row });
+  }
+  return lines;
 }
 
 function footerLines() {
@@ -187,28 +217,39 @@ function pushInvoiceLines(lines, payment) {
 export function buildUnloadReceiptLines(unload, shop) {
   const items = bagLinesFromRow(unload);
   const totalBags = items.reduce((s, i) => s + i.bags, 0);
+  const totalAmount = items.reduce((s, i) => s + i.amount, 0);
   const lines = [
     ...shopLines(shop),
     { kind: 'align', value: 'center' },
-    { text: 'UNLOAD SLIP', bold: true },
-    { kind: 'rule' },
+    { text: 'UNLOADING INVOICE', bold: true, double: true },
+    { kind: 'rule', char: '=' },
     { kind: 'align', value: 'left' },
+    { kind: 'cols', left: 'Invoice #', right: display(unload?.invoiceNumber) },
     { kind: 'cols', left: 'Date', right: formatDate(unload?.date) },
-    { kind: 'cols', left: 'Shop', right: display(unload?.customerName) },
-    { kind: 'cols', left: 'Driver', right: display(unload?.driverName || unload?.recordedBy) },
-    { kind: 'cols', left: 'Status', right: display(unload?.status || 'pending') },
+    { kind: 'cols', left: 'Customer', right: display(unload?.customerName) },
+    ...(unload?.driverName
+      ? [{ kind: 'cols', left: 'Driver', right: display(unload.driverName) }]
+      : []),
     { kind: 'rule' },
+    ...itemTableLines(items),
+    { kind: 'rule' },
+    {
+      kind: 'cells',
+      bold: true,
+      items: [
+        { text: '', width: 8 },
+        { text: 'TOTAL BAGS', flex: true },
+        { text: String(totalBags), width: 6, align: 'right' },
+      ],
+    },
   ];
-  if (items.length === 0) {
-    lines.push({ text: 'No bag lines' });
-  } else {
-    lines.push({ kind: 'cols', left: 'Product', right: 'Bags' });
-    for (const item of items) {
-      lines.push({ kind: 'cols', left: item.label, right: String(item.bags) });
-    }
+  if (totalAmount > 0) {
+    lines.push({ kind: 'cols', left: 'AMOUNT', right: money(totalAmount), bold: true });
   }
-  lines.push({ kind: 'rule' });
-  lines.push({ kind: 'cols', left: 'Total bags', right: String(totalBags) });
+  lines.push({ kind: 'blank' });
+  lines.push({ text: 'Received the above goods in correct quantity and in good condition.' });
+  lines.push({ kind: 'blank' });
+  lines.push({ kind: 'cols', left: 'Customer sign', right: 'Approved' });
   if (unload?.note) {
     lines.push({ kind: 'blank' });
     lines.push({ text: `Note: ${unload.note}` });
@@ -269,7 +310,10 @@ export function buildPaymentReceiptLines(payment, shop) {
     lines.push({ kind: 'blank' });
     lines.push({ text: cdmDeposits.length === 1 ? 'CDM details' : 'CDM deposits', bold: true });
     for (const d of cdmDeposits) {
-      const bits = [d.cdmNumber ? `#${d.cdmNumber}` : null].filter(Boolean);
+      const bits = [
+        d.cdmNumber ? `#${d.cdmNumber}` : null,
+        d.cdmDate ? formatDate(d.cdmDate) : null,
+      ].filter(Boolean);
       const bank = bankAccountLabel(d.bankAccount, d.bankAccountId);
       lines.push({
         kind: 'cols',
@@ -288,6 +332,7 @@ export function buildPaymentReceiptLines(payment, shop) {
         left: t.reference ? `Ref ${t.reference}` : 'Online transfer',
         right: money(t.amount),
       });
+      if (t.transferDate) lines.push({ kind: 'cols', left: 'Date', right: formatDate(t.transferDate) });
       const onlineBank = bankAccountLabel(t.bankAccount, t.bankAccountId);
       if (onlineBank) lines.push({ kind: 'cols', left: 'Bank', right: onlineBank });
     }
@@ -369,7 +414,9 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
   lines.push({ kind: 'align', value: 'left' });
   pushCollectionList(lines, cdmRows, (row) => {
     const num = listIdentifier(row?.cdmNumber, '');
-    return num ? `CDM ${num}` : 'CDM deposit';
+    const date = row?.cdmDate ? formatDate(row.cdmDate) : '';
+    const label = num ? `CDM ${num}` : 'CDM deposit';
+    return date ? `${label}  ${date}` : label;
   });
   lines.push({ kind: 'rule' });
   lines.push({
@@ -386,7 +433,9 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
   lines.push({ kind: 'align', value: 'left' });
   pushCollectionList(lines, bankRows, (row) => {
     const ref = listIdentifier(row?.reference, '');
-    return ref ? `Ref ${ref}` : 'Bank transfer';
+    const date = row?.transferDate ? formatDate(row.transferDate) : '';
+    const label = ref ? `Ref ${ref}` : 'Bank transfer';
+    return date ? `${label}  ${date}` : label;
   });
   lines.push({ kind: 'rule' });
   lines.push({
@@ -435,6 +484,9 @@ export function buildBillReceiptLines(bill, shop) {
     { kind: 'cols', left: 'Invoice #', right: display(bill?.invoiceNumber) },
     { kind: 'cols', left: 'Date', right: formatDate(bill?.date) },
     { kind: 'cols', left: 'Customer', right: display(bill?.customerName) },
+    ...(bill?.driverName
+      ? [{ kind: 'cols', left: 'Driver', right: display(bill.driverName) }]
+      : []),
     { kind: 'rule' },
   ];
   if (items.length === 0) {

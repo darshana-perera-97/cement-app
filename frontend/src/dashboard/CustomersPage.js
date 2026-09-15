@@ -19,7 +19,7 @@ import {
   useTablePagination,
   modalPanelClass,
 } from './tableToolbar';
-import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { detailRowAttrs } from './RowDetailModal';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import { CollectorSelectField, useCollectors } from './useCollectors';
 
@@ -112,7 +112,6 @@ export default function CustomersPage() {
   const [saveError, setSaveError] = useState(null);
   const [search, setSearch] = useState('');
   const [dueFilter, setDueFilter] = useState('all');
-  const [detailCustomer, setDetailCustomer] = useState(null);
   const { collectors, loading: collectorsLoading } = useCollectors();
 
   const load = useCallback(async () => {
@@ -160,6 +159,10 @@ export default function CustomersPage() {
     () => filteredRows.slice(pagination.offset, pagination.offset + pagination.pageSize),
     [filteredRows, pagination.offset, pagination.pageSize]
   );
+
+  const openCustomerProfile = (customerId) => {
+    navigate(`/dashboard/customers/${encodeURIComponent(customerId)}`);
+  };
 
   const openModal = () => {
     setForm({ ...emptyForm(), id: suggestNextCustomerId(rows) });
@@ -302,6 +305,7 @@ export default function CustomersPage() {
                 key={r.id}
                 title={r.name}
                 subtitle={[r.location, r.contactNumber, r.email].filter(Boolean).join(' · ') || undefined}
+                onClick={() => openCustomerProfile(r.id)}
                 badge={
                   overdue ? (
                     <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
@@ -327,24 +331,6 @@ export default function CustomersPage() {
                       ]
                     : []),
                 ]}
-                actions={
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setDetailCustomer(r)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                    >
-                      Details
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/dashboard/customers/${encodeURIComponent(r.id)}`)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-800"
-                    >
-                      View account
-                    </button>
-                  </>
-                }
               />
             );
           })
@@ -386,9 +372,10 @@ export default function CustomersPage() {
                   <tr
                     key={r.id}
                     {...detailRowAttrs(
-                      () => setDetailCustomer(r),
+                      () => openCustomerProfile(r.id),
                       overdue ? 'bg-rose-50/50 hover:bg-rose-50/80' : 'hover:bg-slate-50/80',
                     )}
+                    title="View customer profile"
                     aria-label={`Customer ${r.name || ''}`}
                   >
                     <td className={`px-4 py-3 ${stickyFirstTd}`}>
@@ -419,7 +406,7 @@ export default function CustomersPage() {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/dashboard/customers/${encodeURIComponent(r.id)}`);
+                          openCustomerProfile(r.id);
                         }}
                         className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-800"
                       >
@@ -580,8 +567,6 @@ export default function CustomersPage() {
           </div>
         </div>
       ) : null}
-
-      <RowDetailModal open={!!detailCustomer} row={detailCustomer} variant="customer" onClose={() => setDetailCustomer(null)} />
     </div>
   );
 }

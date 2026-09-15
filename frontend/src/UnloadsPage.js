@@ -18,6 +18,14 @@ const apiBase = getApiBase();
 const SEARCH_PRODUCT_THRESHOLD = 8;
 const SCROLL_LIST_THRESHOLD = 10;
 const RECENT_BRAND_PREVIEW = 4;
+const LAST_PRINT_COUNT = 2;
+
+function money(n) {
+  return new Intl.NumberFormat('en-LK', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(n) || 0);
+}
 
 function totalBags(row, bagBrands) {
   return bagBrands.reduce((s, b) => s + (Number(row[`${b.key}Bags`]) || 0), 0);
@@ -389,6 +397,8 @@ function brandLines(row, bagBrands) {
     .filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0)
     .map((b) => ({
       key: b.key,
+      code: String(b.code ?? '').trim(),
+      name: String(b.label ?? '').trim() || b.key,
       label: brandShortName(b),
       full: brandDisplayName(b),
       qty: Number(row[`${b.key}Bags`]),
@@ -598,7 +608,7 @@ function ReviewUnloadModal({
   );
 }
 
-function RecentUnloadsList({ recent, recentLoading, bagBrands }) {
+function RecentUnloadsList({ recent, recentLoading, bagBrands, canPrint, onPrintBill }) {
   if (recentLoading) {
     return (
       <div className="mt-4 flex justify-center py-8">
@@ -617,36 +627,50 @@ function RecentUnloadsList({ recent, recentLoading, bagBrands }) {
         const preview = lines.slice(0, RECENT_BRAND_PREVIEW);
         return (
           <li key={row.id} className="py-3 first:pt-0">
-            <div className="min-w-0">
-              <p className="font-semibold text-slate-900 break-words">{row.customerName}</p>
-              <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
-                {row.date} · {totalBags(row, bagBrands).toLocaleString()} bags
-                {row.status ? <span className="ml-1 capitalize text-slate-400">· {row.status}</span> : null}
-                {row.driverName ? (
-                  <>
-                    <span className="hidden sm:inline"> · </span>
-                    <span className="block sm:inline">{row.driverName}</span>
-                  </>
-                ) : null}
-              </p>
-              {preview.length > 0 ? (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {preview.map((line) => (
-                    <span
-                      key={line.key}
-                      title={line.full}
-                      className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700"
-                    >
-                      <span className="truncate">{line.label}</span>
-                      <span className="tabular-nums text-slate-500">{line.qty}</span>
-                    </span>
-                  ))}
-                  {extra > 0 ? (
-                    <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
-                      +{extra} more
-                    </span>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-slate-900 break-words">{row.customerName}</p>
+                <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
+                  {row.date} · {totalBags(row, bagBrands).toLocaleString()} bags
+                  {row.invoiceNumber ? (
+                    <span className="ml-1 tabular-nums text-slate-400">· {row.invoiceNumber}</span>
                   ) : null}
-                </div>
+                  {row.status ? <span className="ml-1 capitalize text-slate-400">· {row.status}</span> : null}
+                  {row.driverName ? (
+                    <>
+                      <span className="hidden sm:inline"> · </span>
+                      <span className="block sm:inline">{row.driverName}</span>
+                    </>
+                  ) : null}
+                </p>
+                {preview.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {preview.map((line) => (
+                      <span
+                        key={line.key}
+                        title={line.full}
+                        className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700"
+                      >
+                        <span className="truncate">{line.label}</span>
+                        <span className="tabular-nums text-slate-500">{line.qty}</span>
+                      </span>
+                    ))}
+                    {extra > 0 ? (
+                      <span className="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+                        +{extra} more
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              {canPrint ? (
+                <button
+                  type="button"
+                  onClick={() => onPrintBill(row)}
+                  className="inline-flex min-h-9 shrink-0 touch-manipulation items-center rounded-lg border border-sky-200 bg-sky-50 px-2.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-100"
+                >
+                  Print bill
+                </button>
               ) : null}
             </div>
           </li>
@@ -656,10 +680,156 @@ function RecentUnloadsList({ recent, recentLoading, bagBrands }) {
   );
 }
 
+function UnloadPrintPreview({ row, bagBrands, index, total }) {
+  const lines = brandLines(row, bagBrands);
+  const bags = totalBags(row, bagBrands);
+  const amount = Number(row?.totalAmount);
+  return (
+    <div className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Unloading invoice {index + 1} of {total}
+          </p>
+          <p className="mt-0.5 break-words text-sm font-semibold text-slate-900">{row.customerName || '—'}</p>
+        </div>
+        {Number.isFinite(amount) && amount > 0 ? (
+          <p className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{money(amount)}</p>
+        ) : null}
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        {row.date || '—'}
+        {row.invoiceNumber ? <span className="ml-1 tabular-nums">· {row.invoiceNumber}</span> : null}
+        {row.status ? <span className="ml-1 capitalize">· {row.status}</span> : null}
+      </p>
+      {lines.length > 0 ? (
+        <div className="mt-2 overflow-hidden rounded-lg bg-white ring-1 ring-slate-200">
+          <table className="w-full table-fixed text-left text-[11px]">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="w-[4.5rem] px-2 py-1.5 font-semibold">Code</th>
+                <th className="px-2 py-1.5 font-semibold">Item name</th>
+                <th className="w-14 px-2 py-1.5 text-right font-semibold">Items</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {lines.map((line) => (
+                <tr key={line.key}>
+                  <td className="truncate px-2 py-1.5 font-medium tabular-nums">{line.code || '—'}</td>
+                  <td className="px-2 py-1.5">
+                    <span className="line-clamp-2 break-words" title={line.full}>
+                      {line.name}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{line.qty.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 bg-slate-50 font-semibold text-slate-900">
+                <td className="px-2 py-1.5" colSpan={2}>
+                  Total bags
+                </td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{bags.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">No items</p>
+      )}
+    </div>
+  );
+}
+
+function PrintLastUnloadsModal({ open, rows, bagBrands, onCancel, onPrintOne, onPrintAll }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onCancel]);
+
+  if (!open) return null;
+
+  const count = rows.length;
+  const title = count === 1 ? 'Print last unloading invoice' : `Print last ${count} unloading invoices`;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center p-3 sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="print-last-unloads-title"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+        aria-label="Close print last unloads"
+        onClick={onCancel}
+      />
+      <div className="relative z-10 flex max-h-[min(90dvh,40rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">Recent unloads</p>
+          <h2 id="print-last-unloads-title" className="mt-0.5 text-lg font-bold text-slate-900">
+            {title}
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {count === 1
+              ? 'Print the latest unloading invoice on the 80mm printer.'
+              : 'Print the latest two unloading invoices, one after the other. Confirm each copy on the printer prompt.'}
+          </p>
+          <div className="mt-4 space-y-2.5">
+            {rows.map((row, index) => (
+              <div key={row.id || index} className="space-y-2">
+                <UnloadPrintPreview row={row} bagBrands={bagBrands} index={index} total={count} />
+                <button
+                  type="button"
+                  onClick={() => onPrintOne(row)}
+                  className="inline-flex min-h-11 w-full touch-manipulation items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-800 hover:bg-sky-100"
+                >
+                  Print this unloading invoice
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex min-h-11 touch-manipulation items-center justify-center rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            {count > 1 ? (
+              <button
+                type="button"
+                onClick={onPrintAll}
+                className="inline-flex min-h-11 touch-manipulation items-center justify-center rounded-xl bg-sky-600 px-4 text-sm font-semibold text-white shadow-md shadow-sky-600/25 hover:bg-sky-700"
+              >
+                Print both invoices
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function UnloadsWorkspace() {
   const { brands: bagBrands } = useBagProducts();
   const shopName = useShopName();
-  const { requestAutoPrint } = usePrinter();
+  const { requestAutoPrint, requestPrint, showIndicator } = usePrinter();
   const driverLabel = getDisplayName();
   const [summaryBrands, setSummaryBrands] = useState([]);
   const [stockLoading, setStockLoading] = useState(true);
@@ -677,6 +847,7 @@ function UnloadsWorkspace() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewEditing, setReviewEditing] = useState(false);
   const [reviewBrandKeys, setReviewBrandKeys] = useState([]);
+  const [printLastOpen, setPrintLastOpen] = useState(false);
 
   const loadStock = useCallback(async () => {
     setStockLoading(true);
@@ -839,6 +1010,28 @@ function UnloadsWorkspace() {
     setReviewBrandKeys([]);
   }, [saving]);
 
+  const lastPrintRows = useMemo(() => recent.slice(0, LAST_PRINT_COUNT), [recent]);
+
+  const closePrintLast = useCallback(() => {
+    setPrintLastOpen(false);
+  }, []);
+
+  const handlePrintUnloadBill = useCallback(
+    (row) => {
+      setPrintLastOpen(false);
+      requestPrint('unload', row);
+    },
+    [requestPrint],
+  );
+
+  const handlePrintLastUnloads = useCallback(async () => {
+    const rows = recent.slice(0, LAST_PRINT_COUNT);
+    setPrintLastOpen(false);
+    for (const row of rows) {
+      await requestPrint('unload', row);
+    }
+  }, [recent, requestPrint]);
+
   const handleOpenReview = (e) => {
     e.preventDefault();
     setSaveError(null);
@@ -904,7 +1097,8 @@ function UnloadsWorkspace() {
       setProductQuery('');
       setProductFilter('in-stock');
       await Promise.all([loadStock(), loadRecent()]);
-      requestAutoPrint('unload', data);
+      if (showIndicator) requestPrint('unload', data);
+      else requestAutoPrint('unload', data);
     } catch {
       setSaveError('Network error. Try again.');
     } finally {
@@ -1224,12 +1418,44 @@ function UnloadsWorkspace() {
                 {recentLoading ? '…' : `${recent.length}`}
               </span>
             </summary>
-            <RecentUnloadsList recent={recent} recentLoading={recentLoading} bagBrands={bagBrands} />
+            {lastPrintRows.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setPrintLastOpen(true)}
+                className="mt-3 inline-flex min-h-11 w-full touch-manipulation items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-800 hover:bg-sky-100"
+              >
+                {lastPrintRows.length === 1 ? 'Print last bill' : 'Print last 2'}
+              </button>
+            ) : null}
+            <RecentUnloadsList
+              recent={recent}
+              recentLoading={recentLoading}
+              bagBrands={bagBrands}
+              canPrint={showIndicator}
+              onPrintBill={handlePrintUnloadBill}
+            />
           </details>
 
           <section className="hidden rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100 sm:p-6 lg:block lg:sticky lg:top-[8.5rem] lg:max-h-[calc(100dvh-10rem)] lg:overflow-y-auto">
-            <h2 className="text-base font-bold text-slate-900 sm:text-lg">Recent unloads</h2>
-            <RecentUnloadsList recent={recent} recentLoading={recentLoading} bagBrands={bagBrands} />
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-base font-bold text-slate-900 sm:text-lg">Recent unloads</h2>
+              {lastPrintRows.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setPrintLastOpen(true)}
+                  className="inline-flex min-h-10 shrink-0 touch-manipulation items-center rounded-xl border border-sky-200 bg-sky-50 px-3 text-xs font-semibold text-sky-800 hover:bg-sky-100"
+                >
+                  {lastPrintRows.length === 1 ? 'Print last bill' : 'Print last 2'}
+                </button>
+              ) : null}
+            </div>
+            <RecentUnloadsList
+              recent={recent}
+              recentLoading={recentLoading}
+              bagBrands={bagBrands}
+              canPrint={showIndicator}
+              onPrintBill={handlePrintUnloadBill}
+            />
           </section>
         </div>
       </div>
@@ -1254,6 +1480,15 @@ function UnloadsWorkspace() {
         setBrandQty={setBrandQty}
         stockByBrand={stockByBrand}
         stockLoading={stockLoading}
+      />
+
+      <PrintLastUnloadsModal
+        open={printLastOpen}
+        rows={lastPrintRows}
+        bagBrands={bagBrands}
+        onCancel={closePrintLast}
+        onPrintOne={handlePrintUnloadBill}
+        onPrintAll={handlePrintLastUnloads}
       />
     </div>
   );
