@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { canEditDetails, getUsername } from '../auth';
+import { canEditDetails, getUsername, isAdmin } from '../auth';
+import { useStockItemUnloadPriceEnabled } from '../stockItemUnloadPriceSettings';
 import { useBagProducts } from './BagProductsContext';
 import { productToBrandKey } from './brandTheme';
 import {
@@ -34,7 +35,13 @@ import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
 
 const apiBase = getApiBase();
 
-const DEFAULT_MARGIN_PER_BAG = 70;
+const DEFAULT_MARGIN_PER_BAG = 0;
+
+const LOAD_FORM_STEPS = [
+  { n: 1, label: 'Date & PO' },
+  { n: 2, label: 'Lorry' },
+  { n: 3, label: 'Bags' },
+];
 
 const emptyBrandFields = (brands) =>
   Object.fromEntries(
@@ -45,6 +52,7 @@ const emptyBrandFields = (brands) =>
       [`${b.key}Invoice`, ''],
       [`${b.key}Cheque`, ''],
       [`${b.key}ConvertingDate`, ''],
+      [`${b.key}UnloadPrice`, ''],
     ]),
   );
 
@@ -107,6 +115,7 @@ function aggregateFromPurchaseOrders(selectedPos, lastCutOffs, prevForm = {}, br
     next[`${key}Invoice`] = String(prevForm[`${key}Invoice`] ?? '');
     const prevConv = String(prevForm[`${key}ConvertingDate`] ?? '').trim();
     next[`${key}ConvertingDate`] = agg.convertingDate || prevConv || '';
+    next[`${key}UnloadPrice`] = String(prevForm[`${key}UnloadPrice`] ?? '');
   }
   return { fields: next, activeKeys, vehicleNumber };
 }
@@ -128,6 +137,28 @@ function nextSuggestedStockId(records) {
   }
   const next = max + 1;
   return `STK-${String(next).padStart(4, '0')}`;
+}
+
+/** Latest margin per bag entered on a stock load (newest date, then createdAt). */
+function lastEnteredMarginPerBag(records) {
+  const sorted = [...(Array.isArray(records) ? records : [])].sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+  for (const row of sorted) {
+    if (row.marginPerBag === '' || row.marginPerBag == null) continue;
+    const n = Number(row.marginPerBag);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return DEFAULT_MARGIN_PER_BAG;
+}
+
+function formatMarginPerBag(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return String(DEFAULT_MARGIN_PER_BAG);
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
 }
 
 function money(n) {
@@ -161,16 +192,46 @@ function formFromLoad(row, brands) {
     f[`${b.key}Invoice`] = String(row[`${b.key}Invoice`] ?? '');
     f[`${b.key}Cheque`] = String(row[`${b.key}Cheque`] ?? '');
     f[`${b.key}ConvertingDate`] = String(row[`${b.key}ConvertingDate`] ?? '').slice(0, 10);
+    const unload = row[`${b.key}UnloadPrice`];
+    f[`${b.key}UnloadPrice`] =
+      unload === '' || unload == null ? '' : formatMarginPerBag(unload);
   }
   return f;
 }
 
+function lastEnteredUnloadPrices(records, brands) {
+  const sorted = [...(Array.isArray(records) ? records : [])].sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+  const out = {};
+  for (const b of brands) {
+    for (const row of sorted) {
+      const n = Number(row[`${b.key}UnloadPrice`]);
+      if (Number.isFinite(n) && n > 0) {
+        out[`${b.key}UnloadPrice`] = formatMarginPerBag(n);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 export default function LoadsPage() {
   const { brands } = useBagProducts();
+  const { enabled: stockItemUnloadPriceEnabled } = useStockItemUnloadPriceEnabled();
+  const showUnloadPriceStep = Boolean(stockItemUnloadPriceEnabled && isAdmin());
+  const loadFormSteps = showUnloadPriceStep
+    ? [...LOAD_FORM_STEPS, { n: 4, label: 'Unload price' }]
+    : LOAD_FORM_STEPS;
+  const lastFormStep = showUnloadPriceStep ? 4 : 3;
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [formStep, setFormStep] = useState(1);
   const [form, setForm] = useState(() => emptyForm([]));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -407,9 +468,12 @@ export default function LoadsPage() {
   const openModal = () => {
     setEditingLoadId('');
     setSelectedPoIds([]);
+    setFormStep(1);
     setForm({
       ...emptyForm(brands),
       stockId: nextSuggestedStockId(rows),
+      marginPerBag: formatMarginPerBag(lastEnteredMarginPerBag(rows)),
+      ...(showUnloadPriceStep ? lastEnteredUnloadPrices(rows, brands) : {}),
     });
     setSaveError(null);
     loadLorries();
@@ -423,6 +487,7 @@ export default function LoadsPage() {
     setSaveError(null);
     setEditingLoadId('');
     setSelectedPoIds([]);
+    setFormStep(1);
   };
 
   const openEditModal = (row) => {
@@ -432,6 +497,7 @@ export default function LoadsPage() {
       ? row.purchaseOrderIds.map((id) => String(id).trim()).filter(Boolean)
       : [];
     setSelectedPoIds(linkedIds);
+    setFormStep(1);
     setForm(formFromLoad(row, brands));
     setSaveError(null);
     loadLorries();
@@ -472,6 +538,75 @@ export default function LoadsPage() {
     });
   };
 
+  const goToFormStep = (nextStep) => {
+    setSaveError(null);
+    setFormStep(nextStep);
+  };
+
+  const validateFormStep1 = () => {
+    if (!form.date) {
+      setSaveError('Enter a date.');
+      return false;
+    }
+    if (!String(form.stockId || '').trim()) {
+      setSaveError('Enter a stock ID.');
+      return false;
+    }
+    if (!editingLoadId && selectedPoIds.length === 0) {
+      setSaveError('Select at least one purchase order.');
+      return false;
+    }
+    return true;
+  };
+
+  const validateFormStep2 = () => {
+    const resolvedVehicle = String(form.vehicleNumber || '').trim();
+    if (!resolvedVehicle) {
+      setSaveError(
+        lorryNumbers.length === 0
+          ? 'Add a lorry under Shop → Lorries before recording a load.'
+          : 'Select a lorry.',
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const validateFormStep4 = () => {
+    if (!showUnloadPriceStep) return true;
+    const missing = [];
+    for (const b of activeBrands) {
+      const n = Number(form[`${b.key}UnloadPrice`]);
+      if (!Number.isFinite(n) || n <= 0) missing.push(b.label);
+    }
+    if (missing.length > 0) {
+      setSaveError(`Enter an unloading price per bag for: ${missing.join(', ')}.`);
+      return false;
+    }
+    return true;
+  };
+
+  const handleNextStep = (e) => {
+    e.preventDefault();
+    if (formStep === 1) {
+      if (!validateFormStep1()) return;
+      goToFormStep(2);
+      return;
+    }
+    if (formStep === 2) {
+      if (!validateFormStep2()) return;
+      goToFormStep(3);
+      return;
+    }
+    if (formStep === 3 && showUnloadPriceStep) {
+      goToFormStep(4);
+    }
+  };
+
+  const handleBackStep = () => {
+    goToFormStep(Math.max(1, formStep - 1));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const username = getUsername();
@@ -479,8 +614,16 @@ export default function LoadsPage() {
       setSaveError('You need to be signed in with a username.');
       return;
     }
-    if (!editingLoadId && selectedPoIds.length === 0) {
-      setSaveError('Select at least one purchase order.');
+    if (!validateFormStep1()) {
+      setFormStep(1);
+      return;
+    }
+    if (!validateFormStep2()) {
+      setFormStep(2);
+      return;
+    }
+    if (!validateFormStep4()) {
+      setFormStep(lastFormStep);
       return;
     }
     const missingRefs = [];
@@ -495,17 +638,10 @@ export default function LoadsPage() {
       setSaveError(
         `When bags are 1 or more for a brand, invoice and cheque numbers are required. Missing: ${missingRefs.join(', ')}.`,
       );
+      setFormStep(3);
       return;
     }
     const resolvedVehicle = String(form.vehicleNumber || '').trim();
-    if (!resolvedVehicle) {
-      setSaveError(
-        lorryNumbers.length === 0
-          ? 'Add a lorry under Shop → Lorries before recording a load.'
-          : 'Select a lorry.',
-      );
-      return;
-    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -529,6 +665,7 @@ export default function LoadsPage() {
               [`${b.key}Invoice`, form[`${b.key}Invoice`]],
               [`${b.key}Cheque`, form[`${b.key}Cheque`]],
               [`${b.key}ConvertingDate`, form[`${b.key}ConvertingDate`]],
+              ...(showUnloadPriceStep ? [[`${b.key}UnloadPrice`, form[`${b.key}UnloadPrice`]]] : []),
             ]),
           ),
           transportCostPerBag: hasDoorStockPo ? '' : form.transportCostPerBag,
@@ -539,12 +676,14 @@ export default function LoadsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setSaveError(data.error || 'Save failed');
+        setFormStep(lastFormStep);
         return;
       }
       await load();
       closeModal();
     } catch {
       setSaveError('Could not reach the server.');
+      setFormStep(lastFormStep);
     } finally {
       setSaving(false);
     }
@@ -823,297 +962,386 @@ export default function LoadsPage() {
               {editingLoadId ? 'Edit stock load' : 'Add a stock load'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">Recorded as user: {getUsername() || '—'}</p>
-            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+            <ol className="mt-4 flex items-center gap-2 text-sm" aria-label="Form steps">
+              {loadFormSteps.map((s, i) => {
+                const active = formStep === s.n;
+                const done = formStep > s.n;
+                return (
+                  <Fragment key={s.n}>
+                    {i > 0 ? <span className="h-px min-w-4 flex-1 bg-slate-200" aria-hidden /> : null}
+                    <li>
+                      <button
+                        type="button"
+                        disabled={s.n > formStep}
+                        onClick={() => {
+                          if (s.n < formStep) goToFormStep(s.n);
+                        }}
+                        className={`flex items-center gap-1.5 whitespace-nowrap ${
+                          active
+                            ? 'font-semibold text-indigo-700'
+                            : done
+                              ? 'text-slate-600 hover:text-slate-800'
+                              : 'cursor-default text-slate-400'
+                        }`}
+                      >
+                        <span
+                          className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
+                            active
+                              ? 'bg-indigo-600 text-white'
+                              : done
+                                ? 'bg-slate-400 text-white'
+                                : 'bg-slate-200 text-slate-500'
+                          }`}
+                        >
+                          {s.n}
+                        </span>
+                        {s.label}
+                      </button>
+                    </li>
+                  </Fragment>
+                );
+              })}
+            </ol>
+            <form className="mt-5 space-y-4" onSubmit={formStep < lastFormStep ? handleNextStep : handleSubmit}>
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-sm font-medium text-slate-600">
-                  Date
-                  <input
-                    type="date"
-                    required
-                    value={form.date}
-                    onChange={(e) => handleFormChange('date', e.target.value)}
-                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                  />
-                </label>
-                <label className="block text-sm font-medium text-slate-600">
-                  Stock ID
-                  <input
-                    type="text"
-                    required
-                    value={form.stockId}
-                    onChange={(e) => handleFormChange('stockId', e.target.value)}
-                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                    placeholder="STK-0001"
-                    autoComplete="off"
-                  />
-                  <span className="mt-1 block text-xs font-normal text-slate-400">
-                    Suggested next ID — you can edit before saving.
-                  </span>
-                </label>
-              </div>
 
-              <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Purchase orders
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Select one or more POs. Bags and cost are applied to each product on the PO.
-                  Vehicle and cheque are filled from the selection (you can still edit them). Enter
-                  invoice no. and cut-off price per product.
-                </p>
-                {selectablePurchaseOrders.length === 0 ? (
-                  <p className="mt-3 text-sm text-amber-800">
-                    No available purchase orders. Create POs under Purchase Order first
-                    {usedPoIds.size > 0 ? ' (some may already be linked to other loads).' : '.'}
-                  </p>
-                ) : (
-                  <div className="mt-3 max-h-48 space-y-2 overflow-y-auto rounded-xl bg-white p-2 ring-1 ring-slate-200/80">
-                    {selectablePurchaseOrders.map((po) => {
-                      const ids = poSelectionIds(po);
-                      const id = ids[0] || String(po.id);
-                      const checked = ids.length > 0 && ids.every((poId) => selectedPoIds.includes(poId));
-                      const productName = poProductSummary(po);
-                      const lines = poLineItems(po);
-                      const brandKey = lines.length === 1 ? productToBrandKey(lines[0].product, brands) : null;
-                      const brandLabel = brands.find((b) => b.key === brandKey)?.label;
-                      const showMappedBrand =
-                        brandLabel &&
-                        brandLabel.trim().toLowerCase() !== String(lines[0]?.product || '').trim().toLowerCase();
-                      return (
-                        <label
-                          key={id}
-                          className={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 transition ${
-                            checked ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => togglePoSelection(po)}
-                            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                          />
-                          <span className="min-w-0 flex-1 text-sm text-slate-800">
-                            <span className="font-semibold tabular-nums">{po.poNumber || id}</span>
-                            <span className="text-slate-400"> · </span>
-                            <span className="tabular-nums text-slate-600">{po.date || '—'}</span>
-                            <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                              {productName}
-                              {showMappedBrand ? ` (${brandLabel})` : ''}
-                              {' · '}
-                              {poTotalQuantity(po)} bags
-                              {' · '}
-                              {money(poTotalAmount(po))}
-                              {Array.isArray(po.cheques) && po.cheques.length > 0 ? (
-                                <>
-                                  {' · '}
-                                  {formatPoChequesList(po.cheques)}
-                                </>
-                              ) : null}
-                              {po.doorStock ? (
-                                <>
-                                  {' · '}
-                                  <span className="font-medium text-indigo-700">Door step</span>
-                                </>
-                              ) : null}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-                {selectedDisplayCount > 0 ? (
-                  <p className="mt-2 text-xs text-slate-500">
-                    {selectedDisplayCount} PO{selectedDisplayCount === 1 ? '' : 's'} selected
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="col-span-full block text-sm font-medium text-slate-600 sm:col-span-2">
-                  Vehicle / lorry number
-                  <select
-                    required
-                    value={form.vehicleNumber}
-                    onChange={(e) => handleFormChange('vehicleNumber', e.target.value)}
-                    className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                    disabled={lorryNumbers.length === 0 && !form.vehicleNumber}
-                  >
-                    <option value="">
-                      {lorryNumbers.length === 0 ? 'No lorries — add under Shop' : 'Select lorry…'}
-                    </option>
-                    {vehicleSelectOptions.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="mt-1 block text-xs font-normal text-slate-400">
-                    Filled from selected PO when available — you can change it.
-                  </span>
-                </label>
-              </div>
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">Incentive pricing</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Used on the Incentive page to calculate transport, margin, and unloading price per bag.
-                </p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  {!hasDoorStockPo ? (
+              {formStep === 1 ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <label className="block text-sm font-medium text-slate-600">
-                      Transport cost per bag (LKR)
+                      Date
                       <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={form.transportCostPerBag}
-                        onChange={(e) => handleFormChange('transportCostPerBag', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="0"
+                        type="date"
+                        required
+                        value={form.date}
+                        onChange={(e) => handleFormChange('date', e.target.value)}
+                        className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
                       />
                     </label>
-                  ) : null}
-                  {hasDoorStockPo ? (
                     <label className="block text-sm font-medium text-slate-600">
-                      Door step transport cost per bag (LKR)
+                      Stock ID
                       <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={form.doorStockTransportCostPerBag}
-                        onChange={(e) => handleFormChange('doorStockTransportCostPerBag', e.target.value)}
-                        className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                        placeholder="0"
+                        type="text"
+                        required
+                        value={form.stockId}
+                        onChange={(e) => handleFormChange('stockId', e.target.value)}
+                        className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        placeholder="STK-0001"
+                        autoComplete="off"
                       />
                       <span className="mt-1 block text-xs font-normal text-slate-400">
-                        Added to transport per bag for incentive calculations on door step POs.
+                        Suggested next ID — you can edit before saving.
                       </span>
                     </label>
-                  ) : null}
-                  <label className="block text-sm font-medium text-slate-600">
-                    Margin per bag (LKR)
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={form.marginPerBag}
-                      onChange={(e) => handleFormChange('marginPerBag', e.target.value)}
-                      className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                    />
-                    <span className="mt-1 block text-xs font-normal text-slate-400">Default {DEFAULT_MARGIN_PER_BAG} LKR</span>
-                  </label>
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Cement bags, cost, invoice & cheque (per brand)
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Only the product(s) from the selected POs are shown. Bags, cost, cheque, and converting
-                  date come from those POs and stay editable. Enter{' '}
-                  <span className="font-medium text-slate-700">invoice no.</span> and{' '}
-                  <span className="font-medium text-slate-700">cut-off price</span> (cut-off loads last
-                  price when available).
-                </p>
-                {activeBrands.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-500">
-                    Select purchase orders above to load brand lines.
-                  </p>
-                ) : (
-                  <div className="mt-3 space-y-4">
-                    {activeBrands.map((b) => {
-                      const needRefs = brandNeedsInvoiceCheque(form[`${b.key}Bags`]);
-                      const refRing = needRefs ? 'ring-amber-200' : 'ring-slate-200';
-                      const lastCut = lastCutOffPrices[b.key];
-                      return (
-                        <div
-                          key={b.key}
-                          className="rounded-lg border border-slate-100 bg-white/90 p-3 shadow-sm ring-1 ring-slate-100/80"
-                        >
-                          <p className="mb-2 text-sm font-semibold text-slate-800">{b.label}</p>
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                            <label className="text-xs text-slate-500">
-                              Bags
-                              <input
-                                type="number"
-                                min={0}
-                                step={1}
-                                value={form[`${b.key}Bags`]}
-                                onChange={(e) => handleFormChange(`${b.key}Bags`, e.target.value)}
-                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
-                              />
-                            </label>
-                            <label className="text-xs text-slate-500">
-                              Cost (LKR)
-                              <input
-                                type="number"
-                                min={0}
-                                step={0.01}
-                                value={form[`${b.key}Cost`]}
-                                onChange={(e) => handleFormChange(`${b.key}Cost`, e.target.value)}
-                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
-                              />
-                            </label>
-                            <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
-                              Cheque no.{needRefs ? ' *' : ''}
-                              <input
-                                type="text"
-                                inputMode="text"
-                                value={form[`${b.key}Cheque`]}
-                                onChange={(e) => handleFormChange(`${b.key}Cheque`, e.target.value)}
-                                className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
-                                autoComplete="off"
-                                spellCheck={false}
-                                aria-required={needRefs}
-                              />
-                            </label>
-                            <label className="block text-xs font-medium text-slate-700">
-                              Invoice no. *
-                              <input
-                                type="text"
-                                required={needRefs}
-                                inputMode="text"
-                                value={form[`${b.key}Invoice`]}
-                                onChange={(e) => handleFormChange(`${b.key}Invoice`, e.target.value)}
-                                className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                                autoComplete="off"
-                                spellCheck={false}
-                              />
-                            </label>
-                            <label className="block text-xs font-medium text-slate-700">
-                              Cut-off price (per bag)
-                              {lastCut != null ? (
-                                <span className="ml-1 font-normal text-indigo-600">(last)</span>
-                              ) : null}
-                              <input
-                                type="number"
-                                min={0}
-                                step={0.01}
-                                value={form[`${b.key}CutOffPrice`]}
-                                onChange={(e) => handleFormChange(`${b.key}CutOffPrice`, e.target.value)}
-                                className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm tabular-nums ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                                placeholder={lastCut != null ? String(lastCut) : ''}
-                              />
-                            </label>
-                            <label className="block text-xs text-slate-500">
-                              Converting date
-                              <input
-                                type="date"
-                                value={form[`${b.key}ConvertingDate`]}
-                                onChange={(e) => handleFormChange(`${b.key}ConvertingDate`, e.target.value)}
-                                className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
-                )}
-              </div>
+
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Purchase orders
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Select one or more POs. Bags, cost, vehicle, and cheque are filled from the
+                      selection (you can still edit them on the next steps).
+                    </p>
+                    {selectablePurchaseOrders.length === 0 ? (
+                      <p className="mt-3 text-sm text-amber-800">
+                        No available purchase orders. Create POs under Purchase Order first
+                        {usedPoIds.size > 0 ? ' (some may already be linked to other loads).' : '.'}
+                      </p>
+                    ) : (
+                      <div className="mt-3 max-h-64 space-y-2 overflow-y-auto rounded-xl bg-white p-2 ring-1 ring-slate-200/80">
+                        {selectablePurchaseOrders.map((po) => {
+                          const ids = poSelectionIds(po);
+                          const id = ids[0] || String(po.id);
+                          const checked = ids.length > 0 && ids.every((poId) => selectedPoIds.includes(poId));
+                          const productName = poProductSummary(po);
+                          const lines = poLineItems(po);
+                          const brandKey = lines.length === 1 ? productToBrandKey(lines[0].product, brands) : null;
+                          const brandLabel = brands.find((b) => b.key === brandKey)?.label;
+                          const showMappedBrand =
+                            brandLabel &&
+                            brandLabel.trim().toLowerCase() !== String(lines[0]?.product || '').trim().toLowerCase();
+                          return (
+                            <label
+                              key={id}
+                              className={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 transition ${
+                                checked ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => togglePoSelection(po)}
+                                className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <span className="min-w-0 flex-1 text-sm text-slate-800">
+                                <span className="font-semibold tabular-nums">{po.poNumber || id}</span>
+                                <span className="text-slate-400"> · </span>
+                                <span className="tabular-nums text-slate-600">{po.date || '—'}</span>
+                                <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                                  {productName}
+                                  {showMappedBrand ? ` (${brandLabel})` : ''}
+                                  {' · '}
+                                  {poTotalQuantity(po)} bags
+                                  {' · '}
+                                  {money(poTotalAmount(po))}
+                                  {Array.isArray(po.cheques) && po.cheques.length > 0 ? (
+                                    <>
+                                      {' · '}
+                                      {formatPoChequesList(po.cheques)}
+                                    </>
+                                  ) : null}
+                                  {po.doorStock ? (
+                                    <>
+                                      {' · '}
+                                      <span className="font-medium text-indigo-700">Door step</span>
+                                    </>
+                                  ) : null}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {selectedDisplayCount > 0 ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        {selectedDisplayCount} PO{selectedDisplayCount === 1 ? '' : 's'} selected
+                      </p>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+
+              {formStep === 2 ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="col-span-full block text-sm font-medium text-slate-600 sm:col-span-2">
+                      Vehicle / lorry number
+                      <select
+                        required
+                        value={form.vehicleNumber}
+                        onChange={(e) => handleFormChange('vehicleNumber', e.target.value)}
+                        className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        disabled={lorryNumbers.length === 0 && !form.vehicleNumber}
+                      >
+                        <option value="">
+                          {lorryNumbers.length === 0 ? 'No lorries — add under Shop' : 'Select lorry…'}
+                        </option>
+                        {vehicleSelectOptions.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-xs font-normal text-slate-400">
+                        Filled from selected PO when available — you can change it.
+                      </span>
+                    </label>
+                  </div>
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">Incentive pricing</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Used on the Incentive page to calculate transport, margin, and unloading price per bag.
+                    </p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {!hasDoorStockPo ? (
+                        <label className="block text-sm font-medium text-slate-600">
+                          Transport cost per bag (LKR)
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={form.transportCostPerBag}
+                            onChange={(e) => handleFormChange('transportCostPerBag', e.target.value)}
+                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            placeholder="0"
+                          />
+                        </label>
+                      ) : null}
+                      {hasDoorStockPo ? (
+                        <label className="block text-sm font-medium text-slate-600">
+                          Door step transport cost per bag (LKR)
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={form.doorStockTransportCostPerBag}
+                            onChange={(e) => handleFormChange('doorStockTransportCostPerBag', e.target.value)}
+                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            placeholder="0"
+                          />
+                          <span className="mt-1 block text-xs font-normal text-slate-400">
+                            Added to transport per bag for incentive calculations on door step POs.
+                          </span>
+                        </label>
+                      ) : null}
+                      <label className="block text-sm font-medium text-slate-600">
+                        Margin per bag (LKR)
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={form.marginPerBag}
+                          onChange={(e) => handleFormChange('marginPerBag', e.target.value)}
+                          className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        />
+                        <span className="mt-1 block text-xs font-normal text-slate-400">
+                          Last entered value is filled in. Default {DEFAULT_MARGIN_PER_BAG} LKR if none.
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+
+              {formStep === 3 ? (
+                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Cement bags, cost, invoice & cheque (per brand)
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Only the product(s) from the selected POs are shown. Bags, cost, cheque, and converting
+                    date come from those POs and stay editable. Enter{' '}
+                    <span className="font-medium text-slate-700">invoice no.</span> and{' '}
+                    <span className="font-medium text-slate-700">cut-off price</span> (cut-off loads last
+                    price when available).
+                  </p>
+                  {activeBrands.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">
+                      Select purchase orders in step 1 to load brand lines.
+                    </p>
+                  ) : (
+                    <div className="mt-3 space-y-4">
+                      {activeBrands.map((b) => {
+                        const needRefs = brandNeedsInvoiceCheque(form[`${b.key}Bags`]);
+                        const refRing = needRefs ? 'ring-amber-200' : 'ring-slate-200';
+                        const lastCut = lastCutOffPrices[b.key];
+                        return (
+                          <div
+                            key={b.key}
+                            className="rounded-lg border border-slate-100 bg-white/90 p-3 shadow-sm ring-1 ring-slate-100/80"
+                          >
+                            <p className="mb-2 text-sm font-semibold text-slate-800">{b.label}</p>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                              <label className="text-xs text-slate-500">
+                                Bags
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={form[`${b.key}Bags`]}
+                                  onChange={(e) => handleFormChange(`${b.key}Bags`, e.target.value)}
+                                  className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                                />
+                              </label>
+                              <label className="text-xs text-slate-500">
+                                Cost (LKR)
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.01}
+                                  value={form[`${b.key}Cost`]}
+                                  onChange={(e) => handleFormChange(`${b.key}Cost`, e.target.value)}
+                                  className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm tabular-nums ring-1 ring-slate-200"
+                                />
+                              </label>
+                              <label className={`block text-xs ${needRefs ? 'font-medium text-slate-700' : 'text-slate-500'}`}>
+                                Cheque no.{needRefs ? ' *' : ''}
+                                <input
+                                  type="text"
+                                  inputMode="text"
+                                  value={form[`${b.key}Cheque`]}
+                                  onChange={(e) => handleFormChange(`${b.key}Cheque`, e.target.value)}
+                                  className={`mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ${refRing} focus:outline-none focus:ring-2 focus:ring-indigo-500/35`}
+                                  autoComplete="off"
+                                  spellCheck={false}
+                                  aria-required={needRefs}
+                                />
+                              </label>
+                              <label className="block text-xs font-medium text-slate-700">
+                                Invoice no. *
+                                <input
+                                  type="text"
+                                  required={needRefs}
+                                  inputMode="text"
+                                  value={form[`${b.key}Invoice`]}
+                                  onChange={(e) => handleFormChange(`${b.key}Invoice`, e.target.value)}
+                                  className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                  autoComplete="off"
+                                  spellCheck={false}
+                                />
+                              </label>
+                              <label className="block text-xs font-medium text-slate-700">
+                                Cut-off price (per bag)
+                                {lastCut != null ? (
+                                  <span className="ml-1 font-normal text-indigo-600">(last)</span>
+                                ) : null}
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.01}
+                                  value={form[`${b.key}CutOffPrice`]}
+                                  onChange={(e) => handleFormChange(`${b.key}CutOffPrice`, e.target.value)}
+                                  className="mt-0.5 w-full rounded-lg border-0 bg-amber-50/60 px-2 py-2 text-sm tabular-nums ring-1 ring-amber-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                  placeholder={lastCut != null ? String(lastCut) : ''}
+                                />
+                              </label>
+                              <label className="block text-xs text-slate-500">
+                                Converting date
+                                <input
+                                  type="date"
+                                  value={form[`${b.key}ConvertingDate`]}
+                                  onChange={(e) => handleFormChange(`${b.key}ConvertingDate`, e.target.value)}
+                                  className="mt-0.5 w-full rounded-lg border-0 bg-slate-50 px-2 py-2 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {formStep === 4 && showUnloadPriceStep ? (
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">
+                    Unloading price (per bag)
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Set the unloading price for each product on this stock load. This becomes the default
+                    price per bag in Update unload price.
+                  </p>
+                  {activeBrands.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">
+                      Select purchase orders in step 1 to load brand lines.
+                    </p>
+                  ) : (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {activeBrands.map((b) => (
+                        <label key={b.key} className="block text-sm font-medium text-slate-600">
+                          {b.label} (LKR / bag)
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            required
+                            value={form[`${b.key}UnloadPrice`] ?? ''}
+                            onChange={(e) => handleFormChange(`${b.key}UnloadPrice`, e.target.value)}
+                            className="mt-1 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                            placeholder="0"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1122,12 +1350,28 @@ export default function LoadsPage() {
                 >
                   Cancel
                 </button>
+                {formStep > 1 ? (
+                  <button
+                    type="button"
+                    onClick={handleBackStep}
+                    disabled={saving}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Back
+                  </button>
+                ) : null}
                 <button
                   type="submit"
                   disabled={saving}
                   className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md disabled:opacity-60"
                 >
-                  {saving ? 'Saving…' : editingLoadId ? 'Update record' : 'Save record'}
+                  {formStep < lastFormStep
+                    ? 'Next'
+                    : saving
+                      ? 'Saving…'
+                      : editingLoadId
+                        ? 'Update record'
+                        : 'Save record'}
                 </button>
               </div>
             </form>

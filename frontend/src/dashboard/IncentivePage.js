@@ -278,6 +278,12 @@ function DistributionFilterModal({
 const apiBase = getApiBase();
 const DEFAULT_MARGIN_PER_BAG = 70;
 
+function resolveMarginPerBag(raw) {
+  if (raw === '' || raw == null) return DEFAULT_MARGIN_PER_BAG;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MARGIN_PER_BAG;
+}
+
 function money(n) {
   return new Intl.NumberFormat(undefined, {
     minimumFractionDigits: 2,
@@ -460,12 +466,7 @@ function buildIncentiveRows(loads, purchaseOrders) {
     const hasLoadPricing = loadHasIncentivePricing(load);
     const transportPerBagStored = loadTransportPerBag(load, hasLoadPricing);
     const doorStep = loadIsDoorStep(load, poById);
-    const marginPerBagRaw = load.marginPerBag;
-    const marginPerBagForLoad = round2(
-      marginPerBagRaw === '' || marginPerBagRaw == null
-        ? DEFAULT_MARGIN_PER_BAG
-        : Number(marginPerBagRaw) || DEFAULT_MARGIN_PER_BAG,
-    );
+    const marginPerBagForLoad = round2(resolveMarginPerBag(load.marginPerBag));
 
     for (const b of getCachedBrands()) {
       const bags = Number(load[`${b.key}Bags`]) || 0;
@@ -547,12 +548,7 @@ function buildLoadBrandPricingLookup(loads) {
 
     const hasLoadPricing = loadHasIncentivePricing(load);
     const transportPerBag = loadTransportPerBag(load, hasLoadPricing) ?? 0;
-    const marginPerBagRaw = load.marginPerBag;
-    const marginPerBag = round2(
-      marginPerBagRaw === '' || marginPerBagRaw == null
-        ? DEFAULT_MARGIN_PER_BAG
-        : Number(marginPerBagRaw) || DEFAULT_MARGIN_PER_BAG,
-    );
+    const marginPerBag = round2(resolveMarginPerBag(load.marginPerBag));
 
     for (const b of getCachedBrands()) {
       const bags = Number(load[`${b.key}Bags`]) || 0;

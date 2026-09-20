@@ -69,6 +69,11 @@ const {
   isCollectorUnloadPriceEnabled,
 } = require('./models/collectorUnloadPriceSettingsStore');
 const {
+  readStockItemUnloadPriceSettings,
+  writeStockItemUnloadPriceSettings,
+  isStockItemUnloadPriceEnabled,
+} = require('./models/stockItemUnloadPriceSettingsStore');
+const {
   isSmtpConfigured,
   sendDataBackupEmail,
   startBackupScheduler,
@@ -450,14 +455,21 @@ app.get('/api/config', async (req, res) => {
     const shopName = String(shopData.shopName || '').trim() || SHOP_NAME;
     const stockUpdate = await readStockUpdateSettings();
     const collectorUnloadPrice = await readCollectorUnloadPriceSettings();
+    const stockItemUnloadPrice = await readStockItemUnloadPriceSettings();
     res.json({
       shopName,
       stockUpdateEnabled: Boolean(stockUpdate.enabled),
       collectorUnloadPriceEnabled: Boolean(collectorUnloadPrice.enabled),
+      stockItemUnloadPriceEnabled: Boolean(stockItemUnloadPrice.enabled),
     });
   } catch (e) {
     console.error(e);
-    res.json({ shopName: SHOP_NAME, stockUpdateEnabled: false, collectorUnloadPriceEnabled: false });
+    res.json({
+      shopName: SHOP_NAME,
+      stockUpdateEnabled: false,
+      collectorUnloadPriceEnabled: false,
+      stockItemUnloadPriceEnabled: false,
+    });
   }
 });
 
@@ -595,6 +607,33 @@ app.put('/api/collector-unload-price-settings', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save collector unload price settings' });
+  }
+});
+
+app.get('/api/stock-item-unload-price-settings', async (req, res) => {
+  try {
+    const settings = await readStockItemUnloadPriceSettings();
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load stock item unload price settings' });
+  }
+});
+
+app.put('/api/stock-item-unload-price-settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to change stock item unload price settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can change stock item unload price settings' });
+  }
+  try {
+    const settings = await writeStockItemUnloadPriceSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save stock item unload price settings' });
   }
 });
 
@@ -1612,7 +1651,7 @@ async function buildLoadRowFromBody(body, meta = {}) {
     transportCostPerBag: toNonNegNumber(body.transportCostPerBag),
     doorStockTransportCostPerBag: toNonNegNumber(body.doorStockTransportCostPerBag),
     marginPerBag:
-      body.marginPerBag === '' || body.marginPerBag == null ? 70 : toNonNegNumber(body.marginPerBag),
+      body.marginPerBag === '' || body.marginPerBag == null ? 0 : toNonNegNumber(body.marginPerBag),
   };
   row.totalAmount = loadTotalCost(brandFields, products);
   const missingRefs = validateLoadBrandRefs(
@@ -2344,6 +2383,7 @@ app.post('/api/login', async (req, res) => {
         username: expectedUser,
         stockUpdateEnabled: await isStockUpdateEnabled(),
         collectorUnloadPriceEnabled: await isCollectorUnloadPriceEnabled(),
+        stockItemUnloadPriceEnabled: await isStockItemUnloadPriceEnabled(),
       });
     }
     if (await verifyStoredUser(username, password)) {
@@ -2354,6 +2394,7 @@ app.post('/api/login', async (req, res) => {
       const userRole = String(u.role || '').trim();
       const stockUpdateEnabled = await isStockUpdateEnabled();
       const collectorUnloadPriceEnabled = await isCollectorUnloadPriceEnabled();
+      const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
       if (userRole === 'DSR' && !stockUpdateEnabled) {
         return res.status(403).json({
           error: 'DSR sign-in is disabled. Enable stock update in Settings.',
@@ -2367,6 +2408,7 @@ app.post('/api/login', async (req, res) => {
           username: u.username,
           stockUpdateEnabled,
           collectorUnloadPriceEnabled,
+          stockItemUnloadPriceEnabled,
         });
       }
       return res.json({
@@ -2379,6 +2421,7 @@ app.post('/api/login', async (req, res) => {
         name: String(u.name || '').trim() || u.username,
         stockUpdateEnabled,
         collectorUnloadPriceEnabled,
+        stockItemUnloadPriceEnabled,
       });
     }
     return res.status(401).json({ error: 'Invalid username or password' });
@@ -2396,6 +2439,7 @@ app.get('/api/me', async (req, res) => {
   try {
     const stockUpdateEnabled = await isStockUpdateEnabled();
     const collectorUnloadPriceEnabled = await isCollectorUnloadPriceEnabled();
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
     if (auth.role === 'admin') {
       const adminUser = await findUserByUsername(auth.username);
       if (adminUser) {
@@ -2408,6 +2452,7 @@ app.get('/api/me', async (req, res) => {
           nic: String(adminUser.nic || '').trim(),
           stockUpdateEnabled,
           collectorUnloadPriceEnabled,
+          stockItemUnloadPriceEnabled,
         });
       }
       return res.json({
@@ -2417,6 +2462,7 @@ app.get('/api/me', async (req, res) => {
         staffRole: 'Administrator',
         stockUpdateEnabled,
         collectorUnloadPriceEnabled,
+        stockItemUnloadPriceEnabled,
       });
     }
     const u = await findUserByUsername(auth.username);
@@ -2436,6 +2482,7 @@ app.get('/api/me', async (req, res) => {
       nic: String(u.nic || '').trim(),
       stockUpdateEnabled,
       collectorUnloadPriceEnabled,
+      stockItemUnloadPriceEnabled,
     };
     if (staffRole === 'Manager') {
       payload.managerAccess = getEffectiveManagerAccess(u.access);
@@ -2649,7 +2696,13 @@ app.get('/api/unload-requests', async (req, res) => {
     );
     const products = await getBagProducts();
     const bills = await readBills();
-    res.json(sorted.map((row) => attachLastPricesToUnload(row, bills, products)));
+    const stocks = await readStocks();
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
+    res.json(
+      sorted.map((row) =>
+        attachLastPricesToUnload(row, bills, products, { stocks, stockItemUnloadPriceEnabled }),
+      ),
+    );
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read unload requests' });
@@ -2698,13 +2751,67 @@ function lastBillUnitPricesForCustomer(bills, customerName, products) {
   return prices;
 }
 
-function attachLastPricesToUnload(row, bills, products) {
+function roundMoney2(n) {
+  return Math.round(toNonNegMoney(n) * 100) / 100;
+}
+
+function stockUnloadPricesFromLoad(load, products) {
+  if (!load || !Array.isArray(products)) return null;
+  const prices = {};
+  let any = false;
+  for (const p of products) {
+    const field = p.unloadPriceField || `${p.key}UnloadPrice`;
+    const n = toNonNegMoney(load[field]);
+    prices[p.unitPriceField] = n > 0 ? n : null;
+    if (n > 0) any = true;
+  }
+  return any ? prices : null;
+}
+
+function resolveStockUnloadPrices(row, stocks, bills, products) {
+  if (!Array.isArray(stocks) || stocks.length === 0) return null;
+  let stockId = String(row?.stockId || '').trim();
+  if (!stockId) {
+    const keys = products.map((p) => p.key);
+    stockId = inferStockIdForBillBags(stocks, bills || [], row, keys);
+  }
+  if (!stockId) return null;
+  const load = stocks.find((s) => String(s.stockId || '').trim() === stockId);
+  return stockUnloadPricesFromLoad(load, products);
+}
+
+function submittedPricesMatchStockDefaults(pricedRow, defaults, products) {
+  if (!defaults) return false;
+  let compared = 0;
+  for (const p of products) {
+    const bags = toNonNegNumber(pricedRow[p.bagsField]);
+    if (bags <= 0) continue;
+    const submitted = roundMoney2(pricedRow[p.unitPriceField]);
+    const def = roundMoney2(defaults[p.unitPriceField]);
+    if (!(def > 0) || submitted !== def) return false;
+    compared += 1;
+  }
+  return compared > 0;
+}
+
+function attachLastPricesToUnload(row, bills, products, options = {}) {
+  const { stocks = null, stockItemUnloadPriceEnabled = false } = options;
   const last = lastBillUnitPricesForCustomer(bills, row?.customerName, products);
+  const stockPrices =
+    stockItemUnloadPriceEnabled ? resolveStockUnloadPrices(row, stocks, bills, products) : null;
   const next = { ...row };
+  if (stockItemUnloadPriceEnabled) {
+    next.stockItemUnloadPriceEnabled = true;
+    if (stockPrices) next.stockUnloadPrices = stockPrices;
+  }
   let totalAmount = 0;
   for (const p of products) {
     const bags = toNonNegNumber(next[p.bagsField]);
     let unit = toNonNegMoney(next[p.unitPriceField]);
+    if (!(unit > 0) && stockPrices) {
+      const fromStock = toNonNegMoney(stockPrices[p.unitPriceField]);
+      if (fromStock > 0) unit = fromStock;
+    }
     if (!(unit > 0) && last) {
       const fromLast = toNonNegMoney(last[p.unitPriceField]);
       if (fromLast > 0) unit = fromLast;
@@ -2745,7 +2852,7 @@ function applyUnitPricesToRecord(record, body, products) {
   return { row: next };
 }
 
-function enrichUnloadForCollector(row, bills, stocks, products) {
+function enrichUnloadForCollector(row, bills, stocks, products, options = {}) {
   const status = normalizeStatus(row.status);
   let next = { ...row };
   if (status === 'approved') {
@@ -2760,7 +2867,10 @@ function enrichUnloadForCollector(row, bills, stocks, products) {
       if (bill.stockId) next.stockId = bill.stockId;
     }
   }
-  next = attachLastPricesToUnload(next, bills, products);
+  next = attachLastPricesToUnload(next, bills, products, {
+    stocks,
+    stockItemUnloadPriceEnabled: Boolean(options.stockItemUnloadPriceEnabled),
+  });
   let stockId = String(next.stockId || '').trim();
   if (!stockId) {
     const keys = products.map((p) => p.key);
@@ -2829,6 +2939,7 @@ app.get('/api/collector/unloads', async (req, res) => {
       readStocks(),
       getBagProducts(),
     ]);
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
     let rows = unloads.filter((r) => normalizeStatus(r.status) !== 'rejected');
     rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
     const sorted = [...rows].sort((a, b) => {
@@ -2837,12 +2948,114 @@ app.get('/api/collector/unloads', async (req, res) => {
       if (da !== db) return db.localeCompare(da);
       return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     });
-    res.json(sorted.map((row) => enrichUnloadForCollector(row, bills, stocks, products)));
+    res.json(
+      sorted.map((row) =>
+        enrichUnloadForCollector(row, bills, stocks, products, { stockItemUnloadPriceEnabled }),
+      ),
+    );
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read unloads' });
   }
 });
+
+async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enteredBy }) {
+  const requestRow = unloads[idx];
+  if (!requestRow) return { ok: false, error: 'Request not found', status: 404 };
+  if (normalizeStatus(requestRow.status) !== 'pending') {
+    return { ok: false, error: 'This request is no longer pending', status: 400 };
+  }
+  const billBody = { ...requestRow, ...priceBody };
+  const { fields, products } = await parseBillBagFields(billBody);
+  const bagSum = sumBagFields(fields, products);
+  if (bagSum <= 0) return { ok: false, error: 'Request has no bags', status: 400 };
+  if (fields.totalAmount <= 0) {
+    return { ok: false, error: 'Enter unit price for at least one brand with bags', status: 400 };
+  }
+
+  const stocks = await readStocks();
+  const bills = await readBills();
+  const promotions = await readPromotions();
+  const check = await validateBillAgainstPooledStock(
+    stocks,
+    bills,
+    promotions,
+    fields,
+    unloads,
+    requestRow.id,
+    products,
+  );
+  if (!check.ok) return { ok: false, error: check.error, status: 400 };
+
+  const customerName = String(requestRow.customerName ?? '').trim();
+  const keys = products.map((p) => p.key);
+  const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
+  let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
+  if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
+    invoiceNumber = suggestNextBillInvoiceNumber(bills);
+  }
+  const billRow = {
+    id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    date: String(requestRow.date ?? '').trim(),
+    customerName,
+    stockId,
+    invoiceNumber,
+    ...fields,
+    enteredBy,
+    unloadRequestId: requestRow.id,
+    createdAt: new Date().toISOString(),
+  };
+
+  bills.push(billRow);
+  await writeBills(bills);
+
+  unloads[idx] = {
+    ...requestRow,
+    ...fields,
+    status: 'approved',
+    billId: billRow.id,
+    invoiceNumber: billRow.invoiceNumber,
+    approvedAt: new Date().toISOString(),
+    approvedBy: enteredBy,
+  };
+  await writeUnloads(unloads);
+
+  await syncBillRuleCashback(billRow, { enteredBy, products, promotions });
+
+  const paymentsList = await readPayments();
+  await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
+
+  try {
+    await refreshLiveStockFromSources();
+  } catch (err) {
+    console.error('liveStock refresh after request approve', err);
+  }
+
+  const notificationSettings = await readNotificationSettings();
+  const hideFinancialDetails = Boolean(notificationSettings.hideFinancialDetails);
+  const sendBill = notificationSettings.notifyBill !== false;
+  const skipBillBecauseUnload =
+    hideFinancialDetails && notificationSettings.notifyUnload !== false;
+
+  if (sendBill && !skipBillBecauseUnload) {
+    const customersForNotify = await readCustomers();
+    const custForNotify = customersForNotify.find(
+      (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
+    );
+    if (custForNotify?.email) {
+      notifyBillEmail(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+        console.error('bill email notification', err),
+      );
+    }
+    if (custForNotify?.contactNumber) {
+      notifyBillWhatsApp(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
+        console.error('bill whatsapp notification', err),
+      );
+    }
+  }
+
+  return { ok: true, billRow, requestRow: unloads[idx], products };
+}
 
 app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
   const auth = await requireCollectorUnloadPriceAccess(req, res);
@@ -2876,10 +3089,21 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
     if (priced.error) return res.status(400).json({ error: priced.error });
 
     const now = new Date().toISOString();
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
+    const stocks = await readStocks();
+    const billsForDefaults = await readBills();
+    const stockPrices = stockItemUnloadPriceEnabled
+      ? resolveStockUnloadPrices(existing, stocks, billsForDefaults, products)
+      : null;
+    const matchesStockDefault =
+      stockItemUnloadPriceEnabled &&
+      submittedPricesMatchStockDefaults(priced.row, stockPrices, products);
+
     unloads[idx] = {
       ...priced.row,
       priceUpdatedBy: updatedBy,
       priceUpdatedAt: now,
+      priceChangeRequest: stockItemUnloadPriceEnabled ? !matchesStockDefault : Boolean(existing.priceChangeRequest),
     };
 
     let billRow = null;
@@ -2901,13 +3125,30 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
       await syncBillRuleCashback(billRow, { enteredBy: updatedBy, products });
       const paymentsList = await readPayments();
       await refreshCustomerBalancesForBillNames(bills, paymentsList, billRow.customerName);
+      await writeUnloads(unloads);
+    } else if (status === 'pending' && matchesStockDefault) {
+      const created = await createBillFromPendingUnload({
+        unloads,
+        idx,
+        priceBody: priced.row,
+        enteredBy: updatedBy,
+      });
+      if (!created.ok) {
+        await writeUnloads(unloads);
+        return res.status(created.status || 400).json({ error: created.error });
+      }
+      billRow = created.billRow;
+    } else {
+      await writeUnloads(unloads);
     }
 
-    await writeUnloads(unloads);
-    const [stocks, billsForView] = await Promise.all([readStocks(), readBills()]);
+    const [stocksForView, billsForView] = await Promise.all([readStocks(), readBills()]);
     res.json({
-      unload: enrichUnloadForCollector(unloads[idx], billsForView, stocks, products),
+      unload: enrichUnloadForCollector(unloads[idx], billsForView, stocksForView, products, {
+        stockItemUnloadPriceEnabled,
+      }),
       bill: billRow,
+      billedImmediately: Boolean(billRow && status === 'pending'),
     });
   } catch (e) {
     console.error(e);
@@ -2931,104 +3172,16 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
     if (idx < 0) {
       return res.status(404).json({ error: 'Request not found' });
     }
-    const requestRow = unloads[idx];
-    if (normalizeStatus(requestRow.status) !== 'pending') {
-      return res.status(400).json({ error: 'This request is no longer pending' });
-    }
-
-    const billBody = { ...requestRow, ...body };
-    const { fields, products } = await parseBillBagFields(billBody);
-    const bagSum = sumBagFields(fields, products);
-    if (bagSum <= 0) {
-      return res.status(400).json({ error: 'Request has no bags' });
-    }
-    if (fields.totalAmount <= 0) {
-      return res.status(400).json({ error: 'Enter unit price for at least one brand with bags' });
-    }
-
-    const stocks = await readStocks();
-    const bills = await readBills();
-    const promotions = await readPromotions();
-    const check = await validateBillAgainstPooledStock(
-      stocks,
-      bills,
-      promotions,
-      fields,
+    const created = await createBillFromPendingUnload({
       unloads,
-      id,
-      products,
-    );
-    if (!check.ok) {
-      return res.status(400).json({ error: check.error });
-    }
-
-    const customerName = String(requestRow.customerName ?? '').trim();
-    const keys = products.map((p) => p.key);
-    const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
-    let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
-    if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
-      invoiceNumber = suggestNextBillInvoiceNumber(bills);
-    }
-    const billRow = {
-      id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-      date: String(requestRow.date ?? '').trim(),
-      customerName,
-      stockId,
-      invoiceNumber,
-      ...fields,
+      idx,
+      priceBody: body,
       enteredBy,
-      unloadRequestId: requestRow.id,
-      createdAt: new Date().toISOString(),
-    };
-
-    bills.push(billRow);
-    await writeBills(bills);
-
-    unloads[idx] = {
-      ...requestRow,
-      status: 'approved',
-      billId: billRow.id,
-      invoiceNumber: billRow.invoiceNumber,
-      approvedAt: new Date().toISOString(),
-      approvedBy: enteredBy,
-    };
-    await writeUnloads(unloads);
-
-    await syncBillRuleCashback(billRow, { enteredBy, products, promotions });
-
-    const paymentsList = await readPayments();
-    await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
-
-    try {
-      await refreshLiveStockFromSources();
-    } catch (err) {
-      console.error('liveStock refresh after request approve', err);
+    });
+    if (!created.ok) {
+      return res.status(created.status || 400).json({ error: created.error });
     }
-
-    const notificationSettings = await readNotificationSettings();
-    const hideFinancialDetails = Boolean(notificationSettings.hideFinancialDetails);
-    const sendBill = notificationSettings.notifyBill !== false;
-    const skipBillBecauseUnload =
-      hideFinancialDetails && notificationSettings.notifyUnload !== false;
-
-    if (sendBill && !skipBillBecauseUnload) {
-      const customersForNotify = await readCustomers();
-      const custForNotify = customersForNotify.find(
-        (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
-      );
-      if (custForNotify?.email) {
-        notifyBillEmail(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
-          console.error('bill email notification', err),
-        );
-      }
-      if (custForNotify?.contactNumber) {
-        notifyBillWhatsApp(custForNotify, billRow, custForNotify.remainingAmount).catch((err) =>
-          console.error('bill whatsapp notification', err),
-        );
-      }
-    }
-
-    res.status(201).json({ request: unloads[idx], bill: billRow });
+    res.status(201).json({ request: created.requestRow, bill: created.billRow });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to approve request' });
@@ -3604,10 +3757,16 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
           id: row.id,
           date: row.date,
           sortAt: row.createdAt || `${row.date}T12:00:00`,
-          type: settle === SETTLEMENTS.CASH ? 'Item return (cash)' : 'Return invoice',
+          type:
+            settle === SETTLEMENTS.CASH
+              ? 'Item return (cash)'
+              : settle === SETTLEMENTS.DAMAGE
+                ? 'Damage items'
+                : 'Return invoice',
           details: [
             row.invoiceNumber ? `Invoice ${row.invoiceNumber}` : null,
             row.returnInvoiceNumber ? `Return ${row.returnInvoiceNumber}` : null,
+            row.damageInvoiceNumber ? `Damage ${row.damageInvoiceNumber}` : null,
             row.note,
             row.enteredBy ? `by ${row.enteredBy}` : null,
           ]
@@ -5512,17 +5671,32 @@ app.post('/api/returns', async (req, res) => {
       if (anyBags <= 0 || amount <= 0) {
         return res.status(400).json({ error: 'Enter bags to return from this invoice' });
       }
+      const settlementRaw = String(body.settlement ?? '').trim();
       const settlement =
-        String(body.settlement ?? '').trim() === SETTLEMENTS.CASH
+        settlementRaw === SETTLEMENTS.CASH
           ? SETTLEMENTS.CASH
-          : SETTLEMENTS.CREDIT_NOTE;
+          : settlementRaw === SETTLEMENTS.DAMAGE
+            ? SETTLEMENTS.DAMAGE
+            : SETTLEMENTS.CREDIT_NOTE;
+      if (settlement === SETTLEMENTS.DAMAGE) {
+        const admin = requireAdminUser(req, res, 'Only an admin can settle a return as damage items');
+        if (!admin) return;
+      }
       let returnInvoiceNumber = String(body.returnInvoiceNumber ?? '').trim();
+      let damageInvoiceNumber = String(body.damageInvoiceNumber ?? '').trim();
       if (settlement === SETTLEMENTS.CREDIT_NOTE) {
         if (!returnInvoiceNumber) {
           returnInvoiceNumber = suggestNextReturnInvoiceNumber(rows);
         }
         if (invoiceNumberTaken(rows, 'returnInvoiceNumber', returnInvoiceNumber)) {
           return res.status(400).json({ error: 'This return invoice # is already used' });
+        }
+      } else if (settlement === SETTLEMENTS.DAMAGE) {
+        if (!damageInvoiceNumber) {
+          damageInvoiceNumber = suggestNextDamageInvoiceNumber(rows);
+        }
+        if (invoiceNumberTaken(rows, 'damageInvoiceNumber', damageInvoiceNumber)) {
+          return res.status(400).json({ error: 'This damage invoice # is already used' });
         }
       }
       row = {
@@ -5533,6 +5707,7 @@ app.post('/api/returns', async (req, res) => {
         invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
         settlement,
         ...(returnInvoiceNumber ? { returnInvoiceNumber } : {}),
+        ...(damageInvoiceNumber ? { damageInvoiceNumber } : {}),
         ...bagFields,
         amount,
       };

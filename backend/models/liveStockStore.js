@@ -7,6 +7,7 @@ const {
   readReturns,
   sumItemReturnBagsByBrand,
   sumDamageBagsByBrand,
+  sumDamageStockTotal,
   aggregateItemReturnInsByDate,
   aggregateDamageOutsByDate,
 } = require('./returnsStore');
@@ -46,11 +47,10 @@ async function refreshLiveStockFromSources() {
   const promoOut = sumAllPromotionBagsByBrand(promotions, keys);
   const returned = sumItemReturnBagsByBrand(returnsRows, keys);
   const damaged = sumDamageBagsByBrand(returnsRows, keys);
+  const damages = Math.max(0, Math.floor(sumDamageStockTotal(returnsRows, keys) || 0));
   const bags = {};
-  const damageBags = {};
   for (const k of keys) {
     bags[k] = Math.max(0, loaded[k] - sold[k] - promoOut[k] - damaged[k] + returned[k]);
-    damageBags[k] = Math.max(0, damaged[k]);
   }
   const ledgerPayload = buildDailyStockPayload(loads, bills, promotions, keys, {
     inByDate: aggregateItemReturnInsByDate(returnsRows, keys),
@@ -59,7 +59,8 @@ async function refreshLiveStockFromSources() {
   const doc = {
     updatedAt: new Date().toISOString(),
     bags,
-    damageBags,
+    damages,
+    damageTotal: damages,
     dailyLedger: {
       generatedAt: ledgerPayload.generatedAt,
       days: ledgerPayload.days,
@@ -72,7 +73,7 @@ async function refreshLiveStockFromSources() {
 /** Dashboard / Stock page cards — served from file (refreshed on load & bill saves). */
 async function getLiveStockSummary(options = {}) {
   let live = await readLiveStock();
-  if (!live?.bags) {
+  if (!live?.bags || (live.damages == null && live.damageTotal == null)) {
     await refreshLiveStockFromSources();
     live = await readLiveStock();
   }
@@ -82,18 +83,18 @@ async function getLiveStockSummary(options = {}) {
     label: p.label,
     bags: Math.max(0, Math.floor(Number(live.bags[p.key]) || 0)),
   }));
-  const damageBags = {};
-  let damageTotal = 0;
-  for (const p of products) {
-    const n = Math.max(0, Math.floor(Number(live.damageBags?.[p.key]) || 0));
-    damageBags[p.key] = n;
-    damageTotal += n;
+  let damages = Math.max(0, Math.floor(Number(live.damages ?? live.damageTotal) || 0));
+  if (!damages && live.damageBags && typeof live.damageBags === 'object') {
+    damages = products.reduce(
+      (sum, p) => sum + Math.max(0, Math.floor(Number(live.damageBags[p.key]) || 0)),
+      0,
+    );
   }
   return {
     liveAt: live.updatedAt || new Date().toISOString(),
     brands,
-    damageBags,
-    damageTotal,
+    damages,
+    damageTotal: damages,
   };
 }
 

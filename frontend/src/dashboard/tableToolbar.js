@@ -323,17 +323,18 @@ export function TablePaginationBar({
   pageSizeOptions = PAGE_SIZE_OPTIONS,
   className = '',
 }) {
-  const from = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
-  const to = Math.min(page * pageSize, totalCount);
+  const count = Number(totalCount) || 0;
+  const from = count === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, count);
 
   return (
     <div
       className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${className}`.trim()}
     >
       <p className="text-[11px] tabular-nums text-slate-500 sm:text-xs">
-        {totalCount === 0
+        {count === 0
           ? 'No rows on this page.'
-          : `${from}–${to} of ${totalCount.toLocaleString()}`}
+          : `${from}–${to} of ${count.toLocaleString()}`}
       </p>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs font-medium text-slate-600">

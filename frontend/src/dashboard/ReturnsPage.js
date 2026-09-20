@@ -5,6 +5,7 @@ import { authFetch, getUsername, isAdmin } from '../auth';
 import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel } from './brandTheme';
 import { downloadReturnInvoiceForRow } from './returnInvoicePdf';
+import { downloadReturnsTablePdf } from './returnsTablePdf';
 import {
   LoadingSpinner,
   MobileRowCard,
@@ -55,7 +56,17 @@ function kindLabel(row) {
   if (kind === 'price_change') {
     return String(row.direction ?? '').trim() === 'up' ? 'Price increase' : 'Price drop';
   }
-  return String(row.settlement ?? '').trim() === 'cash' ? 'Cash return' : 'Return invoice';
+  const settlement = String(row.settlement ?? '').trim();
+  if (settlement === 'damage') return 'Damage items';
+  if (settlement === 'cash') return 'Cash return';
+  return 'Return invoice';
+}
+
+function rowTypeFilterValue(row) {
+  const kind = String(row?.kind ?? '').trim();
+  if (kind === 'price_change') return 'price_change';
+  if (kind === 'damage' || String(row.settlement ?? '').trim() === 'damage') return 'damage';
+  return 'item_return';
 }
 
 function invoiceRef(row) {
@@ -124,6 +135,7 @@ export default function ReturnsPage() {
   const [dateTo, setDateTo] = useState('');
   const [kindFilter, setKindFilter] = useState('');
   const [pdfBusyId, setPdfBusyId] = useState(null);
+  const [tablePdfBusy, setTablePdfBusy] = useState(false);
 
   const admin = isAdmin();
   const visibleTabs = useMemo(() => TABS.filter((t) => !t.adminOnly || admin), [admin]);
@@ -228,7 +240,7 @@ export default function ReturnsPage() {
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       if (!inDateRange(r.date, dateFrom, dateTo)) return false;
-      if (kindFilter && String(r.kind ?? '') !== kindFilter) return false;
+      if (kindFilter && rowTypeFilterValue(r) !== kindFilter) return false;
       return rowMatchesQuery(search, [
         r.date,
         r.customerName,
@@ -267,7 +279,7 @@ export default function ReturnsPage() {
       setSaveError('You need to be signed in with a username.');
       return;
     }
-    if (activeTab !== 'item_return' && !admin) {
+    if ((activeTab !== 'item_return' || form.settlement === 'damage') && !admin) {
       setSaveError('Only an admin can record damage items or price changes.');
       return;
     }
@@ -358,6 +370,27 @@ export default function ReturnsPage() {
     }
   };
 
+  const handleDownloadTablePdf = () => {
+    if (!admin) return;
+    setTablePdfBusy(true);
+    try {
+      downloadReturnsTablePdf({
+        rows: filteredRows,
+        brands,
+        filters: {
+          search,
+          dateFrom,
+          dateTo,
+          kindFilter,
+        },
+      });
+    } catch {
+      alert('Could not build the returns PDF.');
+    } finally {
+      setTablePdfBusy(false);
+    }
+  };
+
   const canDownload = (row) =>
     Boolean(row?.returnInvoiceNumber || row?.damageInvoiceNumber);
 
@@ -426,6 +459,16 @@ export default function ReturnsPage() {
             <option value="price_change">Price changes</option>
           </select>
         </label>
+        {admin ? (
+          <button
+            type="button"
+            onClick={handleDownloadTablePdf}
+            disabled={loading || !!error || tablePdfBusy || filteredRows.length === 0}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:self-end"
+          >
+            {tablePdfBusy ? 'Preparing…' : 'Download PDF'}
+          </button>
+        ) : null}
       </TableFiltersBar>
 
       <div className="space-y-3">
@@ -697,7 +740,7 @@ export default function ReturnsPage() {
                         checked={form.settlement === 'credit_note'}
                         onChange={() => handleChange('settlement', 'credit_note')}
                       />
-                      Return invoice (download credit note, update ledger)
+                      Return invoice (download credit note, update ledger and stock)
                     </label>
                     <label className="flex items-center gap-2 text-sm text-slate-700">
                       <input
@@ -706,8 +749,29 @@ export default function ReturnsPage() {
                         checked={form.settlement === 'cash'}
                         onChange={() => handleChange('settlement', 'cash')}
                       />
-                      Return cash (credit customer and cashier)
+                      Return cash (credit customer and cashier, update stock)
                     </label>
+                    {admin ? (
+                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="radio"
+                          name="settlement"
+                          checked={form.settlement === 'damage'}
+                          onChange={() => handleChange('settlement', 'damage')}
+                        />
+                        Damage items (credit shop, add bags to Damages stock)
+                      </label>
+                    ) : null}
+                    {form.settlement === 'damage' ? (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-100">
+                        Bags leave this invoice and go into Damages as one stock item. They are not added back to
+                        sellable brand stock.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        Returned bags are added back to the matching brand stock.
+                      </p>
+                    )}
                   </fieldset>
                 </>
               ) : null}
@@ -715,7 +779,7 @@ export default function ReturnsPage() {
               {activeTab === 'damage' ? (
                 <div className="space-y-2 rounded-xl bg-amber-50/70 p-3 ring-1 ring-amber-100">
                   <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-                    Move bags from stock to damage items
+                    Move bags from stock to Damages
                   </p>
                   {brands
                     .map((b) => {

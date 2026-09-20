@@ -20,6 +20,7 @@ const PRICE_DIRECTIONS = {
 const SETTLEMENTS = {
   CASH: 'cash',
   CREDIT_NOTE: 'credit_note',
+  DAMAGE: 'damage',
 };
 
 function roundMoney(n) {
@@ -55,9 +56,24 @@ function priceDirection(row) {
 }
 
 function settlementOf(row) {
-  return String(row?.settlement ?? '').trim() === SETTLEMENTS.CASH
-    ? SETTLEMENTS.CASH
-    : SETTLEMENTS.CREDIT_NOTE;
+  const s = String(row?.settlement ?? '').trim();
+  if (s === SETTLEMENTS.CASH) return SETTLEMENTS.CASH;
+  if (s === SETTLEMENTS.DAMAGE) return SETTLEMENTS.DAMAGE;
+  return SETTLEMENTS.CREDIT_NOTE;
+}
+
+/** Invoice return that goes back into sellable brand stock. */
+function isSellableItemReturn(row) {
+  return isItemReturn(row) && settlementOf(row) !== SETTLEMENTS.DAMAGE;
+}
+
+/** Invoice return settled as damage — bags go to the single Damages stock item. */
+function isInvoiceDamage(row) {
+  return isItemReturn(row) && settlementOf(row) === SETTLEMENTS.DAMAGE;
+}
+
+function isDamageStockRow(row) {
+  return isDamage(row) || isInvoiceDamage(row);
 }
 
 function returnMatchesCustomer(row, customer) {
@@ -117,7 +133,7 @@ function sumReturnedBagsForBill(returnsRows, billId, keys) {
 function sumItemReturnBagsByBrand(returnsRows, keys) {
   const t = emptyBrandMap(keys);
   for (const row of Array.isArray(returnsRows) ? returnsRows : []) {
-    if (!isItemReturn(row)) continue;
+    if (!isSellableItemReturn(row)) continue;
     for (const k of keys) {
       t[k] += toNonNegNumber(row[bagsField(k)]);
     }
@@ -136,6 +152,19 @@ function sumDamageBagsByBrand(returnsRows, keys) {
   return t;
 }
 
+/** All damaged bags in one stock item, regardless of brand. */
+function sumDamageStockTotal(returnsRows, keys) {
+  let n = 0;
+  const list = Array.isArray(keys) ? keys : [];
+  for (const row of Array.isArray(returnsRows) ? returnsRows : []) {
+    if (!isDamageStockRow(row)) continue;
+    for (const k of list) {
+      n += toNonNegNumber(row[bagsField(k)]);
+    }
+  }
+  return n;
+}
+
 function aggregateBagsByDate(returnsRows, keys, predicate) {
   const map = {};
   for (const row of Array.isArray(returnsRows) ? returnsRows : []) {
@@ -151,7 +180,7 @@ function aggregateBagsByDate(returnsRows, keys, predicate) {
 }
 
 function aggregateItemReturnInsByDate(returnsRows, keys) {
-  return aggregateBagsByDate(returnsRows, keys, isItemReturn);
+  return aggregateBagsByDate(returnsRows, keys, isSellableItemReturn);
 }
 
 function aggregateDamageOutsByDate(returnsRows, keys) {
@@ -211,6 +240,9 @@ module.exports = {
   writeReturns,
   returnKind,
   isItemReturn,
+  isSellableItemReturn,
+  isInvoiceDamage,
+  isDamageStockRow,
   isDamage,
   isPriceChange,
   returnAmount,
@@ -222,6 +254,7 @@ module.exports = {
   sumReturnedBagsForBill,
   sumItemReturnBagsByBrand,
   sumDamageBagsByBrand,
+  sumDamageStockTotal,
   aggregateItemReturnInsByDate,
   aggregateDamageOutsByDate,
   suggestNextReturnInvoiceNumber,

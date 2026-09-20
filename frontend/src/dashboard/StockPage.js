@@ -27,7 +27,6 @@ export default function StockPage() {
   const [rows, setRows] = useState([]);
   const [summaryBrands, setSummaryBrands] = useState(null);
   const [damageTotal, setDamageTotal] = useState(0);
-  const [damageBags, setDamageBags] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dailyDays, setDailyDays] = useState([]);
@@ -51,12 +50,10 @@ export default function StockPage() {
       if (summaryRes.ok) {
         const sum = await summaryRes.json();
         setSummaryBrands(Array.isArray(sum.brands) ? sum.brands : null);
-        setDamageTotal(Math.max(0, Math.floor(Number(sum.damageTotal) || 0)));
-        setDamageBags(sum.damageBags && typeof sum.damageBags === 'object' ? sum.damageBags : {});
+        setDamageTotal(Math.max(0, Math.floor(Number(sum.damages ?? sum.damageTotal) || 0)));
       } else {
         setSummaryBrands(null);
         setDamageTotal(0);
-        setDamageBags({});
       }
     } catch (e) {
       setError(e.message || 'Could not load data');
@@ -195,22 +192,14 @@ export default function StockPage() {
           <div className="relative">
             <div className="flex items-start justify-between gap-2">
               <span className="inline-flex rounded-xl bg-amber-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-amber-800">
-                Damage items
+                Damages
               </span>
               {loading ? <LoadingSpinner size="sm" labelHidden /> : null}
             </div>
             <p className="mt-4 text-3xl font-bold tracking-tight text-slate-900 tabular-nums">
               {loading ? '—' : damageTotal.toLocaleString()}
             </p>
-            <p className="mt-1 text-xs font-medium text-slate-500">
-              Bags written off from sellable stock
-              {brands.some((b) => Number(damageBags[b.key]) > 0)
-                ? ` · ${brands
-                    .filter((b) => Number(damageBags[b.key]) > 0)
-                    .map((b) => `${b.label} ${Number(damageBags[b.key]).toLocaleString()}`)
-                    .join(', ')}`
-                : ''}
-            </p>
+            <p className="mt-1 text-xs font-medium text-slate-500">Bags in damage stock</p>
           </div>
         </div>
       </div>

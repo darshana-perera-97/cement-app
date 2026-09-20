@@ -4,6 +4,7 @@ import {
   getCollectorUnloadPriceEnabled,
   setCollectorUnloadPriceEnabledCache,
 } from './collectorUnloadPriceSettings';
+import { setStockItemUnloadPriceEnabledCache } from './stockItemUnloadPriceSettings';
 
 const AUTH_KEY = 'cs-store-auth';
 const USER_KEY = 'cs-store-username';
@@ -241,6 +242,9 @@ export async function refreshSessionFromServer(apiBase) {
     }
     if (data.collectorUnloadPriceEnabled != null) {
       setCollectorUnloadPriceEnabledCache(Boolean(data.collectorUnloadPriceEnabled));
+    }
+    if (data.stockItemUnloadPriceEnabled != null) {
+      setStockItemUnloadPriceEnabledCache(Boolean(data.stockItemUnloadPriceEnabled));
     }
     if (staffRole === 'DSR' && !getStockUpdateEnabled()) {
       clearAuth();

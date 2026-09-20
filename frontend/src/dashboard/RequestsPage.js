@@ -10,6 +10,8 @@ import {
   TablePaginationBar,
   filterControl,
   filterLabel,
+  filterLabelNarrow,
+  inDateRange,
   mobileCardList,
   MobileRowCard,
   rowMatchesQuery,
@@ -23,6 +25,7 @@ import {
 } from './tableToolbar';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { downloadRequestsTablePdf, requestTypeLabel } from './requestsTablePdf';
 
 const apiBase = getApiBase();
 
@@ -184,6 +187,10 @@ export default function RequestsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [tablePdfBusy, setTablePdfBusy] = useState(false);
   const [approveRow, setApproveRow] = useState(null);
   const [priceForm, setPriceForm] = useState({});
   const [saveError, setSaveError] = useState(null);
@@ -237,13 +244,17 @@ export default function RequestsPage() {
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
+      if (typeFilter === 'payment' && r.requestKind !== 'payment') return false;
+      if (typeFilter === 'unload' && (r.requestKind === 'payment' || r.priceChangeRequest)) return false;
+      if (typeFilter === 'price_change' && (r.requestKind === 'payment' || !r.priceChangeRequest)) return false;
+      if (!inDateRange(r.date, dateFrom, dateTo)) return false;
       const fields = [
         r.date,
         r.customerName,
         r.note,
         r.billNumber,
         r.recordedBy,
-        r.requestKind === 'payment' ? 'payment approval' : 'unload',
+        requestTypeLabel(r),
       ];
       if (r.requestKind === 'payment') {
         fields.push(paymentRequestSummary(r));
@@ -252,9 +263,9 @@ export default function RequestsPage() {
       }
       return rowMatchesQuery(search, fields);
     });
-  }, [rows, search, brands]);
+  }, [rows, search, brands, typeFilter, dateFrom, dateTo]);
 
-  const pagination = useTablePagination(filtered.length, [search]);
+  const pagination = useTablePagination(filtered.length, [search, typeFilter, dateFrom, dateTo]);
   const paged = useMemo(
     () => filtered.slice(pagination.offset, pagination.offset + pagination.pageSize),
     [filtered, pagination.offset, pagination.pageSize],
@@ -444,7 +455,8 @@ export default function RequestsPage() {
       <div>
         <h1 className="text-xl font-bold text-slate-900">Requests</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Driver unload submissions and CDM / online transfer payments waiting for manager approval.
+          Driver unload submissions, unload price changes, and CDM / online transfer payments waiting for
+          manager approval.
         </p>
       </div>
 
@@ -465,6 +477,54 @@ export default function RequestsPage() {
             className={filterControl}
           />
         </label>
+        <label className={filterLabel}>
+          Type
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={filterControl}>
+            <option value="">All types</option>
+            <option value="unload">Unload</option>
+            <option value="price_change">Unload price change</option>
+            <option value="payment">Payment approval</option>
+          </select>
+        </label>
+        <label className={filterLabelNarrow}>
+          From date
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          To date
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className={filterControl}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setTablePdfBusy(true);
+            try {
+              downloadRequestsTablePdf({
+                rows: filtered,
+                brands,
+                filters: { search, dateFrom, dateTo, typeFilter },
+              });
+            } catch {
+              alert('Could not build the requests PDF.');
+            } finally {
+              setTablePdfBusy(false);
+            }
+          }}
+          disabled={loading || !!error || tablePdfBusy || filtered.length === 0}
+          className="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:self-end"
+        >
+          {tablePdfBusy ? 'Preparing…' : 'Download PDF'}
+        </button>
       </TableFiltersBar>
 
       {loading ? (
@@ -485,14 +545,14 @@ export default function RequestsPage() {
                   title={row.customerName}
                   subtitle={
                     row.requestKind === 'payment'
-                      ? `${row.date} · Payment · ${paymentRequestSummary(row)}`
+                      ? `${row.date} · ${requestTypeLabel(row)} · ${paymentRequestSummary(row)}`
                       : `${row.date} · ${row.driverName || 'Driver'} · ${totalBags(row, brands)} bags`
                   }
                   onClick={() => setDetailRow(row)}
                   fields={[
                     {
                       label: 'Type',
-                      value: row.requestKind === 'payment' ? 'Payment approval' : 'Unload',
+                      value: requestTypeLabel(row),
                     },
                     row.requestKind === 'payment'
                       ? { label: 'Amount', value: money(row.amount) }
@@ -549,7 +609,7 @@ export default function RequestsPage() {
                     >
                       <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{row.date}</td>
                       <td className="px-4 py-3 text-slate-600">
-                        {row.requestKind === 'payment' ? 'Payment approval' : 'Unload'}
+                        {requestTypeLabel(row)}
                       </td>
                       <td className="px-4 py-3 font-medium text-slate-900">{row.customerName}</td>
                       <td className="px-4 py-3 text-slate-600">

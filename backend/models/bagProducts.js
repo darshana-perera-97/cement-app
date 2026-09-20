@@ -54,6 +54,10 @@ function unitPriceField(key) {
   return `${key}UnitPrice`;
 }
 
+function unloadPriceField(key) {
+  return `${key}UnloadPrice`;
+}
+
 function invoiceField(key) {
   return `${key}Invoice`;
 }
@@ -112,6 +116,7 @@ async function getBagProducts() {
     costField: costField(key),
     cutOffPriceField: cutOffPriceField(key),
     unitPriceField: unitPriceField(key),
+    unloadPriceField: unloadPriceField(key),
     invoiceField: invoiceField(key),
     chequeField: chequeField(key),
     convertingDateField: convertingDateField(key),
@@ -182,6 +187,10 @@ function parseLoadBrandFields(body, products, helpers = {}) {
     fields[p.invoiceField] = trimStr(body[p.invoiceField]);
     fields[p.chequeField] = trimStr(body[p.chequeField]);
     fields[p.convertingDateField] = trimStr(body[p.convertingDateField]).slice(0, 10);
+    if (Object.prototype.hasOwnProperty.call(body, p.unloadPriceField)) {
+      const unloadPrice = cutOffNumberOrUndef(body[p.unloadPriceField]);
+      if (unloadPrice !== undefined) fields[p.unloadPriceField] = unloadPrice;
+    }
   }
   return fields;
 }
@@ -253,6 +262,7 @@ module.exports = {
   costField,
   cutOffPriceField,
   unitPriceField,
+  unloadPriceField,
   invoiceField,
   chequeField,
   convertingDateField,

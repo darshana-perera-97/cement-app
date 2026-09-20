@@ -108,10 +108,14 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
   if (!row || typeof row !== 'object') return null;
 
   const kind = String(row.kind ?? '').trim();
-  const isDamage = kind === 'damage';
+  const settlement = String(row.settlement ?? '').trim();
+  const isWarehouseDamage = kind === 'damage';
+  const isInvoiceDamage = kind === 'item_return' && settlement === 'damage';
+  const isDamage = isWarehouseDamage || isInvoiceDamage;
+  const showMoney = !isWarehouseDamage;
   const title = opts.title || (isDamage ? 'DAMAGE INVOICE' : 'RETURN INVOICE');
   const invoiceNo = isDamage
-    ? display(row.damageInvoiceNumber)
+    ? display(row.damageInvoiceNumber || row.returnInvoiceNumber)
     : display(row.returnInvoiceNumber);
   const generatedAt = opts.generatedAt instanceof Date ? opts.generatedAt : new Date();
 
@@ -135,13 +139,13 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
   const customerName = display(row.customerName);
   if (customerName !== '—') {
     doc.setFont('helvetica', 'bold');
-    doc.text(isDamage ? 'Shop / destination :' : 'Credit to :', MARGIN, y);
+    doc.text(isWarehouseDamage ? 'Shop / destination :' : 'Credit to :', MARGIN, y);
     y += 5;
     doc.text(customerName.toUpperCase(), MARGIN, y);
     y += 7;
   }
 
-  if (!isDamage && row.invoiceNumber) {
+  if (!isWarehouseDamage && row.invoiceNumber) {
     doc.setFont('helvetica', 'normal');
     doc.text(`Against original invoice : ${display(row.invoiceNumber)}`, MARGIN, y);
     y += 6;
@@ -149,15 +153,15 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
 
   const lineItems = buildLineItems(row);
   const subtotal = lineItems.reduce((sum, item) => sum + item.amount, 0);
-  const totalAmount = isDamage ? subtotal : Number(row.amount) || subtotal;
+  const totalAmount = isWarehouseDamage ? subtotal : Number(row.amount) || subtotal;
 
   const tableBody =
     lineItems.length > 0
       ? lineItems.map((item) => [
           item.brandLabel,
           String(item.bags),
-          isDamage ? '—' : formatAmount(item.unitPrice),
-          isDamage ? '—' : formatAmount(item.amount),
+          showMoney ? formatAmount(item.unitPrice) : '—',
+          showMoney ? formatAmount(item.amount) : '—',
         ])
       : [[isDamage ? 'Damage write-off' : 'Return credit', '—', '—', formatAmount(totalAmount)]];
 
@@ -165,7 +169,7 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
     startY: y,
     head: [['Description', 'Qty (bags)', 'Price / bag (Rs)', 'Amount (Rs)']],
     body: tableBody,
-    foot: [['Total', '', '', isDamage ? String(lineItems.reduce((s, i) => s + i.bags, 0)) : formatAmount(totalAmount)]],
+    foot: [['Total', '', '', showMoney ? formatAmount(totalAmount) : String(lineItems.reduce((s, i) => s + i.bags, 0))]],
     theme: 'grid',
     styles: {
       font: 'helvetica',
@@ -209,9 +213,11 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(...BLACK);
-  const ack = isDamage
+  const ack = isWarehouseDamage
     ? 'The above bags have been written off from sellable stock as damage items.'
-    : 'This credit note reduces the customer ledger for the bags returned.';
+    : isInvoiceDamage
+      ? 'The above bags have been written off as damage items. This credit reduces the customer ledger.'
+      : 'This credit note reduces the customer ledger for the bags returned.';
   doc.text(doc.splitTextToSize(ack, contentWidth), MARGIN, y);
 
   const slug = String(invoiceNo).replace(/[^\w.-]+/g, '-');

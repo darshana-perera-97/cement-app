@@ -23,7 +23,7 @@ import {
   stickyThead,
   useTablePagination,
 } from './tableToolbar';
-import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import RowDetailModal from './RowDetailModal';
 
 const apiBase = getApiBase();
 
@@ -47,6 +47,13 @@ function bagLines(row, brands) {
   return brands
     .filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0)
     .map((b) => `${brandName(b)} ${Number(row[`${b.key}Bags`])}`)
+    .join(', ');
+}
+
+function bagTypes(row, brands) {
+  return brands
+    .filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0)
+    .map((b) => brandName(b))
     .join(', ');
 }
 
@@ -201,6 +208,7 @@ export default function CollectorUnloadsPage() {
         r.note,
         String(totalBags(r, brands)),
         bagLines(r, brands),
+        bagTypes(r, brands),
         status,
       ]);
     });
@@ -221,6 +229,7 @@ export default function CollectorUnloadsPage() {
     setLastPreview(null);
     setLastPopupOpen(false);
   };
+  const openDetail = openEdit;
 
   const closeEdit = () => {
     setEditRow(null);
@@ -379,101 +388,77 @@ export default function CollectorUnloadsPage() {
                 No unloaded loads from lorries yet.
               </p>
             ) : (
-              paged.map((row) => {
-                const status = unloadStatus(row);
-                const missing = needsPrice(row, brands);
-                return (
-                  <MobileRowCard
-                    key={row.id}
-                    title={row.customerName || 'Shop'}
-                    subtitle={[row.date, row.vehicleNumber ? `Lorry ${row.vehicleNumber}` : null, row.driverName]
-                      .filter(Boolean)
-                      .join(' · ')}
-                    badge={<StatusBadge status={status} missingPrice={missing} />}
-                    fields={[
-                      { label: 'Bags', value: bagLines(row, brands) || '—' },
-                      { label: 'Amount', value: money(row.totalAmount) },
-                      row.invoiceNumber ? { label: 'Invoice', value: row.invoiceNumber } : null,
-                    ].filter(Boolean)}
-                    onClick={() => setDetailRow(row)}
-                    actions={
-                      <button
-                        type="button"
-                        onClick={(e) => openEdit(row, e)}
-                        className="w-full rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                      >
-                        Update price
-                      </button>
-                    }
-                  />
-                );
-              })
+              paged.map((row) => (
+                <MobileRowCard
+                  key={row.id}
+                  title={row.customerName || 'Shop'}
+                  subtitle={row.date || '—'}
+                  fields={[{ label: 'Bag type', value: bagTypes(row, brands) || '—' }]}
+                  actions={
+                    <button
+                      type="button"
+                      onClick={(e) => openEdit(row, e)}
+                      className="w-full rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                    >
+                      Update price
+                    </button>
+                  }
+                />
+              ))
             )}
           </div>
 
-          <div className="hidden overflow-hidden rounded-[20px] bg-white shadow-md shadow-slate-200/30 ring-1 ring-slate-100 lg:block">
+          <div className="hidden overflow-hidden rounded-[20px] bg-white shadow-md shadow-slate-200/30 ring-1 ring-slate-100 sm:block">
             <div className={scrollTableWrap}>
-              <table className="w-full min-w-[56rem] border-separate border-spacing-0 text-left text-sm">
+              <table className="w-full min-w-[36rem] border-separate border-spacing-0 text-left text-sm">
                 <thead className={stickyThead}>
                   <tr>
-                    <th className={stickyFirstTh}>Shop</th>
-                    <th className="px-3 py-3">Date</th>
-                    <th className="px-3 py-3">Lorry</th>
-                    <th className="px-3 py-3">Bags</th>
-                    <th className="px-3 py-3 text-right">Amount</th>
-                    <th className="px-3 py-3">Status</th>
-                    <th className="px-3 py-3 text-right"> </th>
+                    <th className={`whitespace-nowrap px-3 py-3 ${stickyFirstTh}`}>Date</th>
+                    <th className="px-3 py-3">Shop name</th>
+                    <th className="px-3 py-3">Bag type</th>
+                    <th className="px-3 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paged.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                      <td colSpan={4} className="px-4 py-10 text-center text-sm text-slate-500">
                         No unloaded loads from lorries yet.
                       </td>
                     </tr>
                   ) : (
-                    paged.map((row) => {
-                      const status = unloadStatus(row);
-                      const missing = needsPrice(row, brands);
-                      return (
-                        <tr
-                          key={row.id}
-                          className="cursor-pointer hover:bg-slate-50/80"
-                          {...detailRowAttrs(() => setDetailRow(row))}
-                        >
-                          <td className={stickyFirstTd}>
-                            <p className="font-semibold text-slate-900">{row.customerName || '—'}</p>
-                            <p className="text-xs text-slate-500">{row.driverName || row.recordedBy || '—'}</p>
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-3 tabular-nums text-slate-700">{row.date || '—'}</td>
-                          <td className="px-3 py-3 font-medium text-slate-800">{row.vehicleNumber || '—'}</td>
-                          <td className="max-w-[18rem] px-3 py-3 text-slate-700">{bagLines(row, brands) || '—'}</td>
-                          <td className="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-slate-900">
-                            {money(row.totalAmount)}
-                          </td>
-                          <td className="px-3 py-3">
-                            <StatusBadge status={status} missingPrice={missing} />
-                          </td>
-                          <td className="px-3 py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={(e) => openEdit(row, e)}
-                              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
-                            >
-                              Update price
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
+                    paged.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50/80">
+                        <td className={`whitespace-nowrap px-3 py-3 tabular-nums text-slate-700 ${stickyFirstTd}`}>
+                          {row.date || '—'}
+                        </td>
+                        <td className="px-3 py-3 font-semibold text-slate-900">{row.customerName || '—'}</td>
+                        <td className="max-w-[18rem] px-3 py-3 text-slate-700">{bagTypes(row, brands) || '—'}</td>
+                        <td className="px-3 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={(e) => openDetail(row, e)}
+                            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                          >
+                            Update price
+                          </button>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
           </div>
 
-          <TablePaginationBar pagination={pagination} />
+          <TablePaginationBar
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            pageSize={pagination.pageSize}
+            totalCount={filtered.length}
+            onPageChange={pagination.setPage}
+            onPageSizeChange={pagination.setPageSize}
+          />
         </div>
       )}
 
@@ -483,8 +468,9 @@ export default function CollectorUnloadsPage() {
           <form onSubmit={submitPrices} className={`${modalPanelClass} z-10 w-full max-w-lg`}>
             <h2 className="text-lg font-bold text-slate-900">Update unload price</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Set the unit price for bags unloaded at this shop. Pending loads keep these prices for the bill;
-              billed loads update the credit bill.
+              {editRow.stockItemUnloadPriceEnabled
+                ? 'Default is the unloading price per bag from the stock load. Keep it to create the invoice now. Change it and admin must accept the request first.'
+                : 'Set the unit price for bags unloaded at this shop. Pending loads keep these prices for the bill; billed loads update the credit bill.'}
             </p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div>
@@ -525,10 +511,24 @@ export default function CollectorUnloadsPage() {
               {brands.map((b) => {
                 const bags = Number(editRow[`${b.key}Bags`]) || 0;
                 if (bags <= 0) return null;
+                const defaultPrice = Number(editRow.stockUnloadPrices?.[`${b.key}UnitPrice`]);
+                const current = Number(priceForm[`${b.key}UnitPrice`]);
+                const changed =
+                  editRow.stockItemUnloadPriceEnabled &&
+                  Number.isFinite(defaultPrice) &&
+                  defaultPrice > 0 &&
+                  Number.isFinite(current) &&
+                  Math.round(current * 100) !== Math.round(defaultPrice * 100);
                 return (
                   <label key={b.key} className="flex items-center justify-between gap-3 text-sm">
                     <span className="font-medium text-slate-800">
                       {brandName(b)} <span className="text-slate-400">({bags} bags)</span>
+                      {editRow.stockItemUnloadPriceEnabled && Number.isFinite(defaultPrice) && defaultPrice > 0 ? (
+                        <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+                          Default {money(defaultPrice)} / bag
+                          {changed ? ' · needs admin approval' : ''}
+                        </span>
+                      ) : null}
                     </span>
                     <input
                       type="number"
@@ -585,13 +585,19 @@ export default function CollectorUnloadsPage() {
         onClose={() => setDetailRow(null)}
         actions={
           detailRow?.id ? (
-            <button
-              type="button"
-              onClick={() => openEdit(detailRow)}
-              className="mt-4 w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
-            >
-              Update price
-            </button>
+            <div className="mt-4 space-y-3">
+              <StatusBadge
+                status={unloadStatus(detailRow)}
+                missingPrice={needsPrice(detailRow, brands)}
+              />
+              <button
+                type="button"
+                onClick={() => openEdit(detailRow)}
+                className="w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+              >
+                Update price
+              </button>
+            </div>
           ) : null
         }
       />

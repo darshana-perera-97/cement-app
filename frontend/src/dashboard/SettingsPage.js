@@ -4,6 +4,7 @@ import { getApiBase } from '../apiBase';
 import { authFetch, getFirstAllowedDashboardPath, isAdmin } from '../auth';
 import { MAX_LOW_STOCK_ALERTS, notifyStockUpdateSettingsChanged } from '../stockUpdateSettings';
 import { notifyCollectorUnloadPriceSettingsChanged } from '../collectorUnloadPriceSettings';
+import { notifyStockItemUnloadPriceSettingsChanged } from '../stockItemUnloadPriceSettings';
 import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel } from './brandTheme';
 import {
@@ -97,6 +98,11 @@ export default function SettingsPage() {
   const [collectorUnloadPriceSaving, setCollectorUnloadPriceSaving] = useState(false);
   const [collectorUnloadPriceError, setCollectorUnloadPriceError] = useState(null);
   const [collectorUnloadPriceOk, setCollectorUnloadPriceOk] = useState(false);
+  const [stockItemUnloadPriceEnabled, setStockItemUnloadPriceEnabled] = useState(false);
+  const [stockItemUnloadPriceLoading, setStockItemUnloadPriceLoading] = useState(true);
+  const [stockItemUnloadPriceSaving, setStockItemUnloadPriceSaving] = useState(false);
+  const [stockItemUnloadPriceError, setStockItemUnloadPriceError] = useState(null);
+  const [stockItemUnloadPriceOk, setStockItemUnloadPriceOk] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -183,12 +189,31 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadStockItemUnloadPrice = useCallback(async () => {
+    setStockItemUnloadPriceLoading(true);
+    setStockItemUnloadPriceError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/stock-item-unload-price-settings`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStockItemUnloadPriceError(data.error || 'Failed to load stock item unload price settings');
+        return;
+      }
+      setStockItemUnloadPriceEnabled(Boolean(data.enabled));
+    } catch {
+      setStockItemUnloadPriceError('Could not reach the server');
+    } finally {
+      setStockItemUnloadPriceLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     load();
     loadBackupStatus();
     loadStockUpdate();
     loadCollectorUnloadPrice();
-  }, [load, loadBackupStatus, loadStockUpdate, loadCollectorUnloadPrice]);
+    loadStockItemUnloadPrice();
+  }, [load, loadBackupStatus, loadStockUpdate, loadCollectorUnloadPrice, loadStockItemUnloadPrice]);
 
   const persistStockUpdateSettings = useCallback(
     async ({
@@ -361,6 +386,32 @@ export default function SettingsPage() {
       setCollectorUnloadPriceError(err.message || 'Could not save collector unload price settings');
     } finally {
       setCollectorUnloadPriceSaving(false);
+    }
+  };
+
+  const handleSaveStockItemUnloadPrice = async (e) => {
+    e.preventDefault();
+    setStockItemUnloadPriceSaving(true);
+    setStockItemUnloadPriceError(null);
+    setStockItemUnloadPriceOk(false);
+    try {
+      const res = await authFetch(`${apiBase}/api/stock-item-unload-price-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: Boolean(stockItemUnloadPriceEnabled) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not save stock item unload price settings');
+      }
+      const nextEnabled = Boolean(data.enabled);
+      setStockItemUnloadPriceEnabled(nextEnabled);
+      notifyStockItemUnloadPriceSettingsChanged(nextEnabled);
+      setStockItemUnloadPriceOk(true);
+    } catch (err) {
+      setStockItemUnloadPriceError(err.message || 'Could not save stock item unload price settings');
+    } finally {
+      setStockItemUnloadPriceSaving(false);
     }
   };
 
@@ -580,6 +631,62 @@ export default function SettingsPage() {
                 className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
               >
                 {collectorUnloadPriceSaving ? 'Saving…' : 'Save unload prices'}
+              </button>
+            </div>
+          </section>
+        </form>
+      )}
+
+      {stockItemUnloadPriceError ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {stockItemUnloadPriceError}
+        </p>
+      ) : null}
+
+      {stockItemUnloadPriceLoading ? (
+        <div className="flex justify-center py-8">
+          <LoadingSpinner size="lg" />
+        </div>
+      ) : (
+        <form onSubmit={handleSaveStockItemUnloadPrice} className="space-y-4">
+          {stockItemUnloadPriceOk ? (
+            <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-emerald-100">
+              Unload price for items settings saved.
+            </p>
+          ) : null}
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Add a unload price for items</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              When enabled, admins enter an unloading price per product on each stock load. That price is the
+              default in Update unload price. If it is kept, the invoice is created immediately. If it is
+              changed, admin must accept the request first.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+                checked={stockItemUnloadPriceEnabled}
+                onChange={(e) => {
+                  setStockItemUnloadPriceOk(false);
+                  setStockItemUnloadPriceEnabled(e.target.checked);
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-slate-900">
+                  Add unloading prices on stock loads
+                </span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  Admin-only step 4 on Add a stock load. Collectors see those prices as the default per bag.
+                </span>
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                disabled={stockItemUnloadPriceSaving}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {stockItemUnloadPriceSaving ? 'Saving…' : 'Save unload price for items'}
               </button>
             </div>
           </section>

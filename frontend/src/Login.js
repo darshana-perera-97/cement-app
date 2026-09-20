@@ -4,6 +4,7 @@ import { DEFAULT_DEV_API_URL, getApiBase } from './apiBase';
 import { isAuthed, setAuth, setDriverAuth, getPostLoginPath } from './auth';
 import { setStockUpdateEnabledCache } from './stockUpdateSettings';
 import { setCollectorUnloadPriceEnabledCache } from './collectorUnloadPriceSettings';
+import { setStockItemUnloadPriceEnabledCache } from './stockItemUnloadPriceSettings';
 import { beginLoginPrinterConnect } from './printer/bluetoothPrinter';
 import { shopNameInitials, useShopName } from './shopConfig';
 
@@ -68,6 +69,9 @@ function Login() {
       }
       if (data.collectorUnloadPriceEnabled != null) {
         setCollectorUnloadPriceEnabledCache(Boolean(data.collectorUnloadPriceEnabled));
+      }
+      if (data.stockItemUnloadPriceEnabled != null) {
+        setStockItemUnloadPriceEnabledCache(Boolean(data.stockItemUnloadPriceEnabled));
       }
       if (String(data.staffRole || '').trim() === 'Driver') {
         setDriverAuth(resolvedUser, token, data.name);

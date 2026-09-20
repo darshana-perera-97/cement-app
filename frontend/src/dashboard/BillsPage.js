@@ -148,16 +148,138 @@ function applyAllLastPrices(form, brands, lastPrices) {
   return next;
 }
 
+const LAST_UNLOADED_ITEM_COUNT = 5;
+
+function sortRecordsNewestFirst(records) {
+  return [...(Array.isArray(records) ? records : [])].sort((a, b) => {
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da !== db) return db.localeCompare(da);
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+}
+
+function brandKeysWithBags(row, brands) {
+  const keys = [];
+  for (const b of brands) {
+    const n = Number(row?.[`${b.key}Bags`]);
+    if (Number.isFinite(n) && n > 0) keys.push(b.key);
+  }
+  return keys;
+}
+
+function rowMatchesCustomer(row, customer) {
+  if (!row || !customer) return false;
+  const id = String(customer.id || '').trim();
+  if (id && String(row.customerId || '').trim() === id) return true;
+  const nameKey = normalizeCustomerNameKey(customer.name);
+  if (!nameKey) return false;
+  return (
+    normalizeCustomerNameKey(row.customerName) === nameKey ||
+    normalizeCustomerNameKey(row.shopName) === nameKey
+  );
+}
+
+function appendUniqueKeysFromRecords(records, brands, keys, seen, limit) {
+  for (const row of sortRecordsNewestFirst(records)) {
+    for (const key of brandKeysWithBags(row, brands)) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+      if (keys.length >= limit) return;
+    }
+  }
+}
+
+/** Newest unique products with bags, preferring the selected customer's last unload. */
+function lastUnloadedBrandKeys({ unloads, loads, bills, brands, customer }) {
+  const limit = LAST_UNLOADED_ITEM_COUNT;
+  const keys = [];
+  const seen = new Set();
+  if (customer) {
+    const customerUnloads = (unloads || []).filter((row) => rowMatchesCustomer(row, customer));
+    const approved = customerUnloads.filter(
+      (r) => String(r.status || '').trim().toLowerCase() === 'approved',
+    );
+    const customerBills = (bills || []).filter((row) => rowMatchesCustomer(row, customer));
+    appendUniqueKeysFromRecords(
+      approved.length ? approved : customerUnloads.length ? customerUnloads : customerBills,
+      brands,
+      keys,
+      seen,
+      limit,
+    );
+  }
+  if (keys.length < limit) appendUniqueKeysFromRecords(unloads, brands, keys, seen, limit);
+  if (keys.length < limit) appendUniqueKeysFromRecords(loads, brands, keys, seen, limit);
+  if (keys.length < limit) appendUniqueKeysFromRecords(bills, brands, keys, seen, limit);
+  if (keys.length < limit) {
+    for (const b of brands) {
+      if (seen.has(b.key)) continue;
+      seen.add(b.key);
+      keys.push(b.key);
+      if (keys.length >= limit) break;
+    }
+  }
+  return keys;
+}
+
+function lastUnloadBagsByBrand(records, brands) {
+  const out = {};
+  for (const row of sortRecordsNewestFirst(records)) {
+    for (const b of brands) {
+      if (out[b.key] != null) continue;
+      const n = Number(row?.[`${b.key}Bags`]);
+      if (Number.isFinite(n) && n > 0) out[b.key] = n;
+    }
+  }
+  return out;
+}
+
+function visibleSaleBrands({ brands, lastKeys, form, showAll }) {
+  if (showAll) return brands;
+  const lastSet = new Set(lastKeys);
+  const extraKeys = [];
+  for (const b of brands) {
+    if (lastSet.has(b.key)) continue;
+    const bags = Number(form?.[`${b.key}Bags`]);
+    if (Number.isFinite(bags) && bags > 0) extraKeys.push(b.key);
+  }
+  const byKey = new Map(brands.map((b) => [b.key, b]));
+  return [...lastKeys, ...extraKeys].map((k) => byKey.get(k)).filter(Boolean);
+}
+
+function printPdfFrame(frame, fallbackUrl) {
+  if (frame?.contentWindow) {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (fallbackUrl) window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+}
+
 function BillSaleFormFields({
   form,
   customers,
   brands,
+  visibleBrands,
   onChange,
   lastPrices = {},
+  lastUnloadBags = {},
   isEdit = false,
   onLoadLastPrices,
   loadingLastPrices = false,
+  showAllItems = false,
+  onToggleAllItems,
+  hiddenItemCount = 0,
 }) {
+  const listedBrands = Array.isArray(visibleBrands) && visibleBrands.length > 0 ? visibleBrands : brands;
+  const canToggleItems = typeof onToggleAllItems === 'function' && (hiddenItemCount > 0 || showAllItems);
+
   return (
     <>
       <div className="grid gap-2.5 sm:grid-cols-2">
@@ -214,8 +336,9 @@ function BillSaleFormFields({
           <div className="min-w-0">
             <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Bags &amp; unit price (LKR)</p>
             <p className="mt-0.5 text-[10px] font-normal text-slate-400">
-              Select a customer, then Load last prices to fill every product from the last unload / credit
-              sale. You can still edit prices.
+              {showAllItems
+                ? 'Full product list. Enter bags and price for the items on this invoice.'
+                : 'Last unloaded items. Select a customer, then Load last prices if you want previous unit prices.'}
             </p>
           </div>
           {onLoadLastPrices ? (
@@ -229,10 +352,17 @@ function BillSaleFormFields({
             </button>
           ) : null}
         </div>
-        <div className="mt-2 space-y-2">
-          {brands.map((b) => {
+        <div
+          className={
+            showAllItems
+              ? 'mt-2 max-h-[min(48vh,28rem)] space-y-2 overflow-y-auto overscroll-contain pr-0.5'
+              : 'mt-2 space-y-2'
+          }
+        >
+          {listedBrands.map((b) => {
             const last = lastPrices[b.key];
             const lastLabel = formatUnitPrice(last);
+            const lastBags = lastUnloadBags[b.key];
             return (
             <div key={b.key} className="grid grid-cols-1 items-end gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
               <span
@@ -240,6 +370,9 @@ function BillSaleFormFields({
                 title={formatBrandLabel(b) || b.label}
               >
                 {formatBrandLabel(b) || b.label}
+                {lastBags != null ? (
+                  <span className="ml-1 font-normal text-slate-400">· last unload {lastBags}</span>
+                ) : null}
               </span>
               <label className="text-[10px] text-slate-500">
                 Bags
@@ -270,6 +403,17 @@ function BillSaleFormFields({
             );
           })}
         </div>
+        {canToggleItems ? (
+          <button
+            type="button"
+            onClick={onToggleAllItems}
+            className="mt-2.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+          >
+            {showAllItems
+              ? 'Show last unloaded items'
+              : `View all items${hiddenItemCount > 0 ? ` (${hiddenItemCount} more)` : ''}`}
+          </button>
+        ) : null}
       </div>
       <label className="block text-xs font-medium text-slate-600">
         Note (optional)
@@ -332,8 +476,14 @@ export default function BillsPage() {
   const [invoicePreviewUrl, setInvoicePreviewUrl] = useState(null);
   const [invoicePreviewFilename, setInvoicePreviewFilename] = useState('');
   const [invoicePreviewBusy, setInvoicePreviewBusy] = useState(false);
+  const [addStep, setAddStep] = useState(1);
+  const [showAllSaleItems, setShowAllSaleItems] = useState(false);
+  const [saleInvoiceUrl, setSaleInvoiceUrl] = useState(null);
+  const [saleInvoiceFilename, setSaleInvoiceFilename] = useState('');
   const invoiceNumberTouched = useRef(false);
   const invoicePreviewUrlRef = useRef(null);
+  const saleInvoiceUrlRef = useRef(null);
+  const saleInvoiceFrameRef = useRef(null);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -452,6 +602,39 @@ export default function BillsPage() {
   );
 
   const selectedLastPrices = lastPricesMap.get(String(form.customerId || '')) || {};
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => String(c.id) === String(form.customerId || '')) || null,
+    [customers, form.customerId],
+  );
+  const lastUnloadedKeys = useMemo(
+    () =>
+      lastUnloadedBrandKeys({
+        unloads,
+        loads,
+        bills: rows,
+        brands,
+        customer: selectedCustomer,
+      }),
+    [unloads, loads, rows, brands, selectedCustomer],
+  );
+  const lastUnloadBags = useMemo(() => {
+    const customerUnloads = selectedCustomer
+      ? (unloads || []).filter((row) => rowMatchesCustomer(row, selectedCustomer))
+      : [];
+    const source = customerUnloads.length ? customerUnloads : unloads;
+    return lastUnloadBagsByBrand(source.length ? source : loads, brands);
+  }, [unloads, loads, brands, selectedCustomer]);
+  const visibleAddBrands = useMemo(
+    () =>
+      visibleSaleBrands({
+        brands,
+        lastKeys: lastUnloadedKeys,
+        form,
+        showAll: showAllSaleItems,
+      }),
+    [brands, lastUnloadedKeys, form, showAllSaleItems],
+  );
+  const hiddenSaleItemCount = Math.max(0, brands.length - visibleAddBrands.length);
 
   const pagination = useTablePagination(filteredRows.length, [search, stockFilter, dateFrom, dateTo]);
   const pagedRows = useMemo(
@@ -499,11 +682,24 @@ export default function BillsPage() {
     setInvoicePreviewFilename('');
   }, []);
 
+  const revokeSaleInvoiceUrl = useCallback(() => {
+    if (saleInvoiceUrlRef.current) {
+      URL.revokeObjectURL(saleInvoiceUrlRef.current);
+      saleInvoiceUrlRef.current = null;
+    }
+    setSaleInvoiceUrl(null);
+    setSaleInvoiceFilename('');
+  }, []);
+
   useEffect(() => {
     return () => {
       if (invoicePreviewUrlRef.current) {
         URL.revokeObjectURL(invoicePreviewUrlRef.current);
         invoicePreviewUrlRef.current = null;
+      }
+      if (saleInvoiceUrlRef.current) {
+        URL.revokeObjectURL(saleInvoiceUrlRef.current);
+        saleInvoiceUrlRef.current = null;
       }
     };
   }, []);
@@ -534,6 +730,9 @@ export default function BillsPage() {
     setSaveError(null);
     invoiceNumberTouched.current = false;
     loadCustomers();
+    setAddStep(1);
+    setShowAllSaleItems(false);
+    revokeSaleInvoiceUrl();
     setForm({
       ...emptyForm(brands),
       invoiceNumber: suggestNextBillInvoiceNumber(rows),
@@ -552,6 +751,9 @@ export default function BillsPage() {
     setSaveError(null);
     invoiceNumberTouched.current = false;
     setLoadingLastPrices(false);
+    setAddStep(1);
+    setShowAllSaleItems(false);
+    revokeSaleInvoiceUrl();
   };
 
   const handleFormChange = (field, value) => {
@@ -671,7 +873,18 @@ export default function BillsPage() {
         return;
       }
       await load();
-      closeAdd();
+      revokeSaleInvoiceUrl();
+      const preview = billsInvoicesPdfBlobUrl([data], {
+        ...invoicePdfOpts(),
+        dateFrom: data.date,
+        dateTo: data.date,
+      });
+      if (preview) {
+        saleInvoiceUrlRef.current = preview.url;
+        setSaleInvoiceUrl(preview.url);
+        setSaleInvoiceFilename(preview.filename);
+      }
+      setAddStep(2);
       requestAutoPrint('billGenerate', data);
     } catch {
       setSaveError('Could not reach the server.');
@@ -680,16 +893,22 @@ export default function BillsPage() {
     }
   };
 
+  const handlePrintSaleInvoice = () => {
+    printPdfFrame(saleInvoiceFrameRef.current, saleInvoiceUrl);
+  };
+
   const closeBillEdit = () => {
     setEditBill(null);
     setSaveError(null);
     setLoadingLastPrices(false);
+    setShowAllSaleItems(false);
   };
 
   const openBillEditFromDetail = () => {
     if (!detailBill) return;
     setSaveError(null);
     loadCustomers();
+    setShowAllSaleItems(false);
     setEditBill(detailBill);
     setDetailBill(null);
   };
@@ -1015,47 +1234,140 @@ export default function BillsPage() {
 
       {addOpen ? (
         <div
-          className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
+          className="fixed inset-0 z-[100] flex items-end justify-center p-0 sm:items-center sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="bills-add-title"
         >
           <button type="button" className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" aria-label="Close" onClick={closeAdd} />
-          <div className={modalPanelClass3xl}>
-            <h2 id="bills-add-title" className="text-sm font-semibold text-slate-900">
-              Record credit sale
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">Logged in as {getUsername() || '—'}</p>
-            <form className="mt-4 space-y-3" onSubmit={handleSubmit}>
-              {saveError ? (
-                <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">{saveError}</p>
-              ) : null}
-              <BillSaleFormFields
-                form={form}
-                customers={customers}
-                brands={brands}
-                onChange={handleFormChange}
-                lastPrices={selectedLastPrices}
-                onLoadLastPrices={handleLoadLastPrices}
-                loadingLastPrices={loadingLastPrices}
-              />
-              <div className="flex flex-wrap justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={closeAdd}
-                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || customers.length === 0}
-                  className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-medium text-white shadow-md disabled:opacity-60"
-                >
-                  {saving ? 'Saving…' : 'Save bill'}
-                </button>
+          <div
+            className={`${
+              addStep === 2 ? modalPanelClass4xl : modalPanelClass3xl
+            } flex max-h-[min(96dvh,calc(100dvh-env(safe-area-inset-bottom,0px)))] w-full max-w-none flex-col overflow-hidden !p-0 ${
+              addStep === 2 ? 'sm:max-w-5xl' : 'sm:max-w-3xl'
+            }`}
+          >
+            <div className="shrink-0 border-b border-slate-100 px-4 pb-3 pt-4 sm:px-6">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 id="bills-add-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+                    {addStep === 1 ? 'Record credit sale' : 'Invoice'}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {addStep === 1
+                      ? `Enter invoice details and items. Logged in as ${getUsername() || '—'}.`
+                      : 'Download or print this invoice.'}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 ring-1 ring-indigo-100">
+                  Step {addStep} of 2
+                </span>
               </div>
-            </form>
+              <div className="mt-3 flex items-center gap-2 text-xs" aria-label="Sale steps">
+                <span className={`flex items-center gap-1.5 ${addStep === 1 ? 'font-semibold text-indigo-700' : 'text-slate-500'}`}>
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
+                      addStep === 1 ? 'bg-indigo-600 text-white' : 'bg-slate-400 text-white'
+                    }`}
+                  >
+                    1
+                  </span>
+                  Details
+                </span>
+                <span className="h-px min-w-4 flex-1 bg-slate-200" aria-hidden />
+                <span className={`flex items-center gap-1.5 ${addStep === 2 ? 'font-semibold text-indigo-700' : 'text-slate-400'}`}>
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
+                      addStep === 2 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    2
+                  </span>
+                  Invoice
+                </span>
+              </div>
+            </div>
+
+            {addStep === 1 ? (
+              <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
+                  {saveError ? (
+                    <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">{saveError}</p>
+                  ) : null}
+                  <BillSaleFormFields
+                    form={form}
+                    customers={customers}
+                    brands={brands}
+                    visibleBrands={visibleAddBrands}
+                    onChange={handleFormChange}
+                    lastPrices={selectedLastPrices}
+                    lastUnloadBags={lastUnloadBags}
+                    onLoadLastPrices={handleLoadLastPrices}
+                    loadingLastPrices={loadingLastPrices}
+                    showAllItems={showAllSaleItems}
+                    onToggleAllItems={() => setShowAllSaleItems((v) => !v)}
+                    hiddenItemCount={hiddenSaleItemCount}
+                  />
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-100 px-4 py-3 sm:px-6">
+                  <button
+                    type="button"
+                    onClick={closeAdd}
+                    className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving || customers.length === 0}
+                    className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-medium text-white shadow-md disabled:opacity-60"
+                  >
+                    {saving ? 'Saving…' : 'Continue'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-slate-100 px-4 py-3 sm:px-6">
+                  {saleInvoiceUrl ? (
+                    <a
+                      href={saleInvoiceUrl}
+                      download={saleInvoiceFilename || 'invoice.pdf'}
+                      className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2 text-xs font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+                    >
+                      Download invoice
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={handlePrintSaleInvoice}
+                    disabled={!saleInvoiceUrl}
+                    className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-md disabled:opacity-60"
+                  >
+                    Print invoice
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeAdd}
+                    className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Done
+                  </button>
+                </div>
+                {saleInvoiceUrl ? (
+                  <iframe
+                    ref={saleInvoiceFrameRef}
+                    title="Credit sale invoice preview"
+                    src={saleInvoiceUrl}
+                    className="min-h-[70vh] w-full flex-1 border-0 bg-slate-100"
+                  />
+                ) : (
+                  <p className="px-4 py-10 text-center text-sm text-slate-500 sm:px-6">
+                    Bill saved. The invoice preview could not be generated.
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -1081,11 +1393,16 @@ export default function BillsPage() {
                 form={form}
                 customers={customers}
                 brands={brands}
+                visibleBrands={visibleAddBrands}
                 onChange={handleFormChange}
                 lastPrices={selectedLastPrices}
+                lastUnloadBags={lastUnloadBags}
                 isEdit
                 onLoadLastPrices={handleLoadLastPrices}
                 loadingLastPrices={loadingLastPrices}
+                showAllItems={showAllSaleItems}
+                onToggleAllItems={() => setShowAllSaleItems((v) => !v)}
+                hiddenItemCount={hiddenSaleItemCount}
               />
               <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
