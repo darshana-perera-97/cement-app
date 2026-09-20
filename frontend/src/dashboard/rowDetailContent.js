@@ -921,6 +921,7 @@ function UnloadRequestDetailContent({ row }) {
         <SummaryField label="Status" value={status} valueClassName="capitalize" />
         <SummaryField label="Shop" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
         <SummaryField label="Driver" value={displayText(row.driverName)} />
+        <SummaryField label="Lorry" value={displayText(row.vehicleNumber)} />
         <SummaryField label="Submitted" value={formatDateTime(row.createdAt)} className="col-span-2 sm:col-span-1" />
         <SummaryField
           label="Total bags"
@@ -928,16 +929,40 @@ function UnloadRequestDetailContent({ row }) {
           className="col-span-2 bg-emerald-50 ring-emerald-100"
           valueClassName="tabular-nums font-semibold text-emerald-900"
         />
+        <SummaryField
+          label="Amount"
+          value={formatMoneyOrDash(row.totalAmount)}
+          className="col-span-2"
+          valueClassName="tabular-nums font-semibold text-slate-900"
+        />
       </SummaryGrid>
       {row.note ? <NoteBlock label="Driver note" value={row.note} /> : null}
       <BrandSections title="Bags by brand">
         {brands.map((b) => {
           const bags = Number(row[`${b.key}Bags`]) || 0;
+          const unit = Number(row[`${b.key}UnitPrice`]);
+          const line = Number(row[`${b.key}Line`]);
           const active = brandHasBags(row, b.key);
           return (
             <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No bags for this brand">
               <dl className="grid grid-cols-1 gap-px bg-slate-100">
                 <BrandFieldCell brand={b} lead label="Bags" value={bags} valueClassName="tabular-nums font-semibold text-slate-900" />
+                {active ? (
+                  <>
+                    <BrandFieldCell
+                      brand={b}
+                      label="Unit price"
+                      value={Number.isFinite(unit) && unit > 0 ? formatMoneyOrDash(unit) : '—'}
+                      valueClassName="tabular-nums"
+                    />
+                    <BrandFieldCell
+                      brand={b}
+                      label="Line total"
+                      value={Number.isFinite(line) && line > 0 ? formatMoneyOrDash(line) : '—'}
+                      valueClassName="tabular-nums"
+                    />
+                  </>
+                ) : null}
               </dl>
             </BrandSectionShell>
           );

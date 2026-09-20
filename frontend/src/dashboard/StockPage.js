@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { hasDashboardAccess } from '../auth';
+import { hasDashboardAccess, isAdmin } from '../auth';
 import { useBagProducts } from './BagProductsContext';
 import {
   LoadingSpinner,
@@ -26,6 +26,8 @@ export default function StockPage() {
   const { brands } = useBagProducts();
   const [rows, setRows] = useState([]);
   const [summaryBrands, setSummaryBrands] = useState(null);
+  const [damageTotal, setDamageTotal] = useState(0);
+  const [damageBags, setDamageBags] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dailyDays, setDailyDays] = useState([]);
@@ -49,8 +51,12 @@ export default function StockPage() {
       if (summaryRes.ok) {
         const sum = await summaryRes.json();
         setSummaryBrands(Array.isArray(sum.brands) ? sum.brands : null);
+        setDamageTotal(Math.max(0, Math.floor(Number(sum.damageTotal) || 0)));
+        setDamageBags(sum.damageBags && typeof sum.damageBags === 'object' ? sum.damageBags : {});
       } else {
         setSummaryBrands(null);
+        setDamageTotal(0);
+        setDamageBags({});
       }
     } catch (e) {
       setError(e.message || 'Could not load data');
@@ -128,14 +134,24 @@ export default function StockPage() {
         <p className="text-sm text-slate-500">
           Live bag counts by brand, updated from loads, bills, and promotions.
         </p>
-        {hasDashboardAccess('shop') ? (
-          <Link
-            to="/dashboard/shop"
-            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 transition hover:bg-indigo-100 sm:w-auto"
-          >
-            Shop →
-          </Link>
-        ) : null}
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          {isAdmin() && hasDashboardAccess('returns') ? (
+            <Link
+              to="/dashboard/returns?new=damage"
+              className="inline-flex w-full shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 ring-1 ring-amber-100 transition hover:bg-amber-100 sm:w-auto"
+            >
+              Damage invoice
+            </Link>
+          ) : null}
+          {hasDashboardAccess('shop') ? (
+            <Link
+              to="/dashboard/shop"
+              className="inline-flex w-full shrink-0 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 transition hover:bg-indigo-100 sm:w-auto"
+            >
+              Shop →
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       {error ? (
@@ -171,6 +187,32 @@ export default function StockPage() {
             </div>
           );
         })}
+        <div className="relative overflow-hidden rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/50 ring-1 ring-amber-200">
+          <div
+            className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 opacity-[0.12]"
+            aria-hidden
+          />
+          <div className="relative">
+            <div className="flex items-start justify-between gap-2">
+              <span className="inline-flex rounded-xl bg-amber-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-amber-800">
+                Damage items
+              </span>
+              {loading ? <LoadingSpinner size="sm" labelHidden /> : null}
+            </div>
+            <p className="mt-4 text-3xl font-bold tracking-tight text-slate-900 tabular-nums">
+              {loading ? '—' : damageTotal.toLocaleString()}
+            </p>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              Bags written off from sellable stock
+              {brands.some((b) => Number(damageBags[b.key]) > 0)
+                ? ` · ${brands
+                    .filter((b) => Number(damageBags[b.key]) > 0)
+                    .map((b) => `${b.label} ${Number(damageBags[b.key]).toLocaleString()}`)
+                    .join(', ')}`
+                : ''}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-2">

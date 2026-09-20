@@ -59,6 +59,16 @@ const {
   writePrinterSettings,
 } = require('./models/printerSettingsStore');
 const {
+  readStockUpdateSettings,
+  writeStockUpdateSettings,
+  isStockUpdateEnabled,
+} = require('./models/stockUpdateSettingsStore');
+const {
+  readCollectorUnloadPriceSettings,
+  writeCollectorUnloadPriceSettings,
+  isCollectorUnloadPriceEnabled,
+} = require('./models/collectorUnloadPriceSettingsStore');
+const {
   isSmtpConfigured,
   sendDataBackupEmail,
   startBackupScheduler,
@@ -88,6 +98,16 @@ const {
   normalizeLorry,
   findDuplicate: findDuplicateLorry,
 } = require('./models/lorriesStore');
+const { readMapShops, writeMapShops, normalizeMapShop, coordKey } = require('./models/mapShopsStore');
+const {
+  MAX_UPDATE_DISTANCE_M,
+  distanceMeters,
+  readShopStocks,
+  writeShopStocks,
+  findShopStock,
+  findLastUnloadRecord,
+  toNonNegInt,
+} = require('./models/shopStockStore');
 const { readSentEmails } = require('./models/sentEmailsStore');
 const { readSentWhatsapp } = require('./models/sentWhatsappStore');
 const { notifyBillEmail, notifyPaymentEmail, notifyPromotionEmail, notifyUnloadEmail } = require('./models/emailService');
@@ -105,8 +125,14 @@ const {
   notifyChequeReturnWhatsApp,
 } = require('./models/whatsappService');
 
-function enrichCustomerBalance(customer, bills, payments, overdueDates = {}, promotions = []) {
-  const { amountToPay, overpaymentAmount } = computeCustomerBalance(customer, bills, payments, promotions);
+function enrichCustomerBalance(customer, bills, payments, overdueDates = {}, promotions = [], returnsRows = []) {
+  const { amountToPay, overpaymentAmount } = computeCustomerBalance(
+    customer,
+    bills,
+    payments,
+    promotions,
+    returnsRows,
+  );
   return {
     ...customer,
     remainingAmount: amountToPay,
@@ -201,6 +227,21 @@ async function validateCollectorUserId(collectorUserId) {
 }
 const { readBills, writeBills, lineTotal, sumAllBillBagsByBrand } = require('./models/billsStore');
 const {
+  readReturns,
+  writeReturns,
+  RETURN_KINDS,
+  PRICE_DIRECTIONS,
+  SETTLEMENTS,
+  returnKind,
+  returnAmount,
+  priceDirection,
+  settlementOf,
+  sumReturnedBagsForBill,
+  suggestNextReturnInvoiceNumber,
+  suggestNextDamageInvoiceNumber,
+  invoiceNumberTaken,
+} = require('./models/returnsStore');
+const {
   getPaymentCheques,
   sumChequeAmounts,
   parseChequesFromBody,
@@ -233,6 +274,12 @@ const {
   isPaymentBillNumberTaken,
   allocatePaymentReceiptNumber,
 } = require('./models/paymentsStore');
+const {
+  normalizeYmd: normalizeCollectionCloseYmd,
+  getCollectionDayClose,
+  isCollectionClosedForCollector,
+  closeCollectionDay,
+} = require('./models/collectionDayCloseStore');
 const { inferStockIdForBillBags } = require('./models/billStockId');
 const {
   normalizeMonthlyTargetBags,
@@ -308,6 +355,14 @@ function customerAssignedToCollector(customer, collectorUserId) {
   return String(customer.collectorUserId ?? '').trim() === String(collectorUserId ?? '').trim();
 }
 
+async function collectorCannotAddPaymentError(req, date) {
+  const auth = getAuthFromRequest(req);
+  const staffUser = await resolveStaffUser(auth);
+  if (!isCollectorStaff(staffUser)) return null;
+  if (!(await isCollectionClosedForCollector(staffUser.id, date))) return null;
+  return 'Collection for this day is over. You cannot add more payments.';
+}
+
 const {
   readPromotions,
   writePromotions,
@@ -335,6 +390,7 @@ const {
   brandLabelsMap,
   bagsField,
   formatProductLabel,
+  activeBagProductsOnRecord,
 } = require('./models/bagProducts');
 const {
   readPurchaseOrders,
@@ -392,10 +448,16 @@ app.get('/api/config', async (req, res) => {
   try {
     const shopData = await readShopData();
     const shopName = String(shopData.shopName || '').trim() || SHOP_NAME;
-    res.json({ shopName });
+    const stockUpdate = await readStockUpdateSettings();
+    const collectorUnloadPrice = await readCollectorUnloadPriceSettings();
+    res.json({
+      shopName,
+      stockUpdateEnabled: Boolean(stockUpdate.enabled),
+      collectorUnloadPriceEnabled: Boolean(collectorUnloadPrice.enabled),
+    });
   } catch (e) {
     console.error(e);
-    res.json({ shopName: SHOP_NAME });
+    res.json({ shopName: SHOP_NAME, stockUpdateEnabled: false, collectorUnloadPriceEnabled: false });
   }
 });
 
@@ -479,6 +541,60 @@ app.put('/api/printer-settings', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save printer settings' });
+  }
+});
+
+app.get('/api/stock-update-settings', async (req, res) => {
+  try {
+    const settings = await readStockUpdateSettings();
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load stock update settings' });
+  }
+});
+
+app.put('/api/stock-update-settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to change stock update settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can change stock update settings' });
+  }
+  try {
+    const settings = await writeStockUpdateSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save stock update settings' });
+  }
+});
+
+app.get('/api/collector-unload-price-settings', async (req, res) => {
+  try {
+    const settings = await readCollectorUnloadPriceSettings();
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load collector unload price settings' });
+  }
+});
+
+app.put('/api/collector-unload-price-settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to change collector unload price settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can change collector unload price settings' });
+  }
+  try {
+    const settings = await writeCollectorUnloadPriceSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save collector unload price settings' });
   }
 });
 
@@ -746,6 +862,245 @@ app.patch('/api/lorries/:id', async (req, res) => {
   }
 });
 
+app.get('/api/map-shops', async (req, res) => {
+  try {
+    const rows = await readMapShops();
+    const sorted = [...rows].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), undefined, {
+        sensitivity: 'base',
+      }),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read map shops' });
+  }
+});
+
+app.put('/api/map-shops', async (req, res) => {
+  try {
+    const auth = await requireManagerOrAdmin(req, res);
+    if (!auth) return;
+    const body = req.body || {};
+    const updatedBy = String(body.updatedBy ?? auth.username ?? '').trim();
+    if (!updatedBy) {
+      return res.status(400).json({ error: 'updatedBy (username) is required' });
+    }
+    const raw = Array.isArray(body.shops) ? body.shops : [];
+    const now = new Date().toISOString();
+    const seenIds = new Set();
+    const seenCustomers = new Set();
+    const seenCoords = new Set();
+    const shops = [];
+    for (const row of raw) {
+      const customerId = String(row?.customerId ?? '').trim();
+      const normalized = normalizeMapShop({
+        ...row,
+        id: String(row?.id ?? '').trim() || customerId || `shop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        customerId,
+        updatedAt: now,
+        createdAt: String(row?.createdAt ?? '').trim() || now,
+      });
+      if (!normalized) continue;
+      if (seenIds.has(normalized.id)) {
+        return res.status(400).json({ error: 'Duplicate shop on the map' });
+      }
+      if (normalized.customerId) {
+        if (seenCustomers.has(normalized.customerId)) {
+          return res.status(400).json({ error: 'This customer already has a map location' });
+        }
+        seenCustomers.add(normalized.customerId);
+      }
+      const key = coordKey(normalized.lat, normalized.lng);
+      if (seenCoords.has(key)) {
+        return res.status(400).json({ error: 'A shop is already pinned at this location' });
+      }
+      seenIds.add(normalized.id);
+      seenCoords.add(key);
+      shops.push(normalized);
+    }
+    shops.sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }),
+    );
+    await writeMapShops(shops);
+    res.json(shops);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save map shops' });
+  }
+});
+
+app.get('/api/shop-stocks', async (req, res) => {
+  const auth = await requireMapStockViewer(req, res);
+  if (!auth) return;
+  try {
+    const [shops, stocks, unloads, bills, products, customers] = await Promise.all([
+      readMapShops(),
+      readShopStocks(),
+      readUnloads(),
+      readBills(),
+      getBagProducts(),
+      readCustomers(),
+    ]);
+    const customerById = new Map(customers.map((c) => [c.id, c]));
+    let visibleShops = shops;
+    if (auth.staffRole === 'Collector') {
+      visibleShops = shops.filter((shop) => {
+        const customer = customerById.get(String(shop.customerId || shop.id || '').trim());
+        return customer && customerAssignedToCollector(customer, auth.staffUserId);
+      });
+    }
+    const visibleIds = new Set(visibleShops.map((s) => s.id));
+    const rows = [];
+    for (const shop of visibleShops) {
+      const customer =
+        customerById.get(String(shop.customerId || shop.id || '').trim()) || {
+          id: shop.customerId || shop.id,
+          name: shop.name,
+        };
+      const last = findLastUnloadRecord(unloads, bills, customer);
+      const items = last ? lastUnloadItems(last.row, products) : [];
+      const saved = findShopStock(stocks, shop.id);
+      rows.push({
+        shopId: shop.id,
+        customerId: shop.customerId || '',
+        name: shop.name,
+        items: shopStockPublicRow(saved, products, items).items,
+        updatedAt: saved?.updatedAt || '',
+      });
+    }
+    res.json({
+      stocks: rows,
+      allowedShopIds: auth.staffRole === 'Collector' ? [...visibleIds] : null,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load shop stocks' });
+  }
+});
+
+app.get('/api/shop-stocks/:shopId', async (req, res) => {
+  const auth = await requireMapStockViewer(req, res);
+  if (!auth) return;
+  try {
+    const shopId = String(req.params.shopId ?? '').trim();
+    const shops = await readMapShops();
+    const shop = shops.find((s) => s.id === shopId);
+    if (!shop) {
+      return res.status(404).json({ error: 'Shop not found on the map' });
+    }
+    const customer = await resolveShopCustomer(shop);
+    if (auth.staffRole === 'Collector') {
+      if (!customer || !customerAssignedToCollector(customer, auth.staffUserId)) {
+        return res.status(403).json({ error: 'This shop is not assigned to you' });
+      }
+    }
+    const [unloads, bills, products, stocks] = await Promise.all([
+      readUnloads(),
+      readBills(),
+      getBagProducts(),
+      readShopStocks(),
+    ]);
+    const last = customer ? findLastUnloadRecord(unloads, bills, customer) : null;
+    const items = last ? lastUnloadItems(last.row, products) : [];
+    const saved = findShopStock(stocks, shop.id);
+    const publicRow = shopStockPublicRow(saved, products, items);
+    res.json({
+      shopId: shop.id,
+      customerId: shop.customerId || customer?.id || '',
+      name: shop.name,
+      location: shop.location || '',
+      lat: shop.lat,
+      lng: shop.lng,
+      lastUnloadId: last?.row?.id || '',
+      lastUnloadDate: last?.row?.date || '',
+      lastUnloadKind: last?.kind || '',
+      items: publicRow.items,
+      updatedAt: publicRow.updatedAt,
+      updatedBy: publicRow.updatedBy,
+      maxDistanceM: MAX_UPDATE_DISTANCE_M,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load shop stock' });
+  }
+});
+
+app.put('/api/shop-stocks/:shopId', async (req, res) => {
+  const auth = await requireShopStockUpdater(req, res);
+  if (!auth) return;
+  try {
+    const shopId = String(req.params.shopId ?? '').trim();
+    const shops = await readMapShops();
+    const shop = shops.find((s) => s.id === shopId);
+    if (!shop) {
+      return res.status(404).json({ error: 'Shop not found on the map' });
+    }
+    const customer = await resolveShopCustomer(shop);
+    if (auth.staffRole === 'Collector') {
+      if (!customer || !customerAssignedToCollector(customer, auth.staffUserId)) {
+        return res.status(403).json({ error: 'This shop is not assigned to you' });
+      }
+    }
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: 'Current location is required to update shop stock' });
+    }
+    const meters = distanceMeters(lat, lng, shop.lat, shop.lng);
+    if (meters > MAX_UPDATE_DISTANCE_M) {
+      return res.status(400).json({
+        error: `You must be within ${MAX_UPDATE_DISTANCE_M} m of the shop to update stock.`,
+        distanceM: Math.round(meters),
+        maxDistanceM: MAX_UPDATE_DISTANCE_M,
+      });
+    }
+    const [unloads, bills, products] = await Promise.all([
+      readUnloads(),
+      readBills(),
+      getBagProducts(),
+    ]);
+    const last = customer ? findLastUnloadRecord(unloads, bills, customer) : null;
+    const lastItems = last ? lastUnloadItems(last.row, products) : [];
+    if (lastItems.length === 0) {
+      return res.status(400).json({ error: 'This shop has no last unloaded items to update' });
+    }
+    const bodyStock = req.body?.stock && typeof req.body.stock === 'object' ? req.body.stock : {};
+    const stock = {};
+    for (const item of lastItems) {
+      stock[item.key] = toNonNegInt(bodyStock[item.key]);
+    }
+    const records = await readShopStocks();
+    const next = {
+      shopId: shop.id,
+      customerId: shop.customerId || customer?.id || '',
+      stock,
+      lastUnloadId: last?.row?.id || '',
+      lastUnloadDate: last?.row?.date || '',
+      updatedAt: new Date().toISOString(),
+      updatedBy: auth.username,
+      lat,
+      lng,
+    };
+    const idx = records.findIndex((r) => String(r.shopId ?? r.id ?? '').trim() === shop.id);
+    if (idx >= 0) records[idx] = next;
+    else records.push(next);
+    await writeShopStocks(records);
+    res.json({
+      shopId: shop.id,
+      customerId: next.customerId,
+      name: shop.name,
+      items: shopStockPublicRow(next, products, lastItems).items,
+      updatedAt: next.updatedAt,
+      updatedBy: next.updatedBy,
+      distanceM: Math.round(meters),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save shop stock' });
+  }
+});
+
 app.get('/api/distributors', async (req, res) => {
   try {
     const rows = await readDistributors();
@@ -875,17 +1230,18 @@ app.get('/api/bag-products', async (req, res) => {
 /** Aggregates for dashboard "Your card": receivables, stock spend, payments in */
 app.get('/api/cash-summary', async (req, res) => {
   try {
-    const [customers, bills, payments, stocks, overdueDates, promotions] = await Promise.all([
+    const [customers, bills, payments, stocks, overdueDates, promotions, returnsRows] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readStocks(),
       readOverdueDates(),
       readPromotions(),
+      readReturns(),
     ]);
     let pendingFromCustomers = 0;
     for (const c of customers) {
-      pendingFromCustomers += computeRemainingAmount(c, bills, payments, promotions);
+      pendingFromCustomers += computeRemainingAmount(c, bills, payments, promotions, returnsRows);
     }
     let cashToBuyStock = 0;
     for (const s of stocks) {
@@ -896,7 +1252,7 @@ app.get('/api/cash-summary', async (req, res) => {
       cashReceivedFromCustomers += paymentCreditToCustomer(p);
     }
     const round2 = (n) => Math.round(Number(n) * 100) / 100;
-    const overdueRows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions);
+    const overdueRows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions, returnsRows);
     const maxDaysOverdue = overdueRows.length
       ? Math.max(...overdueRows.map((r) => r.daysOverdue))
       : 0;
@@ -1403,11 +1759,15 @@ async function syncBillRuleCashback(bill, { enteredBy, products, promotions }) {
 async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameKeys) {
   const keys = new Set(nameKeys.map((n) => normalizeCustomerName(n)).filter(Boolean));
   if (keys.size === 0) return;
-  const [customers, promotions] = await Promise.all([readCustomers(), readPromotions()]);
+  const [customers, promotions, returnsRows] = await Promise.all([
+    readCustomers(),
+    readPromotions(),
+    readReturns(),
+  ]);
   let dirty = false;
   for (const c of customers) {
     if (keys.has(normalizeCustomerName(c.name))) {
-      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions);
+      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions, returnsRows);
       dirty = true;
     }
   }
@@ -1417,11 +1777,15 @@ async function refreshCustomerBalancesForBillNames(bills, paymentsList, ...nameK
 async function refreshCustomerBalancesForCustomerIds(bills, paymentsList, ...customerIds) {
   const ids = new Set(customerIds.map((id) => String(id ?? '').trim()).filter(Boolean));
   if (ids.size === 0) return;
-  const [customers, promotions] = await Promise.all([readCustomers(), readPromotions()]);
+  const [customers, promotions, returnsRows] = await Promise.all([
+    readCustomers(),
+    readPromotions(),
+    readReturns(),
+  ]);
   let dirty = false;
   for (const c of customers) {
     if (ids.has(c.id)) {
-      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions);
+      c.remainingAmount = computeRemainingAmount(c, bills, paymentsList, promotions, returnsRows);
       dirty = true;
     }
   }
@@ -1473,7 +1837,7 @@ function billDetailsLine(bill) {
  * @param {{ overdueOnly?: boolean }} [options]
  */
 function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, options = {}, promotions = []) {
-  const { overdueOnly = false } = options;
+  const { overdueOnly = false, returnsRows = [] } = options;
   const todayYmd = ymdTodayLocal();
   const rows = [];
 
@@ -1488,7 +1852,13 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 
   for (const cust of customers) {
     const settlementDays = getOverdueDaysForCustomer(overdueDates, cust.id);
-    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(cust, bills, payments, promotions);
+    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(
+      cust,
+      bills,
+      payments,
+      promotions,
+      returnsRows,
+    );
 
     const pastOwed = toNonNegMoney(cust.pastBill);
     const openingRemaining = Math.round((pastOwed - pastPaid) * 100) / 100;
@@ -1512,7 +1882,7 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
     }
 
     for (const bill of custBills) {
-      const total = effectiveBillTotal(bill, promotions);
+      const total = effectiveBillTotal(bill, promotions, returnsRows);
       const id = String(bill.id ?? '').trim();
       const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
       const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -1590,8 +1960,15 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 }
 
 /** Overdue credit bills (same rules as `/api/overdue-bills`). */
-function collectOverdueBillRows(customers, bills, payments, overdueDates = {}, promotions = []) {
-  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: true }, promotions).sort(
+function collectOverdueBillRows(customers, bills, payments, overdueDates = {}, promotions = [], returnsRows = []) {
+  return collectUnpaidBillRows(
+    customers,
+    bills,
+    payments,
+    overdueDates,
+    { overdueOnly: true, returnsRows },
+    promotions,
+  ).sort(
     (a, b) => {
       if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
       return b.outstandingAmount - a.outstandingAmount;
@@ -1600,8 +1977,15 @@ function collectOverdueBillRows(customers, bills, payments, overdueDates = {}, p
 }
 
 /** All unpaid credit bills (pending), including those not yet overdue. */
-function collectPendingBillRows(customers, bills, payments, overdueDates = {}, promotions = []) {
-  return collectUnpaidBillRows(customers, bills, payments, overdueDates, { overdueOnly: false }, promotions);
+function collectPendingBillRows(customers, bills, payments, overdueDates = {}, promotions = [], returnsRows = []) {
+  return collectUnpaidBillRows(
+    customers,
+    bills,
+    payments,
+    overdueDates,
+    { overdueOnly: false, returnsRows },
+    promotions,
+  );
 }
 
 /** Longest days past due → UI priority tier (green → red). */
@@ -1678,6 +2062,8 @@ app.get('/api/cash-book-entries', async (req, res) => {
     const to = String(req.query.to ?? '').trim().slice(0, 10);
     const category = String(req.query.category ?? '').trim();
     const excludeCategory = String(req.query.excludeCategory ?? '').trim();
+    const staffUserId = String(req.query.staffUserId ?? '').trim();
+    const lorryId = String(req.query.lorryId ?? '').trim();
 
     let rows = await readCashBookEntries();
     if (category && CASH_BOOK_CATEGORIES.includes(category)) {
@@ -1685,6 +2071,12 @@ app.get('/api/cash-book-entries', async (req, res) => {
     }
     if (excludeCategory && CASH_BOOK_CATEGORIES.includes(excludeCategory)) {
       rows = rows.filter((r) => r.category !== excludeCategory);
+    }
+    if (staffUserId) {
+      rows = rows.filter((r) => String(r.staffUserId ?? '').trim() === staffUserId);
+    }
+    if (lorryId) {
+      rows = rows.filter((r) => String(r.lorryId ?? '').trim() === lorryId);
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
       rows = rows.filter((r) => r.date >= from);
@@ -1896,14 +2288,15 @@ app.get('/api/recent-transfers', async (req, res) => {
 app.get('/api/overdue-bills', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
-    const [customers, bills, payments, overdueDates, promotions] = await Promise.all([
+    const [customers, bills, payments, overdueDates, promotions, returnsRows] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readOverdueDates(),
       readPromotions(),
+      readReturns(),
     ]);
-    let rows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions);
+    let rows = collectOverdueBillRows(customers, bills, payments, overdueDates, promotions, returnsRows);
     rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
     res.json(rows);
   } catch (e) {
@@ -1918,14 +2311,15 @@ app.get('/api/overdue-bills', async (req, res) => {
  */
 app.get('/api/pending-bills', async (req, res) => {
   try {
-    const [customers, bills, payments, overdueDates, promotions] = await Promise.all([
+    const [customers, bills, payments, overdueDates, promotions, returnsRows] = await Promise.all([
       readCustomers(),
       readBills(),
       readPayments(),
       readOverdueDates(),
       readPromotions(),
+      readReturns(),
     ]);
-    res.json(collectPendingBillRows(customers, bills, payments, overdueDates, promotions));
+    res.json(collectPendingBillRows(customers, bills, payments, overdueDates, promotions, returnsRows));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load pending bills' });
@@ -1948,6 +2342,8 @@ app.post('/api/login', async (req, res) => {
         role: 'admin',
         token: signToken(expectedUser, 'admin'),
         username: expectedUser,
+        stockUpdateEnabled: await isStockUpdateEnabled(),
+        collectorUnloadPriceEnabled: await isCollectorUnloadPriceEnabled(),
       });
     }
     if (await verifyStoredUser(username, password)) {
@@ -1956,12 +2352,21 @@ app.post('/api/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
       const userRole = String(u.role || '').trim();
+      const stockUpdateEnabled = await isStockUpdateEnabled();
+      const collectorUnloadPriceEnabled = await isCollectorUnloadPriceEnabled();
+      if (userRole === 'DSR' && !stockUpdateEnabled) {
+        return res.status(403).json({
+          error: 'DSR sign-in is disabled. Enable stock update in Settings.',
+        });
+      }
       if (userRole === 'Admin') {
         return res.json({
           ok: true,
           role: 'admin',
           token: signToken(u.username, 'admin'),
           username: u.username,
+          stockUpdateEnabled,
+          collectorUnloadPriceEnabled,
         });
       }
       return res.json({
@@ -1972,6 +2377,8 @@ app.post('/api/login', async (req, res) => {
         token: signToken(u.username, 'staff'),
         username: u.username,
         name: String(u.name || '').trim() || u.username,
+        stockUpdateEnabled,
+        collectorUnloadPriceEnabled,
       });
     }
     return res.status(401).json({ error: 'Invalid username or password' });
@@ -1987,6 +2394,8 @@ app.get('/api/me', async (req, res) => {
     return res.status(401).json({ error: 'Not signed in' });
   }
   try {
+    const stockUpdateEnabled = await isStockUpdateEnabled();
+    const collectorUnloadPriceEnabled = await isCollectorUnloadPriceEnabled();
     if (auth.role === 'admin') {
       const adminUser = await findUserByUsername(auth.username);
       if (adminUser) {
@@ -1997,6 +2406,8 @@ app.get('/api/me', async (req, res) => {
           staffRole: 'Administrator',
           contact: String(adminUser.contact || '').trim(),
           nic: String(adminUser.nic || '').trim(),
+          stockUpdateEnabled,
+          collectorUnloadPriceEnabled,
         });
       }
       return res.json({
@@ -2004,6 +2415,8 @@ app.get('/api/me', async (req, res) => {
         role: 'admin',
         name: auth.username,
         staffRole: 'Administrator',
+        stockUpdateEnabled,
+        collectorUnloadPriceEnabled,
       });
     }
     const u = await findUserByUsername(auth.username);
@@ -2011,6 +2424,9 @@ app.get('/api/me', async (req, res) => {
       return res.status(401).json({ error: 'User not found' });
     }
     const staffRole = String(u.role || '').trim();
+    if (staffRole === 'DSR' && !stockUpdateEnabled) {
+      return res.status(403).json({ error: 'DSR sign-in is disabled. Enable stock update in Settings.' });
+    }
     const payload = {
       username: u.username,
       role: 'staff',
@@ -2018,6 +2434,8 @@ app.get('/api/me', async (req, res) => {
       name: String(u.name || '').trim() || u.username,
       contact: String(u.contact || '').trim(),
       nic: String(u.nic || '').trim(),
+      stockUpdateEnabled,
+      collectorUnloadPriceEnabled,
     };
     if (staffRole === 'Manager') {
       payload.managerAccess = getEffectiveManagerAccess(u.access);
@@ -2084,6 +2502,24 @@ async function requireDriverOrAdmin(req, res) {
   return { ...auth, name, driverName: name };
 }
 
+async function requireCollectorUnloadPriceAccess(req, res) {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: 'Sign in to continue' });
+    return null;
+  }
+  if (!(await isCollectorUnloadPriceEnabled())) {
+    res.status(403).json({ error: 'Collector unload price updates are disabled' });
+    return null;
+  }
+  const u = await findUserByUsername(auth.username);
+  if (!u || String(u.role || '').trim() !== 'Collector') {
+    res.status(403).json({ error: 'Only collectors can update unload prices' });
+    return null;
+  }
+  return { ...auth, staffUser: u };
+}
+
 async function requireManagerOrAdmin(req, res) {
   const auth = getAuthFromRequest(req);
   if (!auth) {
@@ -2099,6 +2535,77 @@ async function requireManagerOrAdmin(req, res) {
     return null;
   }
   return auth;
+}
+
+async function requireMapStockViewer(req, res) {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: 'Sign in to view shop stock' });
+    return null;
+  }
+  if (auth.role === 'admin') {
+    return { ...auth, staffRole: 'Admin' };
+  }
+  const u = await findUserByUsername(auth.username);
+  const role = String(u?.role || '').trim();
+  if (role === 'Collector' || role === 'DSR') {
+    if (!(await isStockUpdateEnabled())) {
+      res.status(403).json({ error: 'Stock update is disabled' });
+      return null;
+    }
+    return {
+      ...auth,
+      staffRole: role,
+      staffUserId: u.id,
+      name: String(u.name || '').trim() || u.username,
+    };
+  }
+  res.status(403).json({ error: 'Only admin, collector, or DSR can view shop stock' });
+  return null;
+}
+
+async function requireShopStockUpdater(req, res) {
+  const viewer = await requireMapStockViewer(req, res);
+  if (!viewer) return null;
+  if (viewer.staffRole === 'Collector' || viewer.staffRole === 'DSR') {
+    return viewer;
+  }
+  res.status(403).json({ error: 'Only collector or DSR can update shop stock' });
+  return null;
+}
+
+function lastUnloadItems(record, products) {
+  return activeBagProductsOnRecord(record || {}, products).map(({ product, bags }) => ({
+    key: product.key,
+    label: formatProductLabel(product) || product.label,
+    code: product.code || '',
+    lastUnloadBags: bags,
+    bagsField: product.bagsField,
+  }));
+}
+
+function shopStockPublicRow(row, products, lastItems) {
+  const items = (lastItems || []).map((item) => ({
+    ...item,
+    bags: row?.stock?.[item.key] != null ? toNonNegInt(row.stock[item.key]) : item.lastUnloadBags,
+  }));
+  return {
+    shopId: row?.shopId || '',
+    customerId: row?.customerId || '',
+    items,
+    updatedAt: row?.updatedAt || '',
+    updatedBy: row?.updatedBy || '',
+  };
+}
+
+async function resolveShopCustomer(shop) {
+  const customers = await readCustomers();
+  const customerId = String(shop.customerId ?? shop.id ?? '').trim();
+  return (
+    customers.find((c) => c.id === customerId) ||
+    customers.find((c) => normalizeCustomerName(c.name) === normalizeCustomerName(shop.name)) ||
+    null
+  );
 }
 
 app.get('/api/unloads', async (req, res) => {
@@ -2211,6 +2718,62 @@ function attachLastPricesToUnload(row, bills, products) {
   return next;
 }
 
+function applyUnitPricesToRecord(record, body, products) {
+  const next = { ...record };
+  let totalAmount = 0;
+  let anyPriced = false;
+  for (const p of products) {
+    const bags = toNonNegNumber(next[p.bagsField]);
+    let unit = toNonNegMoney(next[p.unitPriceField]);
+    if (bags > 0) {
+      if (body[p.unitPriceField] === undefined || String(body[p.unitPriceField]).trim() === '') {
+        return { error: `Enter a unit price for ${formatProductLabel(p) || p.label}` };
+      }
+      unit = toNonNegMoney(body[p.unitPriceField]);
+      if (!(unit > 0)) {
+        return { error: `Enter a unit price for ${formatProductLabel(p) || p.label}` };
+      }
+      anyPriced = true;
+    }
+    next[p.unitPriceField] = bags > 0 ? unit : toNonNegMoney(next[p.unitPriceField]);
+    const line = lineTotal(bags, next[p.unitPriceField]);
+    next[`${p.key}Line`] = line;
+    totalAmount += line;
+  }
+  if (!anyPriced) return { error: 'This unload has no bags' };
+  next.totalAmount = Math.round(totalAmount * 100) / 100;
+  return { row: next };
+}
+
+function enrichUnloadForCollector(row, bills, stocks, products) {
+  const status = normalizeStatus(row.status);
+  let next = { ...row };
+  if (status === 'approved') {
+    const bill = bills.find((b) => String(b.id) === String(row.billId));
+    if (bill) {
+      for (const p of products) {
+        next[p.unitPriceField] = bill[p.unitPriceField];
+        next[`${p.key}Line`] = bill[`${p.key}Line`];
+      }
+      next.totalAmount = bill.totalAmount;
+      if (bill.invoiceNumber) next.invoiceNumber = bill.invoiceNumber;
+      if (bill.stockId) next.stockId = bill.stockId;
+    }
+  }
+  next = attachLastPricesToUnload(next, bills, products);
+  let stockId = String(next.stockId || '').trim();
+  if (!stockId) {
+    const keys = products.map((p) => p.key);
+    stockId = inferStockIdForBillBags(stocks, bills, next, keys);
+  }
+  if (stockId) {
+    next.stockId = stockId;
+    const load = stocks.find((s) => String(s.stockId || '').trim() === stockId);
+    if (load) next.vehicleNumber = String(load.vehicleNumber || '').trim();
+  }
+  return next;
+}
+
 function suggestNextInvoiceForUnload(bills, unloads) {
   const pending = (Array.isArray(unloads) ? unloads : [])
     .filter((r) => normalizeStatus(r.status) === 'pending')
@@ -2219,9 +2782,18 @@ function suggestNextInvoiceForUnload(bills, unloads) {
 }
 
 app.get('/api/bills/last-unit-prices', async (req, res) => {
-  const auth = await requireManagerOrAdmin(req, res);
-  if (!auth) return;
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again to continue' });
+  }
   try {
+    const staffUser = await resolveStaffUser(auth);
+    const isMgr = auth.role === 'admin' || (staffUser && String(staffUser.role || '').trim() === 'Manager');
+    const isCollectorPrice =
+      staffUser && isCollectorStaff(staffUser) && (await isCollectorUnloadPriceEnabled());
+    if (!isMgr && !isCollectorPrice) {
+      return res.status(403).json({ error: 'Only managers, admin, or collectors with unload price access can load last prices' });
+    }
     const customerId = String(req.query.customerId ?? '').trim();
     if (!customerId) {
       return res.status(400).json({ error: 'customerId is required' });
@@ -2230,6 +2802,9 @@ app.get('/api/bills/last-unit-prices', async (req, res) => {
     const cust = customers.find((c) => c.id === customerId);
     if (!cust) {
       return res.status(404).json({ error: 'Customer not found' });
+    }
+    if (isCollectorPrice && !customerAssignedToCollector(cust, staffUser.id)) {
+      return res.status(403).json({ error: 'This shop is not assigned to you' });
     }
     const bills = await readBills();
     const products = await getBagProducts();
@@ -2241,6 +2816,102 @@ app.get('/api/bills/last-unit-prices', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load last unit prices' });
+  }
+});
+
+app.get('/api/collector/unloads', async (req, res) => {
+  const auth = await requireCollectorUnloadPriceAccess(req, res);
+  if (!auth) return;
+  try {
+    const [unloads, bills, stocks, products] = await Promise.all([
+      readUnloads(),
+      readBills(),
+      readStocks(),
+      getBagProducts(),
+    ]);
+    let rows = unloads.filter((r) => normalizeStatus(r.status) !== 'rejected');
+    rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
+    const sorted = [...rows].sort((a, b) => {
+      const da = String(a.date || '');
+      const db = String(b.date || '');
+      if (da !== db) return db.localeCompare(da);
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    res.json(sorted.map((row) => enrichUnloadForCollector(row, bills, stocks, products)));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read unloads' });
+  }
+});
+
+app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
+  const auth = await requireCollectorUnloadPriceAccess(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const updatedBy = String(body.updatedBy ?? auth.username ?? '').trim();
+    if (!id) return res.status(400).json({ error: 'Unload id is required' });
+    if (!updatedBy) return res.status(400).json({ error: 'updatedBy is required' });
+
+    const unloads = await readUnloads();
+    const idx = unloads.findIndex((r) => r.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Unload not found' });
+    const existing = unloads[idx];
+    const status = normalizeStatus(existing.status);
+    if (status === 'rejected') {
+      return res.status(400).json({ error: 'Rejected unloads cannot be priced' });
+    }
+
+    const customers = await readCustomers();
+    const cust =
+      customers.find((c) => c.id === existing.customerId) ||
+      customers.find((c) => normalizeCustomerName(c.name) === normalizeCustomerName(existing.customerName));
+    if (!cust || !customerAssignedToCollector(cust, auth.staffUser.id)) {
+      return res.status(403).json({ error: 'This shop is not assigned to you' });
+    }
+
+    const products = await getBagProducts();
+    const priced = applyUnitPricesToRecord(existing, body, products);
+    if (priced.error) return res.status(400).json({ error: priced.error });
+
+    const now = new Date().toISOString();
+    unloads[idx] = {
+      ...priced.row,
+      priceUpdatedBy: updatedBy,
+      priceUpdatedAt: now,
+    };
+
+    let billRow = null;
+    if (status === 'approved' && existing.billId) {
+      const bills = await readBills();
+      const billIdx = bills.findIndex((b) => b.id === existing.billId);
+      if (billIdx < 0) {
+        return res.status(400).json({ error: 'Linked credit bill was not found' });
+      }
+      const billed = applyUnitPricesToRecord(bills[billIdx], body, products);
+      if (billed.error) return res.status(400).json({ error: billed.error });
+      billRow = {
+        ...billed.row,
+        updatedBy,
+        updatedAt: now,
+      };
+      bills[billIdx] = billRow;
+      await writeBills(bills);
+      await syncBillRuleCashback(billRow, { enteredBy: updatedBy, products });
+      const paymentsList = await readPayments();
+      await refreshCustomerBalancesForBillNames(bills, paymentsList, billRow.customerName);
+    }
+
+    await writeUnloads(unloads);
+    const [stocks, billsForView] = await Promise.all([readStocks(), readBills()]);
+    res.json({
+      unload: enrichUnloadForCollector(unloads[idx], billsForView, stocks, products),
+      bill: billRow,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update unload prices' });
   }
 });
 
@@ -2655,6 +3326,9 @@ app.post('/api/users', async (req, res) => {
   if (!admin) return;
   try {
     const body = req.body || {};
+    if (String(body.role || '').trim().toLowerCase() === 'dsr' && !(await isStockUpdateEnabled())) {
+      return res.status(400).json({ error: 'Enable stock update in Settings to create DSR accounts.' });
+    }
     const result = await createUser({
       name: body.name,
       contact: body.contact,
@@ -2681,6 +3355,13 @@ app.patch('/api/users/:id', async (req, res) => {
   if (!admin) return;
   try {
     const body = req.body || {};
+    if (String(body.role || '').trim().toLowerCase() === 'dsr' && !(await isStockUpdateEnabled())) {
+      const users = await readUsers();
+      const current = users.find((u) => u.id === req.params.id);
+      if (!current || String(current.role || '').trim() !== 'DSR') {
+        return res.status(400).json({ error: 'Enable stock update in Settings to assign the DSR role.' });
+      }
+    }
     const result = await updateUser(req.params.id, {
       name: body.name,
       contact: body.contact,
@@ -2742,15 +3423,19 @@ app.get('/api/customers', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
     const customers = await readCustomers();
-    const [bills, payments, overdueDates, users, promotions] = await Promise.all([
+    const [bills, payments, overdueDates, users, promotions, returnsRows] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
       readUsers(),
       readPromotions(),
+      readReturns(),
     ]);
     let enriched = customers.map((c) =>
-      enrichCustomerWithCollector(enrichCustomerBalance(c, bills, payments, overdueDates, promotions), users),
+      enrichCustomerWithCollector(
+        enrichCustomerBalance(c, bills, payments, overdueDates, promotions, returnsRows),
+        users,
+      ),
     );
     const staffUser = await resolveStaffUser(auth);
     if (isCollectorStaff(staffUser)) {
@@ -2783,12 +3468,13 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
     }
     const nameKey = normalizeCustomerName(cust.name);
 
-    const [bills, payments, overdueDates, users, promotions] = await Promise.all([
+    const [bills, payments, overdueDates, users, promotions, returnsRows] = await Promise.all([
       readBills(),
       readPayments(),
       readOverdueDates(),
       readUsers(),
       readPromotions(),
+      readReturns(),
     ]);
     const transactions = [];
 
@@ -2904,6 +3590,47 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
       });
     }
 
+    for (const row of returnsRows) {
+      const idMatch = String(row.customerId ?? '').trim() === cust.id;
+      const nameMatch = normalizeCustomerName(row.customerName) === nameKey;
+      if (!idMatch && !nameMatch) continue;
+      const kind = returnKind(row);
+      const amount = returnAmount(row);
+      if (amount <= 0 && kind !== RETURN_KINDS.DAMAGE) continue;
+      if (kind === RETURN_KINDS.ITEM_RETURN) {
+        const settle = settlementOf(row);
+        transactions.push({
+          kind: 'item_return',
+          id: row.id,
+          date: row.date,
+          sortAt: row.createdAt || `${row.date}T12:00:00`,
+          type: settle === SETTLEMENTS.CASH ? 'Item return (cash)' : 'Return invoice',
+          details: [
+            row.invoiceNumber ? `Invoice ${row.invoiceNumber}` : null,
+            row.returnInvoiceNumber ? `Return ${row.returnInvoiceNumber}` : null,
+            row.note,
+            row.enteredBy ? `by ${row.enteredBy}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || '—',
+          amount,
+          direction: 'credit',
+        });
+      } else if (kind === RETURN_KINDS.PRICE_CHANGE) {
+        const dir = priceDirection(row);
+        transactions.push({
+          kind: 'price_change',
+          id: row.id,
+          date: row.date,
+          sortAt: row.createdAt || `${row.date}T12:00:00`,
+          type: dir === PRICE_DIRECTIONS.UP ? 'Price increase' : 'Price drop',
+          details: [row.note, row.enteredBy ? `by ${row.enteredBy}` : null].filter(Boolean).join(' · ') || '—',
+          amount,
+          direction: dir === PRICE_DIRECTIONS.UP ? 'charge' : 'credit',
+        });
+      }
+    }
+
     transactions.sort((a, b) => {
       const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
       if (dateCmp !== 0) return dateCmp;
@@ -2912,7 +3639,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
 
     res.json({
       customer: enrichCustomerWithCollector(
-        enrichCustomerBalance(cust, bills, payments, overdueDates, promotions),
+        enrichCustomerBalance(cust, bills, payments, overdueDates, promotions, returnsRows),
         users,
       ),
       transactions,
@@ -3265,17 +3992,80 @@ app.patch('/api/customers/:id', async (req, res) => {
     if (paymentsDirty) await writePayments(payments);
 
     const promotions = await readPromotions();
-    cust.remainingAmount = computeRemainingAmount(cust, bills, payments, promotions);
+    const returnsRows = await readReturns();
+    cust.remainingAmount = computeRemainingAmount(cust, bills, payments, promotions, returnsRows);
     customers[idx] = cust;
     await writeCustomers(customers);
 
     const users = await readUsers();
     res.json(
-      enrichCustomerWithCollector(enrichCustomerBalance(cust, bills, payments, overdueDates, promotions), users),
+      enrichCustomerWithCollector(
+        enrichCustomerBalance(cust, bills, payments, overdueDates, promotions, returnsRows),
+        users,
+      ),
     );
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update customer' });
+  }
+});
+
+app.get('/api/collection-day-close', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again' });
+  }
+  try {
+    const staffUser = await resolveStaffUser(auth);
+    if (!isCollectorStaff(staffUser)) {
+      return res.status(403).json({ error: 'Only collectors can check collection-day close status' });
+    }
+    const date = normalizeCollectionCloseYmd(req.query.date) || paymentDateDefaultYmd();
+    const row = await getCollectionDayClose(staffUser.id, date);
+    res.json({
+      date,
+      closed: Boolean(row),
+      closedAt: row?.closedAt || '',
+      closedBy: row?.closedBy || '',
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load collection-day close status' });
+  }
+});
+
+app.post('/api/collection-day-close', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again' });
+  }
+  try {
+    const staffUser = await resolveStaffUser(auth);
+    if (!isCollectorStaff(staffUser)) {
+      return res.status(403).json({ error: 'Only collectors can close collection for a day' });
+    }
+    const date = normalizeCollectionCloseYmd(req.body?.date) || paymentDateDefaultYmd();
+    if (date > paymentDateDefaultYmd()) {
+      return res.status(400).json({ error: 'You can only close collection for today or a past day.' });
+    }
+    const result = await closeCollectionDay({
+      collectorUserId: staffUser.id,
+      date,
+      closedBy: String(staffUser.username || auth.username || '').trim(),
+    });
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({
+      date,
+      closed: true,
+      alreadyClosed: Boolean(result.alreadyClosed),
+      closedAt: result.close?.closedAt || '',
+      closedBy: result.close?.closedBy || '',
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to close collection for this day' });
   }
 });
 
@@ -3343,6 +4133,10 @@ app.post('/api/payments', async (req, res) => {
 
     const dated = await resolveRecordDate(req, body.date);
     const date = dated.date;
+    const closedErr = await collectorCannotAddPaymentError(req, date);
+    if (closedErr) {
+      return res.status(403).json({ error: closedErr });
+    }
     const note = String(body.note ?? '').trim();
 
     const payments = await readPayments();
@@ -4612,6 +5406,219 @@ app.patch('/api/bills/:id', async (req, res) => {
   }
 });
 
+app.get('/api/returns', async (req, res) => {
+  try {
+    const rows = await readReturns();
+    const sorted = [...rows].sort((a, b) => {
+      const da = String(a.date || '');
+      const db = String(b.date || '');
+      if (da !== db) return db.localeCompare(da);
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load returns' });
+  }
+});
+
+function requireAdminUser(req, res, message) {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: message || 'Sign in as admin to continue' });
+    return null;
+  }
+  if (auth.role !== 'admin') {
+    res.status(403).json({ error: message || 'Only an admin can do this' });
+    return null;
+  }
+  return auth;
+}
+
+app.post('/api/returns', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const enteredBy = String(body.enteredBy ?? '').trim();
+    if (!enteredBy) {
+      return res.status(400).json({ error: 'enteredBy (username) is required' });
+    }
+    const date = String(body.date ?? '').trim();
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    const kindRaw = String(body.kind ?? '').trim();
+    const kind =
+      kindRaw === RETURN_KINDS.DAMAGE || kindRaw === RETURN_KINDS.PRICE_CHANGE
+        ? kindRaw
+        : RETURN_KINDS.ITEM_RETURN;
+    if (kind === RETURN_KINDS.DAMAGE || kind === RETURN_KINDS.PRICE_CHANGE) {
+      const admin = requireAdminUser(req, res, 'Only an admin can record damage items or price changes');
+      if (!admin) return;
+    }
+
+    const note = String(body.note ?? '').trim();
+    const customers = await readCustomers();
+    const customerId = String(body.customerId ?? '').trim();
+    const customer = customerId ? customers.find((c) => c.id === customerId) : null;
+    const customerName = customer
+      ? String(customer.name ?? '').trim()
+      : String(body.customerName ?? '').trim();
+
+    const rows = await readReturns();
+    const products = await getBagProducts();
+    const keys = products.map((p) => p.key);
+
+    let row = {
+      id: `ret-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      kind,
+      date,
+      note,
+      enteredBy,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (kind === RETURN_KINDS.ITEM_RETURN) {
+      if (!customer && !customerName) {
+        return res.status(400).json({ error: 'Select a shop or customer' });
+      }
+      const bills = await readBills();
+      const billId = String(body.billId ?? '').trim();
+      const bill = bills.find((b) => String(b.id ?? '').trim() === billId);
+      if (!bill) {
+        return res.status(400).json({ error: 'Select an invoice to return' });
+      }
+      const bagFields = {};
+      let anyBags = 0;
+      let amount = 0;
+      const already = sumReturnedBagsForBill(rows, bill.id, keys);
+      for (const p of products) {
+        const requested = Math.floor(toNonNegNumber(body[p.bagsField]));
+        const sold = Math.floor(toNonNegNumber(bill[p.bagsField]));
+        const remaining = Math.max(0, sold - (already[p.key] || 0));
+        if (requested > remaining) {
+          return res.status(400).json({
+            error: `${p.label}: only ${remaining} bag${remaining === 1 ? '' : 's'} left to return on this invoice`,
+          });
+        }
+        const unitPrice = toNonNegMoney(bill[p.unitPriceField]);
+        const line = Math.round(requested * unitPrice * 100) / 100;
+        bagFields[p.bagsField] = requested;
+        bagFields[p.unitPriceField] = unitPrice;
+        bagFields[`${p.key}Line`] = line;
+        anyBags += requested;
+        amount += line;
+      }
+      amount = Math.round(amount * 100) / 100;
+      if (anyBags <= 0 || amount <= 0) {
+        return res.status(400).json({ error: 'Enter bags to return from this invoice' });
+      }
+      const settlement =
+        String(body.settlement ?? '').trim() === SETTLEMENTS.CASH
+          ? SETTLEMENTS.CASH
+          : SETTLEMENTS.CREDIT_NOTE;
+      let returnInvoiceNumber = String(body.returnInvoiceNumber ?? '').trim();
+      if (settlement === SETTLEMENTS.CREDIT_NOTE) {
+        if (!returnInvoiceNumber) {
+          returnInvoiceNumber = suggestNextReturnInvoiceNumber(rows);
+        }
+        if (invoiceNumberTaken(rows, 'returnInvoiceNumber', returnInvoiceNumber)) {
+          return res.status(400).json({ error: 'This return invoice # is already used' });
+        }
+      }
+      row = {
+        ...row,
+        customerId: customer?.id || '',
+        customerName: customerName || String(bill.customerName ?? '').trim(),
+        billId: bill.id,
+        invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
+        settlement,
+        ...(returnInvoiceNumber ? { returnInvoiceNumber } : {}),
+        ...bagFields,
+        amount,
+      };
+    } else if (kind === RETURN_KINDS.DAMAGE) {
+      const live = await getLiveStockSummary();
+      const liveByKey = Object.fromEntries((live.brands || []).map((b) => [b.key, Math.max(0, Number(b.bags) || 0)]));
+      const bagFields = {};
+      let anyBags = 0;
+      for (const p of products) {
+        const requested = Math.floor(toNonNegNumber(body[p.bagsField]));
+        const available = Math.floor(liveByKey[p.key] || 0);
+        if (requested > available) {
+          return res.status(400).json({
+            error: `${p.label}: only ${available} bag${available === 1 ? '' : 's'} in sellable stock`,
+          });
+        }
+        bagFields[p.bagsField] = requested;
+        anyBags += requested;
+      }
+      if (anyBags <= 0) {
+        return res.status(400).json({ error: 'Enter bags to move to damage items' });
+      }
+      let damageInvoiceNumber = String(body.damageInvoiceNumber ?? '').trim();
+      if (!damageInvoiceNumber) {
+        damageInvoiceNumber = suggestNextDamageInvoiceNumber(rows);
+      }
+      if (invoiceNumberTaken(rows, 'damageInvoiceNumber', damageInvoiceNumber)) {
+        return res.status(400).json({ error: 'This damage invoice # is already used' });
+      }
+      row = {
+        ...row,
+        customerId: customer?.id || '',
+        customerName,
+        damageInvoiceNumber,
+        ...bagFields,
+        amount: 0,
+      };
+    } else {
+      if (!customer && !customerName) {
+        return res.status(400).json({ error: 'Select a shop to apply the price change' });
+      }
+      const amount = toNonNegMoney(body.amount);
+      if (amount <= 0) {
+        return res.status(400).json({ error: 'Enter a price change amount greater than zero' });
+      }
+      const direction =
+        String(body.direction ?? '').trim() === PRICE_DIRECTIONS.UP
+          ? PRICE_DIRECTIONS.UP
+          : PRICE_DIRECTIONS.DOWN;
+      row = {
+        ...row,
+        customerId: customer?.id || '',
+        customerName,
+        direction,
+        amount,
+      };
+    }
+
+    rows.push(row);
+    await writeReturns(rows);
+
+    if (kind === RETURN_KINDS.ITEM_RETURN || kind === RETURN_KINDS.PRICE_CHANGE) {
+      const bills = await readBills();
+      const paymentsList = await readPayments();
+      if (row.customerId) {
+        await refreshCustomerBalancesForCustomerIds(bills, paymentsList, row.customerId);
+      } else if (row.customerName) {
+        await refreshCustomerBalancesForBillNames(bills, paymentsList, row.customerName);
+      }
+    }
+
+    if (kind === RETURN_KINDS.ITEM_RETURN || kind === RETURN_KINDS.DAMAGE) {
+      try {
+        await refreshLiveStockFromSources();
+      } catch (err) {
+        console.error('liveStock refresh after return', err);
+      }
+    }
+
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save return' });
+  }
+});
+
 app.get('/api/stocks', async (req, res) => {
   try {
     const stocks = await readStocks();
@@ -4969,6 +5976,9 @@ app.get('/api/staff', async (req, res) => {
         id: u.id,
         name: String(u.name || '').trim() || String(u.username || '').trim(),
         role: String(u.role || '').trim(),
+        contact: String(u.contact || '').trim(),
+        nic: String(u.nic || '').trim(),
+        driverLicense: String(u.driverLicense || '').trim(),
       }))
       .filter((u) => u.id && u.name && u.role !== 'Admin')
       .sort((a, b) =>

@@ -169,20 +169,89 @@ function canListPermittedDevices() {
   return bluetoothAvailable() && typeof navigator.bluetooth.getDevices === 'function';
 }
 
-async function findRememberedDevice() {
-  if (!canListPermittedDevices()) return null;
-  const props = readProps();
-  if (!props.lastDeviceId && !props.lastDeviceName) return null;
+function isLastPrinter(btDevice, props = readProps()) {
+  if (!btDevice) return false;
+  if (props.lastDeviceId && btDevice.id === props.lastDeviceId) return true;
+  if (props.lastDeviceName && btDevice.name === props.lastDeviceName) return true;
+  return false;
+}
+
+function dedupeDevices(list) {
+  const out = [];
+  const seen = new Set();
+  for (const d of list) {
+    if (!d) continue;
+    const key = d.id || `name:${d.name || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
+}
+
+async function listPermittedDevices() {
+  if (!canListPermittedDevices()) return [];
   try {
     const devices = await navigator.bluetooth.getDevices();
-    return (
-      devices.find((d) => props.lastDeviceId && d.id === props.lastDeviceId) ||
-      devices.find((d) => props.lastDeviceName && d.name === props.lastDeviceName) ||
-      null
-    );
+    return Array.isArray(devices) ? devices : [];
   } catch {
-    return null;
+    return [];
   }
+}
+
+function disconnectProbeExtra(btDevice) {
+  if (!btDevice || btDevice === device) return;
+  try {
+    btDevice.gatt?.disconnect();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function probeFirstPrinter(devices, generation) {
+  const unique = dedupeDevices(devices);
+  if (!unique.length) return null;
+  const found = await Promise.all(
+    unique.map(async (btDevice) => {
+      try {
+        if (generation !== connectGeneration || manualDisconnect || isLinkUp()) return null;
+        if (!btDevice.gatt) return null;
+        const gattServer = btDevice.gatt.connected ? btDevice.gatt : await btDevice.gatt.connect();
+        if (generation !== connectGeneration || manualDisconnect) return null;
+        const char = await pickWritableCharacteristic(gattServer);
+        if (!char) {
+          disconnectProbeExtra(btDevice);
+          return null;
+        }
+        return btDevice;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const hits = found.filter(Boolean);
+  const winner = hits[0] || null;
+  for (const extra of hits.slice(1)) {
+    if (extra !== winner) disconnectProbeExtra(extra);
+  }
+  return winner;
+}
+
+function watchLastPrinter(permitted, props = readProps()) {
+  const match =
+    (device && isLastPrinter(device, props) ? device : null) ||
+    (Array.isArray(permitted) ? permitted.find((d) => isLastPrinter(d, props)) : null) ||
+    null;
+  if (match && !manualDisconnect && !isLinkUp()) {
+    watchRememberedDevice(match);
+  }
+}
+
+async function findRememberedDevice() {
+  const props = readProps();
+  if (!props.lastDeviceId && !props.lastDeviceName) return null;
+  const devices = await listPermittedDevices();
+  return devices.find((d) => isLastPrinter(d, props)) || null;
 }
 
 async function requestPrinterChooser() {
@@ -359,19 +428,62 @@ export async function reconnectLastPrinter(options = {}) {
   if (isLinkUp()) return getPrinterConnection();
   if (reconnectInFlight) return reconnectInFlight;
   if (connecting) return getPrinterConnection();
-  const props = readProps();
-  if (!device && !props.lastDeviceId && !props.lastDeviceName && !options.force) {
-    return getPrinterConnection();
-  }
 
   reconnectInFlight = (async () => {
     const generation = ++connectGeneration;
-    connecting = true;
     lastError = '';
-    emit();
     try {
-      let match = device?.gatt ? device : null;
-      if (!match) match = await findRememberedDevice();
+      const props = readProps();
+      const permitted = await listPermittedDevices();
+      if (generation !== connectGeneration) return getPrinterConnection();
+      if (manualDisconnect || isLinkUp()) return getPrinterConnection();
+
+      const lastCandidates = dedupeDevices([
+        device?.gatt ? device : null,
+        ...permitted.filter((d) => isLastPrinter(d, props)),
+      ]);
+      const otherCandidates = permitted.filter(
+        (d) => !lastCandidates.some((x) => x.id && d.id && x.id === d.id),
+      );
+
+      watchLastPrinter(permitted, props);
+
+      if (!lastCandidates.length && !otherCandidates.length) {
+        if (options.force) {
+          connecting = true;
+          emit();
+          const picked = await requestPrinterChooser();
+          if (generation !== connectGeneration) return getPrinterConnection();
+          await bindDevice(picked);
+          emit();
+          return getPrinterConnection();
+        }
+        if (autoReconnectActive && !manualDisconnect && !isLinkUp()) {
+          scheduleReconnect();
+          armGestureReconnect();
+        }
+        return getPrinterConnection();
+      }
+
+      connecting = true;
+      emit();
+
+      const lastProbe = probeFirstPrinter(lastCandidates, generation);
+      const otherProbe = probeFirstPrinter(otherCandidates, generation);
+
+      let match = await lastProbe;
+      if (generation !== connectGeneration) return getPrinterConnection();
+      if (match) {
+        otherProbe
+          .then((extra) => {
+            if (extra && extra !== match) disconnectProbeExtra(extra);
+          })
+          .catch(() => {});
+      } else {
+        match = await otherProbe;
+      }
+
+      if (generation !== connectGeneration) return getPrinterConnection();
       if (!match && options.force) {
         match = await requestPrinterChooser();
       }
@@ -381,6 +493,11 @@ export async function reconnectLastPrinter(options = {}) {
           lastError = props.lastDeviceName
             ? `Could not restore ${props.lastDeviceName}. Scan and select it once.`
             : 'No printer selected.';
+        }
+        if (autoReconnectActive && !manualDisconnect && !isLinkUp()) {
+          scheduleReconnect();
+          armGestureReconnect();
+          watchLastPrinter(permitted, props);
         }
         return getPrinterConnection();
       }
@@ -431,7 +548,15 @@ export function startPrinterAutoReconnect() {
     }
   }
   armGestureReconnect();
-  reconnectLastPrinter();
+  return reconnectLastPrinter();
+}
+
+/** After login: restore the last printer and race any other permitted Bluetooth printers. */
+export function beginLoginPrinterConnect() {
+  if (!bluetoothAvailable()) return Promise.resolve(getPrinterConnection());
+  manualDisconnect = false;
+  reconnectAttempt = 0;
+  return startPrinterAutoReconnect();
 }
 
 export function stopPrinterAutoReconnect() {

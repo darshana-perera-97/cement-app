@@ -7,8 +7,10 @@ export const MANAGER_ACCESS_OPTIONS = [
   { key: 'loads', label: 'Loads' },
   { key: 'purchase-orders', label: 'Purchase Order' },
   { key: 'bills', label: 'Bills' },
+  { key: 'returns', label: 'Returns' },
   { key: 'payments', label: 'Payments' },
   { key: 'bank', label: 'Cash Book' },
+  { key: 'profiles', label: 'Profiles' },
   { key: 'promotions', label: 'Promotions' },
   { key: 'messages', label: 'Messages' },
   { key: 'incentive', label: 'Incentive' },
@@ -37,13 +39,16 @@ export const DASHBOARD_ROUTE_ACCESS = {
   loads: 'loads',
   'purchase-orders': 'purchase-orders',
   bills: 'bills',
+  returns: 'returns',
   payments: 'payments',
   bank: 'bank',
+  profiles: 'profiles',
   promotions: 'promotions',
   messages: 'messages',
   incentive: 'incentive',
   'overdue-bills': 'overdue-bills',
   'pending-cheques': 'pending-cheques',
+  unloads: 'unloads',
 };
 
 export const DASHBOARD_NAV = [
@@ -70,6 +75,12 @@ export const DASHBOARD_NAV = [
     label: 'Customers',
     icon: 'users',
     accessKey: 'customers',
+  },
+  {
+    to: '/dashboard/unloads',
+    label: 'Unloads',
+    icon: 'truck',
+    accessKey: 'unloads',
   },
   {
     to: '/dashboard/overdue-bills',
@@ -108,6 +119,12 @@ export const DASHBOARD_NAV = [
     accessKey: 'bills',
   },
   {
+    to: '/dashboard/returns',
+    label: 'Returns',
+    icon: 'returns',
+    accessKey: 'returns',
+  },
+  {
     to: '/dashboard/payments',
     label: 'Payments',
     icon: 'wallet',
@@ -118,6 +135,12 @@ export const DASHBOARD_NAV = [
     label: 'Cash Book',
     icon: 'bank',
     accessKey: 'bank',
+  },
+  {
+    to: '/dashboard/profiles',
+    label: 'Profiles',
+    icon: 'profiles',
+    accessKey: 'profiles',
   },
   {
     to: '/dashboard/promotions',
@@ -135,11 +158,19 @@ export const DASHBOARD_NAV = [
     to: '/dashboard/users',
     label: 'Users',
     icon: 'user',
+    adminOnly: true,
+  },
+  {
+    to: '/dashboard/map',
+    label: 'Map',
+    icon: 'map',
+    adminOnly: true,
   },
   {
     to: '/dashboard/settings',
     label: 'Settings',
     icon: 'settings',
+    adminOnly: true,
   },
   {
     to: '/dashboard/incentive',

@@ -7,12 +7,14 @@ import DashboardLayout from './dashboard/DashboardLayout';
 import DashboardAccessRoute from './dashboard/DashboardAccessRoute';
 import AnalyticsPage from './dashboard/AnalyticsPage';
 import BillsPage from './dashboard/BillsPage';
+import ReturnsPage from './dashboard/ReturnsPage';
 import CustomerTransactionsPage from './dashboard/CustomerTransactionsPage';
 import CustomersPage from './dashboard/CustomersPage';
 import LoadsPage from './dashboard/LoadsPage';
 import PurchaseOrdersPage from './dashboard/PurchaseOrdersPage';
 import PaymentsPage from './dashboard/PaymentsPage';
 import BankPage from './dashboard/BankPage';
+import ProfilesPage from './dashboard/ProfilesPage';
 import PromotionsPage from './dashboard/PromotionsPage';
 import UsersPage from './dashboard/UsersPage';
 import IncentivePage from './dashboard/IncentivePage';
@@ -25,8 +27,21 @@ import OverdueBillsPage from './dashboard/OverdueBillsPage';
 import PendingChequesPage from './dashboard/PendingChequesPage';
 import UnloadsPage from './UnloadsPage';
 import SettingsPage from './dashboard/SettingsPage';
+import MapPage from './dashboard/MapPage';
+import CollectorUnloadsPage from './dashboard/CollectorUnloadsPage';
 import { BagProductsProvider } from './dashboard/BagProductsContext';
 import { PrinterProvider } from './printer/PrinterProvider';
+
+function RoutePage({ component: Page }) {
+  if (typeof Page !== 'function') {
+    return (
+      <div className="rounded-2xl bg-red-50 px-4 py-8 text-center text-sm text-red-800 ring-1 ring-red-100" role="alert">
+        This page failed to load. Refresh the browser.
+      </div>
+    );
+  }
+  return <Page />;
+}
 
 function ProtectedRoute({ children }) {
   if (!isAuthed()) {
@@ -112,6 +127,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="unloads"
+          element={
+            <DashboardAccessRoute accessKey="unloads">
+              <CollectorUnloadsPage />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
           path="shop"
           element={
             <DashboardAccessRoute accessKey="shop">
@@ -152,6 +175,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="returns"
+          element={
+            <DashboardAccessRoute accessKey="returns">
+              <ReturnsPage />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
           path="payments"
           element={
             <DashboardAccessRoute accessKey="payments">
@@ -164,6 +195,22 @@ function AppRoutes() {
           element={
             <DashboardAccessRoute accessKey="bank">
               <BankPage />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
+          path="profiles/:staffId"
+          element={
+            <DashboardAccessRoute accessKey="profiles">
+              <RoutePage component={ProfilesPage} />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
+          path="profiles"
+          element={
+            <DashboardAccessRoute accessKey="profiles">
+              <RoutePage component={ProfilesPage} />
             </DashboardAccessRoute>
           }
         />
@@ -184,6 +231,7 @@ function AppRoutes() {
           }
         />
         <Route path="users" element={<UsersPage />} />
+        <Route path="map" element={<RoutePage component={MapPage} />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="overdue-bills"

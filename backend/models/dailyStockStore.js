@@ -48,27 +48,39 @@ function eachDateInclusive(fromYmd, toYmd) {
   return out;
 }
 
-function mergeOutByDate(billOut, promoOut, keys) {
-  const dates = new Set([...Object.keys(billOut), ...Object.keys(promoOut)]);
+function mergeBrandDateMaps(maps, keys) {
+  const dates = new Set();
+  for (const map of maps) {
+    for (const d of Object.keys(map || {})) dates.add(d);
+  }
   const merged = {};
   for (const d of dates) {
     merged[d] = emptyBrandMap(keys);
     for (const k of keys) {
-      merged[d][k] = (billOut[d]?.[k] || 0) + (promoOut[d]?.[k] || 0);
+      let sum = 0;
+      for (const map of maps) sum += map[d]?.[k] || 0;
+      merged[d][k] = sum;
     }
   }
   return merged;
 }
 
+function mergeOutByDate(billOut, promoOut, keys) {
+  return mergeBrandDateMaps([billOut, promoOut], keys);
+}
+
 /**
- * Build daily ledger: start-of-day, bags in (loads), out (credit bills + promotional free bags that day), end-of-day.
+ * Build daily ledger: start-of-day, bags in (loads + item returns), out (bills + free bags + damage), end-of-day.
  */
-function buildDailyStockPayload(loads, bills, promotions = [], keys = []) {
+function buildDailyStockPayload(loads, bills, promotions = [], keys = [], extras = {}) {
   const brandKeys = Array.isArray(keys) && keys.length > 0 ? keys : [];
-  const inByDate = aggregateLoadsByDate(loads, brandKeys);
+  const loadIn = aggregateLoadsByDate(loads, brandKeys);
+  const extraIn = extras.inByDate && typeof extras.inByDate === 'object' ? extras.inByDate : {};
+  const extraOut = extras.outByDate && typeof extras.outByDate === 'object' ? extras.outByDate : {};
+  const inByDate = mergeBrandDateMaps([loadIn, extraIn], brandKeys);
   const billOut = aggregateOutsByDateFromBills(Array.isArray(bills) ? bills : [], brandKeys);
   const promoOut = aggregatePromotionOutsByDate(Array.isArray(promotions) ? promotions : [], brandKeys);
-  const outByDate = mergeOutByDate(billOut, promoOut, brandKeys);
+  const outByDate = mergeBrandDateMaps([billOut, promoOut, extraOut], brandKeys);
   const allKeys = new Set([...Object.keys(inByDate), ...Object.keys(outByDate)]);
   if (allKeys.size === 0 || brandKeys.length === 0) {
     return { generatedAt: new Date().toISOString(), days: [] };

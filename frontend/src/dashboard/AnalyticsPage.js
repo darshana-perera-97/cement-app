@@ -461,6 +461,7 @@ export default function AnalyticsPage() {
   const [payments, setPayments] = useState([]);
   const [cashBookEntries, setCashBookEntries] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [bankGuarantees, setBankGuarantees] = useState([]);
   const [bankBalancePayload, setBankBalancePayload] = useState(null);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
@@ -474,7 +475,7 @@ export default function AnalyticsPage() {
     setBankGuaranteeErr(null);
     (async () => {
       try {
-        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes, poRes, promoRes] =
+        const [sumRes, flowRes, bagsRes, xferRes, overdueRes, custRes, billsRes, payRes, chequeRes, cbeRes, bgRes, balRes, poRes, promoRes, retRes] =
           await Promise.all([
             fetch(`${apiRoot}/api/cash-summary`),
             fetch(`${apiRoot}/api/cash-flow?days=7`),
@@ -490,6 +491,7 @@ export default function AnalyticsPage() {
             fetch(`${apiRoot}/api/bank-account-balances`),
             fetch(`${apiRoot}/api/purchase-orders`),
             fetch(`${apiRoot}/api/promotions`),
+            fetch(`${apiRoot}/api/returns`),
           ]);
         if (!cancelled) {
           if (sumRes.ok) setCashSummary(await sumRes.json());
@@ -529,6 +531,12 @@ export default function AnalyticsPage() {
             setPromotions(Array.isArray(promoData) ? promoData : []);
           } else {
             setPromotions([]);
+          }
+          if (retRes.ok) {
+            const retData = await retRes.json();
+            setReturnsRows(Array.isArray(retData) ? retData : []);
+          } else {
+            setReturnsRows([]);
           }
           setPendingBills(
             buildPendingBillRows(
@@ -682,10 +690,10 @@ export default function AnalyticsPage() {
   const showOverdueViewAll = overdueBills.length > OVERDUE_VIEW_ALL_THRESHOLD;
 
   const cashierSummary = useMemo(() => {
-    const sourceEntries = buildCashBookSourceEntries(payments, cashBookEntries, promotions);
+    const sourceEntries = buildCashBookSourceEntries(payments, cashBookEntries, promotions, returnsRows);
     const ledgerRows = buildCashBookLedgerRows(sourceEntries);
     return summarizeCashBookLedger(ledgerRows);
-  }, [payments, cashBookEntries, promotions]);
+  }, [payments, cashBookEntries, promotions, returnsRows]);
 
   const bankSummary = useMemo(() => {
     const byAccountId =

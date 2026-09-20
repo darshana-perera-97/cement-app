@@ -118,7 +118,13 @@ export function cashBookEntryDetail(entry) {
     if (parts.length > 0) return note ? `${parts.join(' · ')} — ${note}` : parts.join(' · ');
     return note || 'Owner share';
   }
-  return String(entry.description ?? '').trim() || '—';
+  const desc = String(entry.description ?? '').trim();
+  if (cat === 'other') {
+    const who = String(entry.staffName ?? '').trim();
+    if (who && desc) return `${who} — ${desc}`;
+    if (who) return who;
+  }
+  return desc || '—';
 }
 
 export function modalTitleForCategory(category) {

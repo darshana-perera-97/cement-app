@@ -3,6 +3,13 @@ const path = require('path');
 const { readStocks, sumLoadBagsByBrand } = require('./stocksStore');
 const { readBills, sumAllBillBagsByBrand } = require('./billsStore');
 const { readPromotions, sumAllPromotionBagsByBrand } = require('./promotionsStore');
+const {
+  readReturns,
+  sumItemReturnBagsByBrand,
+  sumDamageBagsByBrand,
+  aggregateItemReturnInsByDate,
+  aggregateDamageOutsByDate,
+} = require('./returnsStore');
 const { buildDailyStockPayload } = require('./dailyStockStore');
 const { getBagProducts, getBagProductKeys } = require('./bagProducts');
 
@@ -33,17 +40,26 @@ async function refreshLiveStockFromSources() {
   const loads = await readStocks();
   const bills = await readBills();
   const promotions = await readPromotions();
+  const returnsRows = await readReturns();
   const loaded = sumLoadBagsByBrand(loads, keys);
   const sold = sumAllBillBagsByBrand(bills, keys);
   const promoOut = sumAllPromotionBagsByBrand(promotions, keys);
+  const returned = sumItemReturnBagsByBrand(returnsRows, keys);
+  const damaged = sumDamageBagsByBrand(returnsRows, keys);
   const bags = {};
+  const damageBags = {};
   for (const k of keys) {
-    bags[k] = Math.max(0, loaded[k] - sold[k] - promoOut[k]);
+    bags[k] = Math.max(0, loaded[k] - sold[k] - promoOut[k] - damaged[k] + returned[k]);
+    damageBags[k] = Math.max(0, damaged[k]);
   }
-  const ledgerPayload = buildDailyStockPayload(loads, bills, promotions, keys);
+  const ledgerPayload = buildDailyStockPayload(loads, bills, promotions, keys, {
+    inByDate: aggregateItemReturnInsByDate(returnsRows, keys),
+    outByDate: aggregateDamageOutsByDate(returnsRows, keys),
+  });
   const doc = {
     updatedAt: new Date().toISOString(),
     bags,
+    damageBags,
     dailyLedger: {
       generatedAt: ledgerPayload.generatedAt,
       days: ledgerPayload.days,
@@ -66,7 +82,19 @@ async function getLiveStockSummary(options = {}) {
     label: p.label,
     bags: Math.max(0, Math.floor(Number(live.bags[p.key]) || 0)),
   }));
-  return { liveAt: live.updatedAt || new Date().toISOString(), brands };
+  const damageBags = {};
+  let damageTotal = 0;
+  for (const p of products) {
+    const n = Math.max(0, Math.floor(Number(live.damageBags?.[p.key]) || 0));
+    damageBags[p.key] = n;
+    damageTotal += n;
+  }
+  return {
+    liveAt: live.updatedAt || new Date().toISOString(),
+    brands,
+    damageBags,
+    damageTotal,
+  };
 }
 
 /** Daily bag ledger table — same numbers as in file (refreshed with live stock). */

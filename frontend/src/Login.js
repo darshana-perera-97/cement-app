@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_DEV_API_URL, getApiBase } from './apiBase';
 import { isAuthed, setAuth, setDriverAuth, getPostLoginPath } from './auth';
+import { setStockUpdateEnabledCache } from './stockUpdateSettings';
+import { setCollectorUnloadPriceEnabledCache } from './collectorUnloadPriceSettings';
+import { beginLoginPrinterConnect } from './printer/bluetoothPrinter';
 import { shopNameInitials, useShopName } from './shopConfig';
 
 const apiBase = getApiBase();
@@ -60,11 +63,18 @@ function Login() {
         setError('Server did not return an auth token. Update the backend and sign in again.');
         return;
       }
+      if (data.stockUpdateEnabled != null) {
+        setStockUpdateEnabledCache(Boolean(data.stockUpdateEnabled));
+      }
+      if (data.collectorUnloadPriceEnabled != null) {
+        setCollectorUnloadPriceEnabledCache(Boolean(data.collectorUnloadPriceEnabled));
+      }
       if (String(data.staffRole || '').trim() === 'Driver') {
         setDriverAuth(resolvedUser, token, data.name);
       } else {
         setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess);
       }
+      beginLoginPrinterConnect();
       navigate(getPostLoginPath(), { replace: true });
     } catch {
       setError(

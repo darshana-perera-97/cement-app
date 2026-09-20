@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, isAdmin } from '../auth';
+import { authFetch, getFirstAllowedDashboardPath, isAdmin } from '../auth';
+import { MAX_LOW_STOCK_ALERTS, notifyStockUpdateSettingsChanged } from '../stockUpdateSettings';
+import { notifyCollectorUnloadPriceSettingsChanged } from '../collectorUnloadPriceSettings';
+import { useBagProducts } from './BagProductsContext';
+import { formatBrandLabel } from './brandTheme';
 import {
   LoadingSpinner,
   MobileRowCard,
@@ -10,6 +14,8 @@ import {
   stickyFirstTd,
   stickyFirstTh,
   stickyThead,
+  ModalBackdrop,
+  modalPanelClassMd,
 } from './tableToolbar';
 import {
   EMPTY_PRINTER_SETTINGS,
@@ -73,6 +79,24 @@ export default function SettingsPage() {
   const [backupSending, setBackupSending] = useState(false);
   const [backupError, setBackupError] = useState(null);
   const [backupOk, setBackupOk] = useState(null);
+  const [stockUpdateEnabled, setStockUpdateEnabled] = useState(false);
+  const [stockStaleDays, setStockStaleDays] = useState('7');
+  const [lowStockAlerts, setLowStockAlerts] = useState([]);
+  const [addProductOpen, setAddProductOpen] = useState(false);
+  const [addProductKey, setAddProductKey] = useState('');
+  const [addProductMinBags, setAddProductMinBags] = useState('');
+  const [addProductError, setAddProductError] = useState(null);
+  const { brands: bagBrands } = useBagProducts();
+  const unusedLowStockProducts = bagBrands.filter((b) => !lowStockAlerts.some((a) => a.key === b.key));
+  const [stockUpdateLoading, setStockUpdateLoading] = useState(true);
+  const [stockUpdateSaving, setStockUpdateSaving] = useState(false);
+  const [stockUpdateError, setStockUpdateError] = useState(null);
+  const [stockUpdateOk, setStockUpdateOk] = useState(false);
+  const [collectorUnloadPriceEnabled, setCollectorUnloadPriceEnabled] = useState(false);
+  const [collectorUnloadPriceLoading, setCollectorUnloadPriceLoading] = useState(true);
+  const [collectorUnloadPriceSaving, setCollectorUnloadPriceSaving] = useState(false);
+  const [collectorUnloadPriceError, setCollectorUnloadPriceError] = useState(null);
+  const [collectorUnloadPriceOk, setCollectorUnloadPriceOk] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,13 +137,104 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadStockUpdate = useCallback(async () => {
+    setStockUpdateLoading(true);
+    setStockUpdateError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/stock-update-settings`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStockUpdateError(data.error || 'Failed to load stock update settings');
+        return;
+      }
+      setStockUpdateEnabled(Boolean(data.enabled));
+      setStockStaleDays(String(Math.max(1, Math.min(365, Number(data.staleDays) || 7))));
+      setLowStockAlerts(
+        (Array.isArray(data.lowStockAlerts) ? data.lowStockAlerts : [])
+          .slice(0, MAX_LOW_STOCK_ALERTS)
+          .map((row) => ({
+            key: String(row.key || '').trim(),
+            minBags: String(row.minBags ?? 0),
+          }))
+          .filter((row) => row.key),
+      );
+    } catch {
+      setStockUpdateError('Could not reach the server');
+    } finally {
+      setStockUpdateLoading(false);
+    }
+  }, []);
+
+  const loadCollectorUnloadPrice = useCallback(async () => {
+    setCollectorUnloadPriceLoading(true);
+    setCollectorUnloadPriceError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/collector-unload-price-settings`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCollectorUnloadPriceError(data.error || 'Failed to load collector unload price settings');
+        return;
+      }
+      setCollectorUnloadPriceEnabled(Boolean(data.enabled));
+    } catch {
+      setCollectorUnloadPriceError('Could not reach the server');
+    } finally {
+      setCollectorUnloadPriceLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     load();
     loadBackupStatus();
-  }, [load, loadBackupStatus]);
+    loadStockUpdate();
+    loadCollectorUnloadPrice();
+  }, [load, loadBackupStatus, loadStockUpdate, loadCollectorUnloadPrice]);
+
+  const persistStockUpdateSettings = useCallback(
+    async ({
+      enabled = stockUpdateEnabled,
+      staleDays = stockStaleDays,
+      alerts = lowStockAlerts,
+    } = {}) => {
+      const payload = {
+        enabled: Boolean(enabled),
+        staleDays: Math.max(1, Math.min(365, parseInt(staleDays, 10) || 7)),
+        lowStockAlerts: (alerts || [])
+          .filter((row) => row.key)
+          .slice(0, MAX_LOW_STOCK_ALERTS)
+          .map((row) => ({
+            key: row.key,
+            minBags: Math.max(0, parseInt(row.minBags, 10) || 0),
+          })),
+      };
+      const res = await authFetch(`${apiBase}/api/stock-update-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not save stock update settings');
+      }
+      const nextEnabled = Boolean(data.enabled);
+      const nextStaleDays = Math.max(1, Math.min(365, Number(data.staleDays) || 7));
+      const nextAlerts = Array.isArray(data.lowStockAlerts) ? data.lowStockAlerts : payload.lowStockAlerts;
+      setStockUpdateEnabled(nextEnabled);
+      setStockStaleDays(String(nextStaleDays));
+      setLowStockAlerts(
+        nextAlerts.map((row) => ({
+          key: String(row.key || '').trim(),
+          minBags: String(row.minBags ?? 0),
+        })),
+      );
+      notifyStockUpdateSettingsChanged(nextEnabled, nextStaleDays, nextAlerts);
+      return data;
+    },
+    [stockUpdateEnabled, stockStaleDays, lowStockAlerts],
+  );
 
   if (!isAdmin()) {
-    return <Navigate to="/dashboard/analytics" replace />;
+    return <Navigate to={getFirstAllowedDashboardPath()} replace />;
   }
 
   const allRoles = form.allowedRoles.includes('all');
@@ -208,6 +323,47 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveStockUpdate = async (e) => {
+    e.preventDefault();
+    setStockUpdateSaving(true);
+    setStockUpdateError(null);
+    setStockUpdateOk(false);
+    try {
+      await persistStockUpdateSettings();
+      setStockUpdateOk(true);
+    } catch (err) {
+      setStockUpdateError(err.message || 'Could not save stock update settings');
+    } finally {
+      setStockUpdateSaving(false);
+    }
+  };
+
+  const handleSaveCollectorUnloadPrice = async (e) => {
+    e.preventDefault();
+    setCollectorUnloadPriceSaving(true);
+    setCollectorUnloadPriceError(null);
+    setCollectorUnloadPriceOk(false);
+    try {
+      const res = await authFetch(`${apiBase}/api/collector-unload-price-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: Boolean(collectorUnloadPriceEnabled) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not save collector unload price settings');
+      }
+      const nextEnabled = Boolean(data.enabled);
+      setCollectorUnloadPriceEnabled(nextEnabled);
+      notifyCollectorUnloadPriceSettingsChanged(nextEnabled);
+      setCollectorUnloadPriceOk(true);
+    } catch (err) {
+      setCollectorUnloadPriceError(err.message || 'Could not save collector unload price settings');
+    } finally {
+      setCollectorUnloadPriceSaving(false);
+    }
+  };
+
   const handleBackupNow = async () => {
     setBackupSending(true);
     setBackupError(null);
@@ -240,8 +396,314 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-500">
-        Admin-only controls for the 80mm Bluetooth XPrinter and for emailing a zip backup of all JSON files in the data folder.
+        Admin-only controls for stock update / DSR access, collector unload pricing, the 80mm Bluetooth XPrinter, and emailing a zip backup of all JSON files in the data folder.
       </p>
+
+      {stockUpdateError ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {stockUpdateError}
+        </p>
+      ) : null}
+
+      {stockUpdateLoading ? (
+        <div className="flex justify-center py-8">
+          <LoadingSpinner size="lg" />
+        </div>
+      ) : (
+        <form onSubmit={handleSaveStockUpdate} className="space-y-4">
+          {stockUpdateOk ? (
+            <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-emerald-100">
+              Stock update settings saved.
+            </p>
+          ) : null}
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Low stock on map</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Choose up to {MAX_LOW_STOCK_ALERTS} products. Map pins turn orange when a shop’s current stock is below the value you set.
+            </p>
+            <div className="mt-4 space-y-3">
+              {lowStockAlerts.length === 0 ? (
+                <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500 ring-1 ring-slate-100">
+                  No products selected yet.
+                </p>
+              ) : (
+                lowStockAlerts.map((row) => {
+                  const brand = bagBrands.find((b) => b.key === row.key);
+                  return (
+                    <div
+                      key={row.key}
+                      className="flex items-center justify-between gap-3 rounded-xl bg-slate-50/90 px-3 py-3 ring-1 ring-slate-100"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">
+                          {brand ? formatBrandLabel(brand) || brand.label : row.key}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-500">Alert below {row.minBags || 0} bags</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={stockUpdateSaving}
+                        onClick={async () => {
+                          const next = lowStockAlerts.filter((item) => item.key !== row.key);
+                          setStockUpdateOk(false);
+                          setStockUpdateError(null);
+                          setStockUpdateSaving(true);
+                          try {
+                            await persistStockUpdateSettings({ alerts: next });
+                          } catch (err) {
+                            setStockUpdateError(err.message || 'Could not save stock update settings');
+                          } finally {
+                            setStockUpdateSaving(false);
+                          }
+                        }}
+                        className="shrink-0 rounded-xl px-3 py-1.5 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={lowStockAlerts.length >= MAX_LOW_STOCK_ALERTS || unusedLowStockProducts.length === 0}
+              onClick={() => {
+                setAddProductKey('');
+                setAddProductMinBags('');
+                setAddProductError(null);
+                setAddProductOpen(true);
+              }}
+              className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Add product
+            </button>
+          </section>
+
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Enable stock update</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Turn this on to add DSR accounts, let DSR users sign in to the shop map, and let collectors view the same map.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+                checked={stockUpdateEnabled}
+                onChange={(e) => {
+                  setStockUpdateOk(false);
+                  setStockUpdateEnabled(e.target.checked);
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-slate-900">Enable stock update</span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  Admins can create DSR users. DSR sign-in shows only the map with shops. Collectors also get a view-only map.
+                </span>
+              </span>
+            </label>
+            <label className="mt-4 block text-sm font-medium text-slate-600 sm:max-w-[12rem]">
+              Mark shops red after (days)
+              <input
+                type="number"
+                min={1}
+                max={365}
+                className={inputClass}
+                value={stockStaleDays}
+                onChange={(e) => {
+                  setStockUpdateOk(false);
+                  setStockStaleDays(e.target.value);
+                }}
+              />
+              <span className="mt-1 block text-xs font-normal text-slate-500">
+                Map pins turn red when the last stock update is older than this.
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                disabled={stockUpdateSaving}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {stockUpdateSaving ? 'Saving…' : 'Save stock update'}
+              </button>
+            </div>
+          </section>
+        </form>
+      )}
+
+      {collectorUnloadPriceError ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {collectorUnloadPriceError}
+        </p>
+      ) : null}
+
+      {collectorUnloadPriceLoading ? (
+        <div className="flex justify-center py-8">
+          <LoadingSpinner size="lg" />
+        </div>
+      ) : (
+        <form onSubmit={handleSaveCollectorUnloadPrice} className="space-y-4">
+          {collectorUnloadPriceOk ? (
+            <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-emerald-100">
+              Collector unload price settings saved.
+            </p>
+          ) : null}
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Allow collector to update unload prices</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              When enabled, collectors get an Unloads tab with bags unloaded from lorries at their shops, and can set or change the selling price.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+                checked={collectorUnloadPriceEnabled}
+                onChange={(e) => {
+                  setCollectorUnloadPriceOk(false);
+                  setCollectorUnloadPriceEnabled(e.target.checked);
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-slate-900">
+                  Allow collector to update the price for unloaded loads
+                </span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  Collectors see lorry unloads for assigned shops and can update unit prices. Pending unloads keep those prices for the bill; billed unloads update the credit bill.
+                </span>
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                disabled={collectorUnloadPriceSaving}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {collectorUnloadPriceSaving ? 'Saving…' : 'Save unload prices'}
+              </button>
+            </div>
+          </section>
+        </form>
+      )}
+
+      {addProductOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-low-stock-title"
+        >
+          <ModalBackdrop
+            onClose={() => {
+              setAddProductOpen(false);
+              setAddProductError(null);
+            }}
+          />
+          <div className={`${modalPanelClassMd} z-10`}>
+            <h2 id="add-low-stock-title" className="text-lg font-bold text-slate-900">
+              Add product
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Choose a product and the bag count that should turn the shop pin orange.
+            </p>
+            <form
+              className="mt-5 space-y-4"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const key = String(addProductKey || '').trim();
+                if (!key) {
+                  setAddProductError('Select a product.');
+                  return;
+                }
+                if (lowStockAlerts.some((row) => row.key === key)) {
+                  setAddProductError('That product is already added.');
+                  return;
+                }
+                if (lowStockAlerts.length >= MAX_LOW_STOCK_ALERTS) {
+                  setAddProductError(`You can add up to ${MAX_LOW_STOCK_ALERTS} products.`);
+                  return;
+                }
+                const minBags = String(Math.max(0, parseInt(addProductMinBags, 10) || 0));
+                const next = [...lowStockAlerts, { key, minBags }];
+                setAddProductError(null);
+                setStockUpdateOk(false);
+                setStockUpdateError(null);
+                setStockUpdateSaving(true);
+                try {
+                  await persistStockUpdateSettings({ alerts: next });
+                  setAddProductOpen(false);
+                } catch (err) {
+                  setAddProductError(err.message || 'Could not save stock update settings');
+                } finally {
+                  setStockUpdateSaving(false);
+                }
+              }}
+            >
+              {addProductError ? (
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{addProductError}</p>
+              ) : null}
+              <label className="block text-sm font-medium text-slate-600">
+                Product
+                <select
+                  required
+                  className={inputClass}
+                  value={addProductKey}
+                  onChange={(e) => {
+                    setAddProductError(null);
+                    setAddProductKey(e.target.value);
+                  }}
+                >
+                  <option value="">
+                    {unusedLowStockProducts.length === 0 ? 'No products left' : 'Select a product…'}
+                  </option>
+                  {unusedLowStockProducts.map((b) => (
+                    <option key={b.key} value={b.key}>
+                      {formatBrandLabel(b) || b.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Alert below
+                <input
+                  type="number"
+                  min={0}
+                  required
+                  className={`${inputClass} tabular-nums`}
+                  value={addProductMinBags}
+                  placeholder="e.g. 10"
+                  onChange={(e) => {
+                    setAddProductError(null);
+                    setAddProductMinBags(e.target.value);
+                  }}
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  Shop pins turn orange when current stock is below this number.
+                </span>
+              </label>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddProductOpen(false);
+                    setAddProductError(null);
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={stockUpdateSaving || !addProductKey || unusedLowStockProducts.length === 0}
+                  className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {stockUpdateSaving ? 'Saving…' : 'Add product'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
@@ -269,7 +731,7 @@ export default function SettingsPage() {
           <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
             <h2 className="text-sm font-bold text-slate-900">Printer connection</h2>
             <p className="mt-1 text-sm text-slate-500">
-              When enabled, allowed users see a Bluetooth printer indicator next to WhatsApp. The last printer this browser used reconnects automatically when the app is open.
+              When enabled, allowed users see a Bluetooth printer indicator next to WhatsApp. Sign-in reconnects the last printer this browser used, and retries it in parallel with any other permitted Bluetooth printer.
             </p>
             <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
               <input
@@ -284,7 +746,7 @@ export default function SettingsPage() {
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-slate-900">Enable Bluetooth printer</span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
-                  Allow pairing with an 80mm XPrinter over Bluetooth from this browser. After the first scan, that printer reconnects automatically when the system and this app are on.
+                  Allow pairing with an 80mm XPrinter over Bluetooth from this browser. After the first scan, that printer is saved and reconnects automatically when the user signs in.
                 </span>
               </span>
             </label>

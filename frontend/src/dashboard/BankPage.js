@@ -535,6 +535,7 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
   const [payments, setPayments] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [staff, setStaff] = useState([]);
   const [lorries, setLorries] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -554,13 +555,14 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
     setLoading(true);
     setError(null);
     try {
-      const [payRes, expRes, promoRes, staffRes, lorryRes, shopRes] = await Promise.all([
+      const [payRes, expRes, promoRes, staffRes, lorryRes, shopRes, retRes] = await Promise.all([
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/cash-book-entries`),
         fetch(`${apiBase}/api/promotions`),
         fetch(`${apiBase}/api/staff`),
         fetch(`${apiBase}/api/lorries`),
         fetch(`${apiBase}/api/shop`),
+        fetch(`${apiBase}/api/returns`),
       ]);
       if (!payRes.ok) throw new Error('Failed to load payments');
       const payData = await payRes.json();
@@ -577,6 +579,12 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
         setPromotions(Array.isArray(promoData) ? promoData : []);
       } else {
         setPromotions([]);
+      }
+      if (retRes.ok) {
+        const retData = await retRes.json();
+        setReturnsRows(Array.isArray(retData) ? retData : []);
+      } else {
+        setReturnsRows([]);
       }
       if (staffRes.ok) {
         const staffData = await staffRes.json();
@@ -612,8 +620,8 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
   }, [load, refreshToken]);
 
   const sourceEntries = useMemo(
-    () => buildCashBookSourceEntries(payments, expenses, promotions),
-    [payments, expenses, promotions],
+    () => buildCashBookSourceEntries(payments, expenses, promotions, returnsRows),
+    [payments, expenses, promotions, returnsRows],
   );
 
   const ledgerRows = useMemo(

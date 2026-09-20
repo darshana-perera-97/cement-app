@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AUTH_CHANGED } from '../auth';
 import { getApiBase } from '../apiBase';
 import {
   LoadingSpinner,
@@ -59,6 +60,13 @@ export function PrinterProvider({ children }) {
   const [printJob, setPrintJob] = useState(null);
   const printResolver = useRef(null);
   const printChain = useRef(Promise.resolve());
+  const [authTick, setAuthTick] = useState(0);
+
+  useEffect(() => {
+    const onAuth = () => setAuthTick((n) => n + 1);
+    window.addEventListener(AUTH_CHANGED, onAuth);
+    return () => window.removeEventListener(AUTH_CHANGED, onAuth);
+  }, []);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -98,10 +106,13 @@ export function PrinterProvider({ children }) {
   const showIndicator = shouldShowPrinterIndicator(settings);
 
   useEffect(() => {
-    if (!showIndicator) return undefined;
+    if (!showIndicator) {
+      stopPrinterAutoReconnect();
+      return undefined;
+    }
     startPrinterAutoReconnect();
     return () => stopPrinterAutoReconnect();
-  }, [showIndicator]);
+  }, [showIndicator, authTick]);
 
   const openConnectModal = useCallback(() => {
     setActionError('');
@@ -311,7 +322,7 @@ export function PrinterStatusButton() {
     : connection.connecting
       ? `Connecting to ${connection.deviceName || 'the last Bluetooth printer'}…`
       : connection.deviceName
-        ? `Last printer: ${connection.deviceName}. It reconnects automatically when this page is open. Click to manage.`
+        ? `Last printer: ${connection.deviceName}. It reconnects automatically when you sign in. Click to manage.`
         : 'Bluetooth printer. Click to scan and connect.';
 
   return (
@@ -356,7 +367,7 @@ function PrinterConnectModal({ connection, busy, testBusy, error, onClose, onCon
               Bluetooth printer
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              The printer reconnects automatically while this page stays open. After a refresh, tap Connect and pick the same 80mm XPrinter.
+              Sign-in reconnects the last 80mm XPrinter automatically. After a refresh, it retries that printer in the background; scan once if this browser has not used it yet.
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-50">

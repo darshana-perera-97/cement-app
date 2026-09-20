@@ -1,4 +1,9 @@
 import { ALL_MANAGER_ACCESS_KEYS, COLLECTOR_ACCESS_KEYS, DASHBOARD_NAV } from './dashboard/navConfig';
+import { getStockUpdateEnabled, setStockUpdateEnabledCache } from './stockUpdateSettings';
+import {
+  getCollectorUnloadPriceEnabled,
+  setCollectorUnloadPriceEnabledCache,
+} from './collectorUnloadPriceSettings';
 
 const AUTH_KEY = 'cs-store-auth';
 const USER_KEY = 'cs-store-username';
@@ -7,6 +12,13 @@ const TOKEN_KEY = 'cs-store-token';
 const STAFF_ROLE_KEY = 'cs-store-staff-role';
 const DISPLAY_NAME_KEY = 'cs-store-display-name';
 const MANAGER_ACCESS_KEY = 'cs-store-manager-access';
+
+export const AUTH_CHANGED = 'cs-auth-changed';
+
+function notifyAuthChanged() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(AUTH_CHANGED));
+}
 
 export function setManagerAccess(keys) {
   if (Array.isArray(keys)) {
@@ -28,9 +40,26 @@ export function getManagerAccess() {
   }
 }
 
+export function isDsr() {
+  return getStaffRole() === 'DSR';
+}
+
+export function canAccessMap() {
+  if (isAdmin()) return true;
+  if (!getStockUpdateEnabled()) return false;
+  return isCollector() || isDsr();
+}
+
+export function canAccessCollectorUnloadPrices() {
+  return isCollector() && getCollectorUnloadPriceEnabled();
+}
+
 export function hasDashboardAccess(accessKey) {
   if (!accessKey) return false;
+  if (accessKey === 'unloads') return canAccessCollectorUnloadPrices();
   if (isAdmin()) return true;
+  if (accessKey === 'map') return canAccessMap();
+  if (isDsr()) return false;
   if (getStaffRole() === 'Manager') {
     const access = getManagerAccess();
     return Array.isArray(access) && access.includes(accessKey);
@@ -43,6 +72,7 @@ export function hasDashboardAccess(accessKey) {
 
 export function getFirstAllowedDashboardPath() {
   if (isAdmin()) return '/dashboard/analytics';
+  if (isDsr()) return canAccessMap() ? '/dashboard/map' : '/dashboard/no-access';
   if (getStaffRole() === 'Manager') {
     const item = DASHBOARD_NAV.find((n) => n.accessKey && hasDashboardAccess(n.accessKey));
     return item?.to || '/dashboard/no-access';
@@ -78,6 +108,7 @@ export function setAuth(username, role, token, staffRole, managerAccess) {
   } else {
     sessionStorage.removeItem(MANAGER_ACCESS_KEY);
   }
+  notifyAuthChanged();
 }
 
 /** Driver portal session (NIC login on /unloads). */
@@ -95,6 +126,7 @@ export function setDriverAuth(username, token, displayName) {
     sessionStorage.setItem(DISPLAY_NAME_KEY, String(displayName).trim());
   }
   sessionStorage.removeItem(MANAGER_ACCESS_KEY);
+  notifyAuthChanged();
 }
 
 export function clearAuth() {
@@ -105,6 +137,7 @@ export function clearAuth() {
   sessionStorage.removeItem(STAFF_ROLE_KEY);
   sessionStorage.removeItem(DISPLAY_NAME_KEY);
   sessionStorage.removeItem(MANAGER_ACCESS_KEY);
+  notifyAuthChanged();
 }
 
 export function isAuthed() {
@@ -183,7 +216,12 @@ export async function refreshSessionFromServer(apiBase) {
   if (!root || !isAuthed()) return;
   try {
     const res = await authFetch(`${root}/api/me`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (res.status === 403 && isDsr()) {
+        clearAuth();
+      }
+      return;
+    }
     const data = await res.json();
     const displayName = String(data.name || data.username || '').trim();
     if (displayName) sessionStorage.setItem(DISPLAY_NAME_KEY, displayName);
@@ -197,6 +235,15 @@ export async function refreshSessionFromServer(apiBase) {
     if (staffRole) sessionStorage.setItem(STAFF_ROLE_KEY, staffRole);
     if (staffRole === 'Manager' && Array.isArray(data.managerAccess)) {
       setManagerAccess(data.managerAccess);
+    }
+    if (data.stockUpdateEnabled != null) {
+      setStockUpdateEnabledCache(Boolean(data.stockUpdateEnabled));
+    }
+    if (data.collectorUnloadPriceEnabled != null) {
+      setCollectorUnloadPriceEnabledCache(Boolean(data.collectorUnloadPriceEnabled));
+    }
+    if (staffRole === 'DSR' && !getStockUpdateEnabled()) {
+      clearAuth();
     }
   } catch {
     /* ignore */

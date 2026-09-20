@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isAdmin } from '../auth';
+import { authFetch, getFirstAllowedDashboardPath, getUsername, isAdmin } from '../auth';
+import { useStockUpdateEnabled } from '../stockUpdateSettings';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -22,7 +23,13 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { ALL_MANAGER_ACCESS_KEYS, MANAGER_ACCESS_OPTIONS } from './navConfig';
 
-const USER_ROLES = ['Admin', 'Manager', 'Driver', 'Collector'];
+const BASE_USER_ROLES = ['Admin', 'Manager', 'Driver', 'Collector'];
+
+function rolesForForm(stockUpdateEnabled, currentRole = '') {
+  const roles = [...BASE_USER_ROLES];
+  if (stockUpdateEnabled || currentRole === 'DSR') roles.push('DSR');
+  return roles;
+}
 
 const emptyForm = () => ({
   role: 'Manager',
@@ -51,6 +58,8 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState(null);
   const [detailUser, setDetailUser] = useState(null);
+  const { enabled: stockUpdateEnabled } = useStockUpdateEnabled();
+  const userRoles = rolesForForm(stockUpdateEnabled, form.role);
 
   const load = useCallback(async () => {
     if (!isAdmin()) return;
@@ -117,7 +126,7 @@ export default function UsersPage() {
     setModalMode('edit');
     setEditingId(user.id);
     setForm({
-      role: USER_ROLES.includes(user.role) ? user.role : 'Manager',
+      role: rolesForForm(stockUpdateEnabled, user.role).includes(user.role) ? user.role : 'Manager',
       name: user.name || '',
       contact: user.contact || '',
       nic: user.nic || '',
@@ -137,7 +146,7 @@ export default function UsersPage() {
   };
 
   if (!isAdmin()) {
-    return <Navigate to="/dashboard/analytics" replace />;
+    return <Navigate to={getFirstAllowedDashboardPath()} replace />;
   }
 
   const handleSubmit = async (e) => {
@@ -419,7 +428,7 @@ export default function UsersPage() {
                   disabled={saving}
                   required
                 >
-                  {USER_ROLES.map((role) => (
+                  {userRoles.map((role) => (
                     <option key={role} value={role}>
                       {role}
                     </option>

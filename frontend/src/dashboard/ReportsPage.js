@@ -44,7 +44,7 @@ import {
   COLLECTION_DAY_BUCKETS,
 } from './collectionsReport';
 import { downloadCollectionsReportPdf } from './collectorCommissionPdf';
-import { usePrinter } from '../printer/PrinterProvider';
+import PrintCollectionsSummaryModal from './PrintCollectionsSummaryModal';
 
 const apiBase = getApiBase();
 
@@ -855,7 +855,6 @@ function BrandRemainingBreakdown({ byBrand, brandKey = '' }) {
 
 export default function ReportsPage() {
   const { brands } = useBagProducts();
-  const { requestPrint } = usePrinter();
   const [loads, setLoads] = useState([]);
   const [bills, setBills] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -887,6 +886,7 @@ export default function ReportsPage() {
   const [collectionStaff, setCollectionStaff] = useState([]);
   const [collectorDisplayName, setCollectorDisplayName] = useState('');
   const [collectorSession, setCollectorSession] = useState(null);
+  const [printSummaryOpen, setPrintSummaryOpen] = useState(false);
 
   const collectorReportsView = isCollector();
   const showDailyCollectionsReport = isManagerOrAdmin() || collectorReportsView;
@@ -2003,8 +2003,8 @@ export default function ReportsPage() {
     showDailyReportRecordedBy,
   ]);
 
-  const handlePrintDailyCollections = useCallback(() => {
-    requestPrint('dailyCollections', {
+  const dailyCollectionsPrintPayload = useMemo(
+    () => ({
       reportDate: dailyReportDate,
       collectorName: collectorDisplayName || getDisplayName() || '',
       cashTotal: dailyReportTotals.cash,
@@ -2014,22 +2014,30 @@ export default function ReportsPage() {
       cdmTotal: dailyReportCdmTotal,
       bankTransferRows: dailyReportBankTransferRows,
       bankTransferTotal: dailyReportBankTransferTotal,
-    });
-  }, [
-    requestPrint,
-    dailyReportDate,
-    collectorDisplayName,
-    dailyReportTotals.cash,
-    dailyReportChequeRows,
-    dailyReportChequeTotal,
-    dailyReportCdmRows,
-    dailyReportCdmTotal,
-    dailyReportBankTransferRows,
-    dailyReportBankTransferTotal,
-  ]);
+    }),
+    [
+      dailyReportDate,
+      collectorDisplayName,
+      dailyReportTotals.cash,
+      dailyReportChequeRows,
+      dailyReportChequeTotal,
+      dailyReportCdmRows,
+      dailyReportCdmTotal,
+      dailyReportBankTransferRows,
+      dailyReportBankTransferTotal,
+    ],
+  );
 
   return (
     <div className="space-y-5">
+      {collectorReportsView ? (
+        <PrintCollectionsSummaryModal
+          open={printSummaryOpen}
+          onClose={() => setPrintSummaryOpen(false)}
+          reportDate={dailyReportDate}
+          printPayload={dailyCollectionsPrintPayload}
+        />
+      ) : null}
       <div className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
@@ -2098,7 +2106,7 @@ export default function ReportsPage() {
             {collectorReportsView ? (
               <button
                 type="button"
-                onClick={handlePrintDailyCollections}
+                onClick={() => setPrintSummaryOpen(true)}
                 disabled={loading || !!error}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-5 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 transition hover:bg-sky-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40 disabled:cursor-not-allowed disabled:opacity-50"
               >

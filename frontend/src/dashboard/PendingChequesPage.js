@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch } from '../auth';
+import { authFetch, isCollector } from '../auth';
+import ChequeCalendarSection from './ChequeCalendarSection';
+import { buildChequeCalendarItems } from './chequeCalendar';
 import { buildChequeTableRows, depositQueueRowKey } from './paymentCheques';
 import { buildPendingPoOutgoingRows } from './poChequeDisplay';
 import {
@@ -269,8 +271,10 @@ function OutgoingPoChequeSection({ rows, search }) {
 }
 
 export default function PendingChequesPage() {
+  const collectorView = isCollector();
   const [incomingRows, setIncomingRows] = useState([]);
   const [outgoingRows, setOutgoingRows] = useState([]);
+  const [calendarItems, setCalendarItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -279,38 +283,56 @@ export default function PendingChequesPage() {
     setLoading(true);
     setError(null);
     try {
-      const [payRes, poRes, shopRes] = await Promise.all([
-        authFetch(`${apiRoot}/api/payments`),
-        authFetch(`${apiRoot}/api/purchase-orders`),
-        authFetch(`${apiRoot}/api/shop`),
-      ]);
+      const payRes = await authFetch(`${apiRoot}/api/payments`);
       if (!payRes.ok) throw new Error('Failed to load payments');
       const payments = await payRes.json();
-      setIncomingRows(buildIncomingPendingRows(Array.isArray(payments) ? payments : []));
+      const paymentList = Array.isArray(payments) ? payments : [];
+      setIncomingRows(buildIncomingPendingRows(paymentList));
 
+      if (collectorView) {
+        setOutgoingRows([]);
+        setCalendarItems([]);
+        return;
+      }
+
+      const [poRes, shopRes, companyRes, ownerRes] = await Promise.all([
+        authFetch(`${apiRoot}/api/purchase-orders`),
+        authFetch(`${apiRoot}/api/shop`),
+        authFetch(`${apiRoot}/api/cash-book-entries?category=company_cheque`),
+        authFetch(`${apiRoot}/api/cash-book-entries?category=owner_share`),
+      ]);
       const purchaseOrders = poRes.ok ? await poRes.json() : [];
       const shopData = shopRes.ok ? await shopRes.json() : {};
       const bankAccounts = Array.isArray(shopData.bankAccounts) ? shopData.bankAccounts : [];
-      setOutgoingRows(
-        buildPendingPoOutgoingRows(
-          Array.isArray(purchaseOrders) ? purchaseOrders : [],
+      const poList = Array.isArray(purchaseOrders) ? purchaseOrders : [];
+      setOutgoingRows(buildPendingPoOutgoingRows(poList, bankAccounts));
+
+      const companyCheques = companyRes.ok ? await companyRes.json() : [];
+      const ownerCheques = ownerRes.ok ? await ownerRes.json() : [];
+      setCalendarItems(
+        buildChequeCalendarItems({
+          payments: paymentList,
+          companyCheques: Array.isArray(companyCheques) ? companyCheques : [],
+          ownerCheques: Array.isArray(ownerCheques) ? ownerCheques : [],
+          purchaseOrders: poList,
           bankAccounts,
-        ),
+        }),
       );
     } catch (e) {
       setError(e.message || 'Could not load data');
       setIncomingRows([]);
       setOutgoingRows([]);
+      setCalendarItems([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [collectorView]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const totalCount = incomingRows.length + outgoingRows.length;
+  const totalCount = collectorView ? incomingRows.length : incomingRows.length + outgoingRows.length;
   const filteredIncomingCount = useMemo(() => {
     if (!search.trim()) return incomingRows.length;
     return incomingRows.filter((row) =>
@@ -324,6 +346,7 @@ export default function PendingChequesPage() {
     ).length;
   }, [incomingRows, search]);
   const filteredOutgoingCount = useMemo(() => {
+    if (collectorView) return 0;
     if (!search.trim()) return outgoingRows.length;
     return outgoingRows.filter((row) =>
       rowMatchesQuery(search, [
@@ -335,34 +358,16 @@ export default function PendingChequesPage() {
         row.amount,
       ]),
     ).length;
-  }, [outgoingRows, search]);
-  const filteredTotalCount = filteredIncomingCount + filteredOutgoingCount;
+  }, [collectorView, outgoingRows, search]);
+  const filteredTotalCount = collectorView ? filteredIncomingCount : filteredIncomingCount + filteredOutgoingCount;
 
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-500">
-        Incoming cheques waiting to be deposited at the bank, and outgoing PO cheques issued to buy stock
-        that have not yet converted.
+        {collectorView
+          ? 'Customer cheques received and not yet marked as deposited at the bank.'
+          : 'Month calendar of converting dates, then incoming cheques waiting to be deposited and outgoing PO cheques that have not yet converted.'}
       </p>
-
-      <TableFiltersBar
-        hint={
-          !loading && totalCount > 0
-            ? `${filteredTotalCount} pending cheque${filteredTotalCount === 1 ? '' : 's'} · ${filteredIncomingCount} to deposit · ${filteredOutgoingCount} PO`
-            : null
-        }
-      >
-        <label className={filterLabel}>
-          Search
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Customer, product, cheque #, bank…"
-            className={filterControl}
-          />
-        </label>
-      </TableFiltersBar>
 
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
@@ -376,8 +381,35 @@ export default function PendingChequesPage() {
         </div>
       ) : (
         <div className="space-y-10">
-          <IncomingChequeSection rows={incomingRows} search={search} />
-          <OutgoingPoChequeSection rows={outgoingRows} search={search} />
+          {!collectorView ? <ChequeCalendarSection items={calendarItems} /> : null}
+
+          <div className="space-y-6">
+            <TableFiltersBar
+              hint={
+                totalCount > 0
+                  ? collectorView
+                    ? `${filteredTotalCount} pending cheque${filteredTotalCount === 1 ? '' : 's'} awaiting deposit`
+                    : `${filteredTotalCount} pending cheque${filteredTotalCount === 1 ? '' : 's'} · ${filteredIncomingCount} to deposit · ${filteredOutgoingCount} PO`
+                  : null
+              }
+            >
+              <label className={filterLabel}>
+                Search
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={
+                    collectorView ? 'Customer, bill #, cheque #…' : 'Customer, product, cheque #, bank…'
+                  }
+                  className={filterControl}
+                />
+              </label>
+            </TableFiltersBar>
+
+            <IncomingChequeSection rows={incomingRows} search={search} />
+            {!collectorView ? <OutgoingPoChequeSection rows={outgoingRows} search={search} /> : null}
+          </div>
         </div>
       )}
     </div>

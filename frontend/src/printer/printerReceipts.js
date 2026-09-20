@@ -43,36 +43,31 @@ function formatPrintStamp(value = new Date()) {
   return `${dd}/${mm}/${yyyy}  ${String(hours).padStart(2, '0')}:${minutes}:${seconds}${ampm}`;
 }
 
-function bankAccountLabel(snap, fallbackId = '') {
+function bankNameFromSnap(snap) {
   if (snap && typeof snap === 'object') {
-    const nick = String(snap.nickName ?? '').trim();
-    const detail = [snap.bank, snap.accountNumber].map((x) => String(x ?? '').trim()).filter(Boolean).join(' ');
-    if (nick && detail) return `${nick} · ${detail}`;
-    return nick || detail || fallbackId || '';
+    return String(snap.bank ?? '').trim();
   }
-  return String(fallbackId ?? '').trim();
+  return '';
+}
+
+function accountNoFromSnap(snap) {
+  if (snap && typeof snap === 'object') {
+    return String(snap.accountNumber ?? '').trim();
+  }
+  return '';
 }
 
 function invoiceTitle(inv) {
   const num = String(inv.invoiceNumber ?? '').trim();
   if (num) return num.toLowerCase() === 'opening' ? 'Opening balance' : `Invoice ${num}`;
   const details = String(inv.details ?? '').trim();
-  if (details) return details.split(' · ')[0];
-  return inv.date ? `Bill ${formatDate(inv.date)}` : 'Invoice';
-}
-
-function invoiceSubtitle(inv) {
-  const title = invoiceTitle(inv);
-  const details = String(inv.details ?? '').trim();
-  if (!details) return '';
-  const parts = details.split(' · ').map((p) => p.trim()).filter(Boolean);
-  const leftover = parts.filter((p) => {
-    if (p === title) return false;
-    if (/^inv\s+/i.test(p) && title.toLowerCase().includes(p.slice(4).trim().toLowerCase())) return false;
-    if (p.toLowerCase() === 'opening balance' && title.toLowerCase().includes('opening')) return false;
-    return true;
-  });
-  return leftover.join(' · ');
+  const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
+  if (invMatch) {
+    const extracted = invMatch[1].trim();
+    if (extracted.toLowerCase() === 'opening') return 'Opening balance';
+    return `Invoice ${extracted}`;
+  }
+  return 'Invoice';
 }
 
 function shopLines(shop) {
@@ -158,66 +153,31 @@ function pushInvoiceLines(lines, payment) {
   const invoices = getPaymentReceiptInvoices(payment);
   if (invoices.length === 0) return;
 
-  const hasAmounts = invoices.some((inv) => inv.appliedAmount > 0 && !inv.taggedOnly);
   lines.push({ kind: 'align', value: 'center' });
-  lines.push({ text: hasAmounts ? 'APPLIED TO INVOICES' : 'INVOICES', bold: true });
+  lines.push({ text: 'INVOICES', bold: true });
   lines.push({ kind: 'rule' });
   lines.push({ kind: 'align', value: 'left' });
 
-  let appliedSum = 0;
-  let settledCount = 0;
-  invoices.forEach((inv, index) => {
-    if (index > 0) lines.push({ kind: 'blank' });
-    appliedSum += inv.appliedAmount || 0;
-    if (inv.settled) settledCount += 1;
-
-    const status = inv.taggedOnly ? '' : inv.settled ? 'SETTLED' : inv.appliedAmount > 0 ? 'PART' : '';
+  invoices.forEach((inv) => {
     lines.push({
       kind: 'cols',
       left: invoiceTitle(inv),
-      right: status,
-      bold: true,
+      right: inv.date ? formatDate(inv.date) : '',
     });
-    const subtitle = invoiceSubtitle(inv);
-    if (inv.date) {
-      lines.push({
-        kind: 'cols',
-        left: formatDate(inv.date),
-        right: inv.taggedOnly
-          ? inv.billTotal > 0
-            ? money(inv.billTotal)
-            : ''
-          : money(inv.appliedAmount),
-      });
-    } else if (!inv.taggedOnly && inv.appliedAmount > 0) {
-      lines.push({ kind: 'cols', left: 'Applied', right: money(inv.appliedAmount) });
+    if (inv.billTotal > 0) {
+      lines.push({ kind: 'cols', left: 'Invoice amt', right: money(inv.billTotal) });
     }
-    if (subtitle) lines.push({ text: subtitle });
-    if (!inv.taggedOnly && inv.billTotal > 0) {
-      lines.push({ kind: 'cols', left: 'Invoice total', right: money(inv.billTotal) });
-    }
-    if (!inv.taggedOnly && !inv.settled && inv.remainingAfter != null && inv.remainingAfter > 0.009) {
-      lines.push({ kind: 'cols', left: 'Balance after', right: money(inv.remainingAfter) });
+    if (inv.remainingAfter != null) {
+      lines.push({ kind: 'cols', left: 'Remaining', right: money(inv.remainingAfter) });
     }
   });
 
   lines.push({ kind: 'rule' });
-  if (hasAmounts) {
-    lines.push({ kind: 'cols', left: 'Applied total', right: money(appliedSum), bold: true });
-  }
-  if (settledCount > 0) {
-    lines.push({
-      kind: 'cols',
-      left: 'Fully settled',
-      right: `${settledCount} invoice${settledCount === 1 ? '' : 's'}`,
-    });
-  }
 }
 
 export function buildUnloadReceiptLines(unload, shop) {
   const items = bagLinesFromRow(unload);
   const totalBags = items.reduce((s, i) => s + i.bags, 0);
-  const totalAmount = items.reduce((s, i) => s + i.amount, 0);
   const lines = [
     ...shopLines(shop),
     { kind: 'align', value: 'center' },
@@ -243,9 +203,6 @@ export function buildUnloadReceiptLines(unload, shop) {
       ],
     },
   ];
-  if (totalAmount > 0) {
-    lines.push({ kind: 'cols', left: 'AMOUNT', right: money(totalAmount), bold: true });
-  }
   lines.push({ kind: 'blank' });
   lines.push({ text: 'Received the above goods in correct quantity and in good condition.' });
   lines.push({ kind: 'blank' });
@@ -312,29 +269,30 @@ export function buildPaymentReceiptLines(payment, shop) {
     for (const d of cdmDeposits) {
       const bits = [
         d.cdmNumber ? `#${d.cdmNumber}` : null,
-        d.cdmDate ? formatDate(d.cdmDate) : null,
+        bankNameFromSnap(d.bankAccount) || null,
+        accountNoFromSnap(d.bankAccount) || null,
       ].filter(Boolean);
-      const bank = bankAccountLabel(d.bankAccount, d.bankAccountId);
       lines.push({
         kind: 'cols',
         left: bits.join('  ') || 'CDM deposit',
         right: money(d.amount),
       });
-      if (bank) lines.push({ kind: 'cols', left: 'Bank', right: bank });
     }
   }
   if (onlineTransfers.length > 0) {
     lines.push({ kind: 'blank' });
     lines.push({ text: onlineTransfers.length === 1 ? 'Transfer details' : 'Online transfers', bold: true });
     for (const t of onlineTransfers) {
+      const bits = [
+        t.reference ? `#${t.reference}` : null,
+        bankNameFromSnap(t.bankAccount) || null,
+        accountNoFromSnap(t.bankAccount) || null,
+      ].filter(Boolean);
       lines.push({
         kind: 'cols',
-        left: t.reference ? `Ref ${t.reference}` : 'Online transfer',
+        left: bits.join('  ') || 'Online transfer',
         right: money(t.amount),
       });
-      if (t.transferDate) lines.push({ kind: 'cols', left: 'Date', right: formatDate(t.transferDate) });
-      const onlineBank = bankAccountLabel(t.bankAccount, t.bankAccountId);
-      if (onlineBank) lines.push({ kind: 'cols', left: 'Bank', right: onlineBank });
     }
   }
 
@@ -467,6 +425,15 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
   });
 
   lines.push({ kind: 'blank' });
+  if (report?.collectionOver) {
+    lines.push({ kind: 'align', value: 'center' });
+    lines.push({ kind: 'rule', char: '=' });
+    lines.push({ text: 'COLLECTION OVER', bold: true, double: true });
+    lines.push({ text: 'FOR THIS DAY', bold: true });
+    lines.push({ text: 'No further payments will be added' });
+    lines.push({ kind: 'rule', char: '=' });
+    lines.push({ kind: 'blank' });
+  }
   lines.push({ kind: 'align', value: 'center' });
   lines.push({ text: formatPrintStamp() });
   return lines;

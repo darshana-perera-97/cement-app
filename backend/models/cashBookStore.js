@@ -234,6 +234,13 @@ function validateCreateBody(body, { staffById, lorryById, bankAccountById } = {}
 
   if (category === 'other') {
     if (!description) return { error: 'Description is required' };
+    const staffUserId = String(body.staffUserId ?? '').trim();
+    if (staffUserId) {
+      const staff = staffById?.get(staffUserId);
+      if (!staff) return { error: 'Selected person was not found' };
+      payload.staffUserId = staffUserId;
+      payload.staffName = String(staff.name || '').trim() || staffUserId;
+    }
   }
 
   if (category === 'company_cheque') {

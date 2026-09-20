@@ -9,7 +9,7 @@ const {
 
 const USERS_FILE = path.join(__dirname, '..', 'data', 'users.json');
 
-const STAFF_ROLES = ['Admin', 'Manager', 'Driver', 'Collector'];
+const STAFF_ROLES = ['Admin', 'Manager', 'Driver', 'Collector', 'DSR'];
 
 async function readUsers() {
   try {
@@ -127,7 +127,7 @@ async function createUser({ name, contact, nic, driverLicense, customerId, role,
     return { ok: false, error: 'NIC is required' };
   }
   if (!staffRole) {
-    return { ok: false, error: 'Role must be Admin, Manager, Driver, or Collector' };
+    return { ok: false, error: 'Role must be Admin, Manager, Driver, Collector, or DSR' };
   }
   if (staffRole === 'Driver' && !license) {
     return { ok: false, error: 'Driver license is required for Driver role' };
@@ -206,7 +206,7 @@ async function updateUser(id, { name, contact, nic, driverLicense, customerId, r
     return { ok: false, error: 'NIC is required' };
   }
   if (!staffRole) {
-    return { ok: false, error: 'Role must be Admin, Manager, Driver, or Collector' };
+    return { ok: false, error: 'Role must be Admin, Manager, Driver, Collector, or DSR' };
   }
   if (staffRole === 'Driver' && !license) {
     return { ok: false, error: 'Driver license is required for Driver role' };

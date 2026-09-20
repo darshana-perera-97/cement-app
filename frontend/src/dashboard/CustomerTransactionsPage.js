@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, getUsername, isCollector, isManagerOrAdmin } from '../auth';
+import { authFetch, canEditDetails, getUsername, isAdmin, isCollector, isManagerOrAdmin } from '../auth';
+import PaymentReceiptPdfButton from './PaymentReceiptPdfButton';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -30,6 +31,7 @@ import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlem
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { CollectorSelectField, useCollectors } from './useCollectors';
 import { usePrinter } from '../printer/PrinterProvider';
+import { useCollectorCollectionClosed } from './collectionDayClose';
 
 const apiBase = getApiBase();
 
@@ -212,8 +214,9 @@ export default function CustomerTransactionsPage() {
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
   const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
   const { collectors, loading: collectorsLoading } = useCollectors();
-
   const today = useMemo(() => todayYmdLocal(), []);
+  const { closed: collectionClosed } = useCollectorCollectionClosed(today);
+  const paymentsLocked = isCollector() && collectionClosed;
 
   const openCustomerEdit = () => {
     setCustomerForm(customerToForm(customer));
@@ -413,7 +416,8 @@ export default function CustomerTransactionsPage() {
                 onClick={() =>
                   useSeparateBillSettlement ? setSeparateBillModalOpen(true) : setRecordPaymentOpen(true)
                 }
-                disabled={collectorSettingsLoading}
+                disabled={collectorSettingsLoading || paymentsLocked}
+                title={paymentsLocked ? 'Collection for today is over. You cannot add more payments.' : undefined}
                 className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60"
               >
                 Record payment
@@ -422,6 +426,12 @@ export default function CustomerTransactionsPage() {
           ) : null}
         </div>
       </div>
+
+      {paymentsLocked ? (
+        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950 ring-1 ring-amber-100" role="status">
+          Collection for today is over. You cannot add more payments.
+        </p>
+      ) : null}
 
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
@@ -555,10 +565,12 @@ export default function CustomerTransactionsPage() {
                 <p className="mt-1 text-sm text-slate-500">
                   Credit sales and payments will show up here once recorded.
                 </p>
-                {customer ? (
+                {customer && !paymentsLocked ? (
                   <button
                     type="button"
-                    onClick={() => setRecordPaymentOpen(true)}
+                    onClick={() =>
+                      useSeparateBillSettlement ? setSeparateBillModalOpen(true) : setRecordPaymentOpen(true)
+                    }
                     className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:text-indigo-800"
                   >
                     Record a payment →
@@ -619,10 +631,14 @@ export default function CustomerTransactionsPage() {
                         <p className="mt-1 text-sm text-slate-500">
                           Credit sales and payments will show up here once recorded.
                         </p>
-                        {customer ? (
+                        {customer && !paymentsLocked ? (
                           <button
                             type="button"
-                            onClick={() => setRecordPaymentOpen(true)}
+                            onClick={() =>
+                              useSeparateBillSettlement
+                                ? setSeparateBillModalOpen(true)
+                                : setRecordPaymentOpen(true)
+                            }
                             className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:text-indigo-800"
                           >
                             Record a payment →
@@ -696,16 +712,19 @@ export default function CustomerTransactionsPage() {
         onClose={() => setDetailTx(null)}
         actions={
           detailPaymentForPrint ? (
-            <button
-              type="button"
-              onClick={() => requestPrint('cashCollection', detailPaymentForPrint)}
-              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
-              </svg>
-              Print bill
-            </button>
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => requestPrint('cashCollection', detailPaymentForPrint)}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
+                </svg>
+                Print bill
+              </button>
+              {isAdmin() ? <PaymentReceiptPdfButton payment={detailPaymentForPrint} /> : null}
+            </div>
           ) : null
         }
       />

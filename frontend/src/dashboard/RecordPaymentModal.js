@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, mustUseTodayRecordDate } from '../auth';
+import { authFetch, getUsername, isCollector, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
+import { useCollectorCollectionClosed } from './collectionDayClose';
 import {
   normalizePaymentReceiptInput,
   suggestNextPaymentReceiptNumber,
@@ -228,6 +229,9 @@ export default function RecordPaymentModal({
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const paymentDay = useMemo(() => todayYmdLocal(), []);
+  const { closed: collectionClosed } = useCollectorCollectionClosed(paymentDay);
+  const newPaymentsLocked = isCollector() && collectionClosed && !editPayment;
 
   const loadBills = useCallback(async () => {
     try {
@@ -500,6 +504,10 @@ export default function RecordPaymentModal({
       setSaveError('You need to be signed in with a username.');
       return;
     }
+    if (newPaymentsLocked) {
+      setSaveError('Collection for this day is over. You cannot add more payments.');
+      return;
+    }
     if (!form.customerId) {
       setSaveError('Select a customer.');
       return;
@@ -692,6 +700,11 @@ export default function RecordPaymentModal({
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
             <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8 lg:gap-y-4 lg:space-y-0">
+              {newPaymentsLocked ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-amber-100 lg:col-span-2" role="status">
+                  Collection for today is over. You cannot add more payments.
+                </p>
+              ) : null}
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100 lg:col-span-2">
                   {saveError}
@@ -1202,7 +1215,7 @@ export default function RecordPaymentModal({
               </button>
               <button
                 type="submit"
-                disabled={saving || customers.length === 0}
+                disabled={saving || customers.length === 0 || newPaymentsLocked}
                 className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md disabled:opacity-60 sm:w-auto sm:py-2.5"
               >
                 {saving ? 'Saving…' : editPayment ? 'Save changes' : 'Save payment'}

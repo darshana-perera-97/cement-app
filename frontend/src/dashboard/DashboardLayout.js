@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { clearAuth, getDisplayName, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isManagerOrAdmin, refreshSessionFromServer, getStaffRole, authFetch } from '../auth';
+import { clearAuth, canAccessMap, getDisplayName, getToken, getUsername, hasDashboardAccess, isAdmin, isAuthed, isCollector, isDsr, isManagerOrAdmin, refreshSessionFromServer, getStaffRole, authFetch } from '../auth';
+import { useStockUpdateEnabled } from '../stockUpdateSettings';
+import { useCollectorUnloadPriceEnabled } from '../collectorUnloadPriceSettings';
 import { getApiBase } from '../apiBase';
 import { shopNameInitials, useShopName } from '../shopConfig';
 import { DASHBOARD_NAV } from './navConfig';
@@ -284,7 +286,13 @@ export default function DashboardLayout() {
   const shopName = useShopName();
   const section = getSectionTitle(location.pathname);
   const headerTitle = section === 'Analytics' ? 'Main Dashboard' : section;
-  const hideRightPanel = location.pathname.startsWith('/dashboard/bank');
+  const { enabled: stockUpdateEnabled, ready: stockUpdateReady } = useStockUpdateEnabled();
+  const { enabled: collectorUnloadPriceEnabled } = useCollectorUnloadPriceEnabled();
+  const hideRightPanel =
+    location.pathname.startsWith('/dashboard/bank') ||
+    location.pathname.startsWith('/dashboard/map') ||
+    location.pathname.startsWith('/dashboard/profiles') ||
+    isDsr();
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -428,11 +436,32 @@ export default function DashboardLayout() {
 
   useEffect(() => {
     if (!isAuthed() || !getToken()) return;
-    refreshSessionFromServer(getApiBase()).then(() => setPermissionsTick((t) => t + 1));
-  }, []);
+    refreshSessionFromServer(getApiBase()).then(() => {
+      if (!isAuthed()) {
+        navigate('/login', { replace: true });
+        return;
+      }
+      setPermissionsTick((t) => t + 1);
+    });
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!stockUpdateReady) return;
+    if (isDsr() && !stockUpdateEnabled) {
+      clearAuth();
+      navigate('/login', { replace: true });
+    }
+  }, [stockUpdateEnabled, stockUpdateReady, navigate]);
 
   const navItems = DASHBOARD_NAV.filter((item) => {
-    if (item.to === '/dashboard/users' || item.to === '/dashboard/settings') return isAdmin();
+    if (item.to === '/dashboard/unloads') {
+      return isCollector() && collectorUnloadPriceEnabled;
+    }
+    if (item.to === '/dashboard/map') {
+      return isAdmin() || (stockUpdateEnabled && canAccessMap());
+    }
+    if (isDsr()) return false;
+    if (item.adminOnly) return isAdmin();
     if (isAdmin()) return true;
     if (getStaffRole() === 'Manager') {
       return item.accessKey ? hasDashboardAccess(item.accessKey) : false;
@@ -449,13 +478,15 @@ export default function DashboardLayout() {
     ? 'Administrator'
     : isCollector()
       ? 'Collector'
-      : getStaffRole() === 'Manager'
-        ? 'Manager'
-        : 'Staff';
+      : isDsr()
+        ? 'DSR'
+        : getStaffRole() === 'Manager'
+          ? 'Manager'
+          : 'Staff';
 
   const renderSidebarFooter = () => (
     <>
-      {!isCollector() ? (
+      {!isCollector() && !isDsr() ? (
       <div
         className={`rounded-2xl bg-gradient-to-br p-3 shadow-lg ring-1 ${overdueCardTint}`}
         aria-live="polite"
@@ -587,6 +618,7 @@ export default function DashboardLayout() {
 
           {/* Mobile-only: bag stock + footer sections scroll with nav */}
           <div className="mt-4 space-y-3 border-t border-slate-100 pt-4 md:hidden">
+            {isDsr() ? null : (
             <div className="rounded-2xl bg-white p-3 shadow-md ring-1 ring-slate-100">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -631,6 +663,7 @@ export default function DashboardLayout() {
                 </div>
               )}
             </div>
+            )}
             {renderSidebarFooter()}
           </div>
         </div>

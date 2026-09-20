@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, isCollector, isManagerOrAdmin } from '../auth';
+import { authFetch, canEditDetails, isAdmin, isCollector, isManagerOrAdmin } from '../auth';
+import PaymentReceiptPdfButton from './PaymentReceiptPdfButton';
 import {
   LoadingSpinner,
   TableFiltersBar,
@@ -25,6 +26,7 @@ import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlem
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { usePrinter } from '../printer/PrinterProvider';
+import { todayYmdLocal, useCollectorCollectionClosed } from './collectionDayClose';
 
 const apiBase = getApiBase();
 
@@ -54,6 +56,9 @@ export default function PaymentsPage() {
   const [detailPayment, setDetailPayment] = useState(null);
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
   const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
+  const today = useMemo(() => todayYmdLocal(), []);
+  const { closed: collectionClosed, loading: collectionClosedLoading } = useCollectorCollectionClosed(today);
+  const paymentsLocked = isCollector() && collectionClosed;
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -91,12 +96,12 @@ export default function PaymentsPage() {
   }, [loadCustomers]);
 
   useEffect(() => {
-    if (appliedCustomerPrefill.current || collectorSettingsLoading) return;
+    if (appliedCustomerPrefill.current || collectorSettingsLoading || collectionClosedLoading) return;
     const customerId = searchParams.get('customerId')?.trim();
     if (!customerId) return;
     appliedCustomerPrefill.current = true;
     setCustomerFilter(customerId);
-    if (searchParams.get('record') === '1') {
+    if (searchParams.get('record') === '1' && !paymentsLocked) {
       setEditPayment(null);
       setModalCustomerId(customerId);
       if (useSeparateBillSettlement) {
@@ -106,7 +111,14 @@ export default function PaymentsPage() {
       }
     }
     setSearchParams({}, { replace: true });
-  }, [searchParams, setSearchParams, useSeparateBillSettlement, collectorSettingsLoading]);
+  }, [
+    searchParams,
+    setSearchParams,
+    useSeparateBillSettlement,
+    collectorSettingsLoading,
+    collectionClosedLoading,
+    paymentsLocked,
+  ]);
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
@@ -143,6 +155,7 @@ export default function PaymentsPage() {
   );
 
   const openModal = (prefillCustomerId = '') => {
+    if (paymentsLocked) return;
     setEditPayment(null);
     setModalCustomerId(prefillCustomerId || '');
     if (useSeparateBillSettlement) {
@@ -182,12 +195,19 @@ export default function PaymentsPage() {
         <button
           type="button"
           onClick={() => openModal()}
-          disabled={collectorSettingsLoading}
+          disabled={collectorSettingsLoading || paymentsLocked}
+          title={paymentsLocked ? 'Collection for today is over. You cannot add more payments.' : undefined}
           className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60 sm:w-auto"
         >
           Record payment
         </button>
       </div>
+
+      {paymentsLocked ? (
+        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950 ring-1 ring-amber-100" role="status">
+          Collection for today is over. You cannot add more payments.
+        </p>
+      ) : null}
 
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
@@ -409,6 +429,7 @@ export default function PaymentsPage() {
                   Print bill
                 </button>
               ) : null}
+              {isAdmin() ? <PaymentReceiptPdfButton payment={detailPayment} /> : null}
               {canEditDetails() ? (
                 <button
                   type="button"

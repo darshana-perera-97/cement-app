@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, mustUseTodayRecordDate } from '../auth';
+import { authFetch, getUsername, isCollector, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
 import {
   normalizePaymentReceiptInput,
@@ -11,6 +11,7 @@ import {
 } from './pendingBills';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
+import { useCollectorCollectionClosed } from './collectionDayClose';
 
 const apiBase = getApiBase();
 
@@ -161,6 +162,9 @@ export default function CollectorSeparateBillSettlementModal({
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const paymentDay = useMemo(() => todayYmdLocal(), []);
+  const { closed: collectionClosed } = useCollectorCollectionClosed(paymentDay);
+  const newPaymentsLocked = isCollector() && collectionClosed;
 
   const loadBills = useCallback(async () => {
     try {
@@ -486,6 +490,10 @@ export default function CollectorSeparateBillSettlementModal({
 
   const handleNext = (e) => {
     e.preventDefault();
+    if (newPaymentsLocked) {
+      setSaveError('Collection for this day is over. You cannot add more payments.');
+      return;
+    }
     if (!validateStep1()) return;
     setStep(2);
   };
@@ -500,6 +508,10 @@ export default function CollectorSeparateBillSettlementModal({
     const username = getUsername();
     if (!username) {
       setSaveError('You need to be signed in with a username.');
+      return;
+    }
+    if (newPaymentsLocked) {
+      setSaveError('Collection for this day is over. You cannot add more payments.');
       return;
     }
     if (!validateStep1()) {
@@ -647,6 +659,11 @@ export default function CollectorSeparateBillSettlementModal({
         >
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
             <div className="space-y-4">
+              {newPaymentsLocked ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-amber-100" role="status">
+                  Collection for today is over. You cannot add more payments.
+                </p>
+              ) : null}
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">
                   {saveError}
@@ -1195,7 +1212,7 @@ export default function CollectorSeparateBillSettlementModal({
               {step === 1 ? (
                 <button
                   type="submit"
-                  disabled={customers.length === 0 || paymentTotal <= 0}
+                  disabled={customers.length === 0 || paymentTotal <= 0 || newPaymentsLocked}
                   className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-md disabled:opacity-60 sm:w-auto sm:py-2.5"
                 >
                   Next
@@ -1205,6 +1222,7 @@ export default function CollectorSeparateBillSettlementModal({
                   type="submit"
                   disabled={
                     saving ||
+                    newPaymentsLocked ||
                     pendingBills.length === 0 ||
                     paymentTotal <= 0 ||
                     Math.abs(unallocatedTotal) > 0.009 ||

@@ -8,6 +8,7 @@ import {
   isDriverAuthed,
   setDriverAuth,
 } from './auth';
+import { beginLoginPrinterConnect } from './printer/bluetoothPrinter';
 import { shopNameInitials, useShopName } from './shopConfig';
 import { formatBrandLabel } from './dashboard/brandTheme';
 import { useBagProducts } from './dashboard/BagProductsContext';
@@ -19,13 +20,6 @@ const SEARCH_PRODUCT_THRESHOLD = 8;
 const SCROLL_LIST_THRESHOLD = 10;
 const RECENT_BRAND_PREVIEW = 4;
 const LAST_PRINT_COUNT = 2;
-
-function money(n) {
-  return new Intl.NumberFormat('en-LK', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(n) || 0);
-}
 
 function totalBags(row, bagBrands) {
   return bagBrands.reduce((s, b) => s + (Number(row[`${b.key}Bags`]) || 0), 0);
@@ -148,6 +142,7 @@ function DriverLogin({ onSuccess }) {
       const resolvedUser =
         data.username != null && String(data.username).trim() ? data.username : nic;
       setDriverAuth(resolvedUser, data.token, data.name);
+      beginLoginPrinterConnect();
       onSuccess();
     } catch {
       setError(`Could not reach the server. Is the backend running at ${DEFAULT_DEV_API_URL}?`);
@@ -683,19 +678,13 @@ function RecentUnloadsList({ recent, recentLoading, bagBrands, canPrint, onPrint
 function UnloadPrintPreview({ row, bagBrands, index, total }) {
   const lines = brandLines(row, bagBrands);
   const bags = totalBags(row, bagBrands);
-  const amount = Number(row?.totalAmount);
   return (
     <div className="rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-100">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Unloading invoice {index + 1} of {total}
-          </p>
-          <p className="mt-0.5 break-words text-sm font-semibold text-slate-900">{row.customerName || '—'}</p>
-        </div>
-        {Number.isFinite(amount) && amount > 0 ? (
-          <p className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{money(amount)}</p>
-        ) : null}
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          Unloading invoice {index + 1} of {total}
+        </p>
+        <p className="mt-0.5 break-words text-sm font-semibold text-slate-900">{row.customerName || '—'}</p>
       </div>
       <p className="mt-1 text-xs text-slate-500">
         {row.date || '—'}
