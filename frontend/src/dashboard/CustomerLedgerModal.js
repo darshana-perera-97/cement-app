@@ -4,11 +4,10 @@ import {
   TableFiltersBar,
   filterControl,
   filterLabelNarrow,
-  mobileCardList,
-  MobileRowCard,
   modalPanelClass4xl,
   scrollTableWrap,
   stickyFirstTd,
+  stickyFirstTdMuted,
   stickyFirstTh,
   stickyThead,
 } from './tableToolbar';
@@ -156,105 +155,69 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
                   : 'No entries in this date range.'}
               </p>
             ) : (
-              <>
-                <div className={mobileCardList}>
-                  {ledgerRows.map((row) => (
-                    <MobileRowCard
-                      key={row.id}
-                      title={row.kind === 'starting' ? 'Starting balance' : formatDisplayDate(row.date)}
-                      subtitle={row.type}
-                      badge={
-                        row.kind === 'starting' ? (
-                          <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-900">
-                            Opening
-                          </span>
-                        ) : null
-                      }
-                      fields={[
-                        { label: 'Details', value: row.details || '—' },
-                        {
-                          label: 'Debit',
-                          value: row.debit != null && row.debit > 0 ? money(row.debit) : '—',
-                        },
-                        {
-                          label: 'Credit',
-                          value: row.credit != null && row.credit > 0 ? money(row.credit) : '—',
-                        },
-                        {
-                          label: 'Balance',
-                          value: money(row.balance),
-                        },
-                      ]}
-                    />
-                  ))}
-                </div>
-                <div className={`hidden sm:block ${scrollTableWrap}`}>
-                  <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
-                    <thead className={stickyThead}>
-                      <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
-                        <th className="px-4 py-3">Type</th>
-                        <th className="px-4 py-3">Details</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Debit</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Credit</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {ledgerRows.map((row) => (
-                        <tr
-                          key={row.id}
-                          className={
-                            row.kind === 'starting'
-                              ? 'bg-indigo-50/50 font-medium'
-                              : 'hover:bg-slate-50/80'
-                          }
+              <div className={scrollTableWrap}>
+                <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+                      <th className="px-4 py-3">Type</th>
+                      <th className="px-4 py-3">Details</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Debit</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Credit</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {ledgerRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        className={
+                          row.kind === 'starting'
+                            ? 'bg-indigo-50/50 font-medium'
+                            : 'hover:bg-slate-50/80'
+                        }
+                      >
+                        <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-700 ${stickyFirstTd}`}>
+                          {formatDisplayDate(row.date)}
+                        </td>
+                        <td className="px-4 py-3 text-slate-800">{row.type}</td>
+                        <td className="max-w-[16rem] px-4 py-3 text-xs text-slate-600">{row.details || '—'}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-900">
+                          {row.debit != null && row.debit > 0 ? money(row.debit) : '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
+                          {row.credit != null && row.credit > 0 ? money(row.credit) : '—'}
+                        </td>
+                        <td
+                          className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${balanceTone(row.balance)}`}
                         >
-                          <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-700 ${stickyFirstTd}`}>
-                            {row.kind === 'starting' ? formatDisplayDate(row.date) : formatDisplayDate(row.date)}
-                          </td>
-                          <td className="px-4 py-3 text-slate-800">{row.type}</td>
-                          <td className="max-w-[16rem] px-4 py-3 text-xs text-slate-600">{row.details || '—'}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-900">
-                            {row.debit != null && row.debit > 0 ? money(row.debit) : '—'}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
-                            {row.credit != null && row.credit > 0 ? money(row.credit) : '—'}
-                          </td>
-                          <td
-                            className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${balanceTone(row.balance)}`}
-                          >
-                            {money(row.balance)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
+                          {money(row.balance)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="sticky bottom-0 z-[9]">
+                    <tr className="border-t border-slate-200 bg-slate-50/95 font-semibold text-slate-900">
+                      <td className={`whitespace-nowrap px-4 py-3 ${stickyFirstTdMuted}`}>
+                        Totals ({totals.count})
+                      </td>
+                      <td className="px-4 py-3" />
+                      <td className="px-4 py-3" />
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(totals.debit)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
+                        {money(totals.credit)}
+                      </td>
+                      <td
+                        className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${balanceTone(totals.closing)}`}
+                      >
+                        {money(totals.closing)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             )}
           </div>
-
-          {!loading && ledgerRows.length > 0 ? (
-            <div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Entries</p>
-                <p className="font-bold tabular-nums text-slate-900">{totals.count}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Total debit</p>
-                <p className="font-bold tabular-nums text-slate-900">{money(totals.debit)}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Total credit</p>
-                <p className="font-bold tabular-nums text-emerald-800">{money(totals.credit)}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Closing balance</p>
-                <p className={`font-bold tabular-nums ${balanceTone(totals.closing)}`}>{money(totals.closing)}</p>
-              </div>
-            </div>
-          ) : null}
         </div>
 
         <div className="shrink-0 border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

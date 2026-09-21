@@ -6,11 +6,10 @@ import {
   filterControl,
   filterLabelNarrow,
   inDateRange,
-  mobileCardList,
-  MobileRowCard,
   modalPanelClass4xl,
   scrollTableWrap,
   stickyFirstTd,
+  stickyFirstTdMuted,
   stickyFirstTh,
   stickyThead,
 } from './tableToolbar';
@@ -277,131 +276,90 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                   : 'No invoices in this date range.'}
               </p>
             ) : (
-              <>
-                <div className={mobileCardList}>
-                  {filteredRows.map((r) => (
-                    <MobileRowCard
-                      key={r.id}
-                      title={formatDisplayDate(r.billDate)}
-                      subtitle={r.isOpeningBalance ? 'Opening balance' : r.details}
-                      badge={statusBadge(r.status, r.isOverdue)}
-                      fields={[
-                        { label: 'Bill total', value: money(r.billTotal) },
-                        ...(r.status === 'partial'
-                          ? [
-                              { label: 'Paid', value: money(r.paidAmount) },
-                              { label: 'Balance', value: money(r.outstandingAmount) },
-                            ]
-                          : r.status === 'open' || r.isOverdue
-                            ? [{ label: 'Balance', value: money(r.outstandingAmount) }]
-                            : []),
-                        { label: 'Settled date', value: formatDisplayDate(r.settledDate) },
-                        { label: 'Days to settle', value: formatDaysToSettle(r) },
-                      ]}
-                      actions={
-                        taxReady && !r.isOpeningBalance ? (
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadTaxInvoice(r)}
-                            disabled={taxDownloadingId === r.id}
-                            className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
-                          >
-                            {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
-                          </button>
-                        ) : null
-                      }
-                    />
-                  ))}
-                </div>
-                <div className={`hidden sm:block ${scrollTableWrap}`}>
-                  <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
-                    <thead className={stickyThead}>
-                      <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Bill date</th>
-                        <th className="px-4 py-3">Details</th>
-                        <th className="whitespace-nowrap px-4 py-3">Settled date</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Days to settle</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Total</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Paid</th>
-                        <th className="whitespace-nowrap px-4 py-3 text-right">Balance</th>
-                        <th className="whitespace-nowrap px-4 py-3">Status</th>
-                        {taxReady ? <th className="whitespace-nowrap px-4 py-3">Actions</th> : null}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {filteredRows.map((r) => (
-                        <tr key={r.id} className={r.isOverdue ? 'bg-rose-50/40' : 'hover:bg-slate-50/80'}>
-                          <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>
-                            {formatDisplayDate(r.billDate)}
-                            {r.isOpeningBalance ? (
-                              <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-                                Opening
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="max-w-[14rem] px-4 py-3 text-xs text-slate-600">{r.details}</td>
-                          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
-                            {formatDisplayDate(r.settledDate)}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">
-                            {formatDaysToSettle(r)}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
-                            {money(r.billTotal)}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
-                            {r.paidAmount > 0 ? money(r.paidAmount) : '—'}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums">
-                            {r.outstandingAmount > 0 ? money(r.outstandingAmount) : '—'}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3">{statusBadge(r.status, r.isOverdue)}</td>
-                          {taxReady ? (
-                            <td className="whitespace-nowrap px-4 py-3">
-                              {r.isOpeningBalance ? (
-                                <span className="text-xs text-slate-400">—</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDownloadTaxInvoice(r)}
-                                  disabled={taxDownloadingId === r.id}
-                                  className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
-                                  title="Download tax invoice PDF"
-                                >
-                                  {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
-                                </button>
-                              )}
-                            </td>
+              <div className={scrollTableWrap}>
+                <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Bill date</th>
+                      <th className="px-4 py-3">Details</th>
+                      <th className="whitespace-nowrap px-4 py-3">Settled date</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Days to settle</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Total</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Paid</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Balance</th>
+                      <th className="whitespace-nowrap px-4 py-3">Status</th>
+                      {taxReady ? <th className="whitespace-nowrap px-4 py-3">Actions</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {filteredRows.map((r) => (
+                      <tr key={r.id} className={r.isOverdue ? 'bg-rose-50/40' : 'hover:bg-slate-50/80'}>
+                        <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>
+                          {formatDisplayDate(r.billDate)}
+                          {r.isOpeningBalance ? (
+                            <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                              Opening
+                            </span>
                           ) : null}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
+                        </td>
+                        <td className="max-w-[14rem] px-4 py-3 text-xs text-slate-600">{r.details}</td>
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
+                          {formatDisplayDate(r.settledDate)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">
+                          {formatDaysToSettle(r)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums">
+                          {money(r.billTotal)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
+                          {r.paidAmount > 0 ? money(r.paidAmount) : '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums">
+                          {r.outstandingAmount > 0 ? money(r.outstandingAmount) : '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3">{statusBadge(r.status, r.isOverdue)}</td>
+                        {taxReady ? (
+                          <td className="whitespace-nowrap px-4 py-3">
+                            {r.isOpeningBalance ? (
+                              <span className="text-xs text-slate-400">—</span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadTaxInvoice(r)}
+                                disabled={taxDownloadingId === r.id}
+                                className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                                title="Download tax invoice PDF"
+                              >
+                                {taxDownloadingId === r.id ? '…' : 'Tax invoice'}
+                              </button>
+                            )}
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="sticky bottom-0 z-[9]">
+                    <tr className="border-t border-slate-200 bg-slate-50/95 font-semibold text-slate-900">
+                      <td className={`whitespace-nowrap px-4 py-3 ${stickyFirstTdMuted}`}>
+                        Totals ({totals.count})
+                      </td>
+                      <td className="px-4 py-3" />
+                      <td className="px-4 py-3" />
+                      <td className="px-4 py-3" />
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(totals.billed)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-800">
+                        {money(totals.paid)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(totals.due)}</td>
+                      <td className="px-4 py-3" />
+                      {taxReady ? <td className="px-4 py-3" /> : null}
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             )}
           </div>
-
-          {!loading && filteredRows.length > 0 ? (
-            <div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Invoices</p>
-                <p className="font-bold tabular-nums text-slate-900">{totals.count}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Billed</p>
-                <p className="font-bold tabular-nums text-slate-900">{money(totals.billed)}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Paid (allocated)</p>
-                <p className="font-bold tabular-nums text-emerald-800">{money(totals.paid)}</p>
-              </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
-                <p className="text-[10px] font-semibold uppercase text-slate-500">Balance</p>
-                <p className="font-bold tabular-nums text-slate-900">{money(totals.due)}</p>
-              </div>
-            </div>
-          ) : null}
         </div>
 
         <div className="shrink-0 border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">

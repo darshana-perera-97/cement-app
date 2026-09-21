@@ -9,8 +9,6 @@ import {
   TablePaginationBar,
   filterControl,
   filterLabel,
-  mobileCardList,
-  MobileRowCard,
   modalPanelClass,
   rowMatchesQuery,
   scrollTableWrap,
@@ -554,63 +552,7 @@ export default function CustomerTransactionsPage() {
         </TableFiltersBar>
 
         <div className="space-y-3">
-          <div className={mobileCardList}>
-            {loading ? (
-              <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
-                <LoadingSpinner label="Loading activity…" />
-              </p>
-            ) : transactions.length === 0 ? (
-              <div className="rounded-2xl bg-white px-4 py-8 text-center ring-1 ring-slate-100">
-                <p className="font-medium text-slate-700">No activity yet</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Credit sales and payments will show up here once recorded.
-                </p>
-                {customer && !paymentsLocked ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      useSeparateBillSettlement ? setSeparateBillModalOpen(true) : setRecordPaymentOpen(true)
-                    }
-                    className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:text-indigo-800"
-                  >
-                    Record a payment →
-                  </button>
-                ) : null}
-              </div>
-            ) : filteredTransactions.length === 0 ? (
-              <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
-                Nothing matches your search or filter. Try clearing filters above.
-              </p>
-            ) : (
-              pagedTransactions.map((tx) => {
-                const meta = txKindMeta(tx.kind);
-                const isCredit = tx.direction === 'credit';
-                return (
-                  <MobileRowCard
-                    key={`${tx.kind}-${tx.id}`}
-                    title={formatDisplayDate(tx.date)}
-                    subtitle={tx.type || meta.short}
-                    badge={
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${meta.badge}`}
-                      >
-                        {meta.short}
-                      </span>
-                    }
-                    onClick={() => setDetailTx(tx)}
-                    fields={[
-                      {
-                        label: 'Amount',
-                        value: isCredit ? `−${money(tx.amount)}` : `+${money(tx.amount)}`,
-                      },
-                      { label: 'Details', value: tx.details || '—' },
-                    ]}
-                  />
-                );
-              })
-            )}
-          </div>
-          <div className={`hidden sm:block ${scrollTableWrap}`}>
+          <div className={scrollTableWrap}>
             {loading ? (
               <p className="px-4 py-12 text-center text-sm text-slate-500"><LoadingSpinner label="Loading activity…" /></p>
             ) : (
@@ -671,7 +613,6 @@ export default function CustomerTransactionsPage() {
                             >
                               {meta.short}
                             </span>
-                            <span className="mt-1 block text-xs text-slate-500 sm:hidden">{tx.type}</span>
                           </td>
                           <td className="max-w-md px-4 py-3 text-slate-600">
                             <span className="line-clamp-2">{tx.details || '—'}</span>

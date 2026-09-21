@@ -1170,21 +1170,39 @@ function UserDetailContent({ row }) {
 
 function TransactionDetailContent({ row }) {
   const isCredit = row.direction === 'credit';
+  const amountClass = `tabular-nums font-semibold ${isCredit ? 'text-emerald-800' : 'text-slate-900'}`;
+  const fields = [
+    { label: 'Date', value: displayText(row.date) },
+    { label: 'Type', value: displayText(row.type) },
+    {
+      label: 'Amount',
+      value: isCredit ? `−${formatMoney(row.amount)}` : formatMoney(row.amount),
+      valueClassName: amountClass,
+    },
+    { label: 'Details', value: displayText(row.details) },
+  ];
 
   return (
-    <>
-      <SummaryGrid>
-        <SummaryField label="Date" value={displayText(row.date)} />
-        <SummaryField label="Type" value={displayText(row.type)} />
-        <SummaryField
-          label="Amount"
-          value={isCredit ? `−${formatMoney(row.amount)}` : formatMoney(row.amount)}
-          className="col-span-2 bg-indigo-50 ring-indigo-100"
-          valueClassName={`tabular-nums font-semibold ${isCredit ? 'text-emerald-800' : 'text-slate-900'}`}
-        />
-      </SummaryGrid>
-      <NoteBlock label="Details" value={row.details} />
-    </>
+    <div className="mt-4 overflow-auto">
+      <table className="w-full data-table border-separate border-spacing-0 text-left text-sm">
+        <thead>
+          <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <th className="border-b border-slate-200 px-3 py-2">Field</th>
+            <th className="border-b border-slate-200 px-3 py-2">Value</th>
+          </tr>
+        </thead>
+        <tbody className="text-slate-800">
+          {fields.map((field) => (
+            <tr key={field.label}>
+              <td className="border-b border-slate-100 px-3 py-2 font-medium text-slate-500">{field.label}</td>
+              <td className={`border-b border-slate-100 px-3 py-2 ${field.valueClassName || ''}`}>
+                {field.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
