@@ -2990,7 +2990,7 @@ app.get('/api/collector/unloads', async (req, res) => {
       getBagProducts(),
     ]);
     const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
-    let rows = unloads.filter((r) => normalizeStatus(r.status) !== 'rejected');
+    let rows = unloads.filter((r) => normalizeStatus(r.status) === 'pending');
     rows = await filterRowsForCollector(rows, auth, (row) => row.customerName);
     const sorted = [...rows].sort((a, b) => {
       const da = String(a.date || '');

@@ -176,7 +176,6 @@ export default function CollectorUnloadsPage() {
         throw new Error(data.error || 'Failed to load unloads');
       }
       setRows(Array.isArray(data) ? data : []);
-      setRows(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(e.message || 'Could not load unloads');
       setRows([]);
@@ -194,9 +193,8 @@ export default function CollectorUnloadsPage() {
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       const status = unloadStatus(r);
+      if (status === 'approved' || status === 'rejected') return false;
       if (statusFilter === 'needs-price' && !needsPrice(r, brands)) return false;
-      if (statusFilter === 'pending' && status !== 'pending') return false;
-      if (statusFilter === 'approved' && status !== 'approved') return false;
       if (!inDateRange(r.date, dateFrom, dateTo)) return false;
       return rowMatchesQuery(search, [
         r.date,
@@ -307,12 +305,14 @@ export default function CollectorUnloadsPage() {
       }
       const invoice = String(data.bill?.invoiceNumber || data.unload?.invoiceNumber || '').trim();
       if (data.billedImmediately) {
+        setRows((prev) => prev.filter((r) => r.id !== editRow.id));
         setSaveNotice(
           invoice
             ? `Invoice ${invoice} created. Customer ledger updated.`
             : 'Invoice created. Customer ledger updated.',
         );
       } else if (data.bill && invoice) {
+        setRows((prev) => prev.filter((r) => r.id !== editRow.id));
         setSaveNotice(`Invoice ${invoice} updated. Customer ledger updated.`);
       }
       closeEdit();
@@ -383,14 +383,12 @@ export default function CollectorUnloadsPage() {
         <label className={filterLabelNarrow}>
           Show
           <select
-            value={statusFilter}
+            value={statusFilter === 'needs-price' ? 'needs-price' : 'all'}
             onChange={(e) => setStatusFilter(e.target.value)}
             className={filterControl}
           >
             <option value="all">All unloads</option>
             <option value="needs-price">Needs price</option>
-            <option value="pending">Pending bill</option>
-            <option value="approved">Already billed</option>
           </select>
         </label>
       </TableFiltersBar>
