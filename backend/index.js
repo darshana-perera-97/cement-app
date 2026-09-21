@@ -3009,7 +3009,7 @@ app.get('/api/collector/unloads', async (req, res) => {
   }
 });
 
-async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enteredBy }) {
+async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enteredBy, approvedBy }) {
   const requestRow = unloads[idx];
   if (!requestRow) return { ok: false, error: 'Request not found', status: 404 };
   if (normalizeStatus(requestRow.status) !== 'pending') {
@@ -3022,6 +3022,7 @@ async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enter
   if (fields.totalAmount <= 0) {
     return { ok: false, error: 'Enter unit price for at least one brand with bags', status: 400 };
   }
+  const approver = String(approvedBy ?? enteredBy ?? '').trim() || enteredBy;
 
   const stocks = await readStocks();
   const bills = await readBills();
@@ -3065,8 +3066,9 @@ async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enter
     status: 'approved',
     billId: billRow.id,
     invoiceNumber: billRow.invoiceNumber,
+    priceChangeRequest: false,
     approvedAt: new Date().toISOString(),
-    approvedBy: enteredBy,
+    approvedBy: approver,
   };
   await writeUnloads(unloads);
 
@@ -3148,7 +3150,10 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
     const matchesStockDefault =
       stockItemUnloadPriceEnabled &&
       submittedPricesMatchStockDefaults(priced.row, stockPrices, products);
+    const autoApproveAsAdmin = !stockItemUnloadPriceEnabled;
     const priceChangeRequest = Boolean(stockItemUnloadPriceEnabled && !matchesStockDefault);
+    const shouldCreateInvoiceNow =
+      status === 'pending' && (matchesStockDefault || autoApproveAsAdmin);
 
     unloads[idx] = {
       ...priced.row,
@@ -3177,15 +3182,15 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
       const paymentsList = await readPayments();
       await refreshCustomerBalancesForBillNames(bills, paymentsList, billRow.customerName);
       await writeUnloads(unloads);
-    } else if (status === 'pending' && (matchesStockDefault || !stockItemUnloadPriceEnabled)) {
+    } else if (shouldCreateInvoiceNow) {
       const created = await createBillFromPendingUnload({
         unloads,
         idx,
         priceBody: priced.row,
         enteredBy: updatedBy,
+        approvedBy: autoApproveAsAdmin ? 'admin' : updatedBy,
       });
       if (!created.ok) {
-        await writeUnloads(unloads);
         return res.status(created.status || 400).json({ error: created.error });
       }
       billRow = created.billRow;

@@ -160,6 +160,7 @@ export default function CollectorUnloadsPage() {
   const [editRow, setEditRow] = useState(null);
   const [priceForm, setPriceForm] = useState({});
   const [saveError, setSaveError] = useState(null);
+  const [saveNotice, setSaveNotice] = useState(null);
   const [saving, setSaving] = useState(false);
   const [lastPreview, setLastPreview] = useState(null);
   const [lastPopupOpen, setLastPopupOpen] = useState(false);
@@ -224,6 +225,7 @@ export default function CollectorUnloadsPage() {
     event?.stopPropagation?.();
     setDetailRow(null);
     setSaveError(null);
+    setSaveNotice(null);
     setEditRow(row);
     setPriceForm(emptyPriceForm(row, brands));
     setLastPreview(null);
@@ -285,6 +287,7 @@ export default function CollectorUnloadsPage() {
     if (!editRow?.id) return;
     setSaving(true);
     setSaveError(null);
+    setSaveNotice(null);
     try {
       const payload = { updatedBy: getUsername() };
       for (const b of brands) {
@@ -301,6 +304,16 @@ export default function CollectorUnloadsPage() {
       if (!res.ok) {
         setSaveError(data.error || 'Could not save prices');
         return;
+      }
+      const invoice = String(data.bill?.invoiceNumber || data.unload?.invoiceNumber || '').trim();
+      if (data.billedImmediately) {
+        setSaveNotice(
+          invoice
+            ? `Invoice ${invoice} created. Customer ledger updated.`
+            : 'Invoice created. Customer ledger updated.',
+        );
+      } else if (data.bill && invoice) {
+        setSaveNotice(`Invoice ${invoice} updated. Customer ledger updated.`);
       }
       closeEdit();
       await load();
@@ -327,6 +340,12 @@ export default function CollectorUnloadsPage() {
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
           {error}
+        </p>
+      ) : null}
+
+      {saveNotice ? (
+        <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-emerald-100" role="status">
+          {saveNotice}
         </p>
       ) : null}
 
@@ -470,7 +489,7 @@ export default function CollectorUnloadsPage() {
             <p className="mt-1 text-sm text-slate-500">
               {editRow.stockItemUnloadPriceEnabled
                 ? 'Default is the unloading price per bag from the stock load. Keep it to create the invoice now. Change it and admin must accept the request first.'
-                : 'Set the unit price for bags unloaded at this shop. Saving creates the invoice for pending loads. Billed loads update the credit bill.'}
+                : 'Set the unit price for bags unloaded at this shop. Saving creates the invoice, updates the customer ledger, and treats the load as admin-approved.'}
             </p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div>

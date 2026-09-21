@@ -620,7 +620,7 @@ export default function SettingsPage() {
                   Allow collector to update the price for unloaded loads
                 </span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
-                  Collectors see lorry unloads for assigned shops and can update unit prices. Saving a price on a pending unload creates the invoice unless stock-load unload prices are on and the collector changed the default. Billed unloads update the credit bill.
+                  Collectors see lorry unloads for assigned shops and can update unit prices. Saving a price on a pending unload creates the invoice and updates the customer ledger unless stock-load unload prices are on and the collector changed the default. Billed unloads update the credit bill.
                 </span>
               </span>
             </label>
@@ -659,7 +659,8 @@ export default function SettingsPage() {
             <p className="mt-1 text-sm text-slate-500">
               When enabled, admins enter an unloading price per product on each stock load. That price is the
               default in Update unload price. If it is kept, the invoice is created immediately. If it is
-              changed, admin must accept the request first.
+              changed, admin must accept the request first. When this is off, Save prices creates the credit
+              invoice, updates the customer ledger, and treats the unload as already approved by admin.
             </p>
             <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
               <input
@@ -677,6 +678,7 @@ export default function SettingsPage() {
                 </span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
                   Admin-only step 4 on Add a stock load. Collectors see those prices as the default per bag.
+                  Turn this off so Save prices invoices immediately without a price-change request.
                 </span>
               </span>
             </label>
