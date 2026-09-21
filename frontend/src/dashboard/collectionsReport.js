@@ -1,4 +1,5 @@
 import { formatBrandLabel, getCachedBrands } from './brandTheme';
+import { getPaymentCheques } from './paymentCheques';
 import {
   buildBillSettledDateLookup,
   listCustomerBillPaymentAllocations,
@@ -37,6 +38,68 @@ function daysBetweenYmd(fromYmd, toYmd) {
     parseInt(toYmd.slice(8, 10), 10),
   ).getTime();
   return Math.max(0, Math.round((t1 - t0) / (24 * 60 * 60 * 1000)));
+}
+
+function isYmd(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').slice(0, 10));
+}
+
+/**
+ * Date a cheque is realized: later of converting date and deposit date when deposited.
+ * Falls back to converting date when not yet deposited.
+ */
+export function chequeRealizeYmd(cheque) {
+  const converting = String(cheque?.chequeDate ?? '').slice(0, 10);
+  const deposited = String(cheque?.chequeDepositedAt ?? '').slice(0, 10);
+  const convertingOk = isYmd(converting);
+  const depositedOk = Boolean(cheque?.chequeDeposited) && isYmd(deposited);
+  if (convertingOk && depositedOk) return deposited > converting ? deposited : converting;
+  if (convertingOk) return converting;
+  if (depositedOk) return deposited;
+  return '';
+}
+
+/**
+ * Split a payment's credited amount into slices with the date used for days-to-settle.
+ * Cash / CDM / transfer use the payment date; each cheque uses its realize date.
+ */
+function paymentSettleSlices(payment, paymentDate) {
+  const cheques = getPaymentCheques(payment).filter(
+    (c) => !c.chequeReturned && round2(c.amount) > 0,
+  );
+  const chequeTotal = round2(cheques.reduce((s, c) => s + round2(c.amount), 0));
+  const credit = round2(paymentCreditToCustomer(payment));
+  const nonCheque = round2(Math.max(0, credit - chequeTotal));
+  const byDate = new Map();
+  const addSlice = (amount, settleDate) => {
+    const amt = round2(amount);
+    if (amt <= 0) return;
+    const key = isYmd(settleDate) ? settleDate : paymentDate;
+    byDate.set(key, round2((byDate.get(key) || 0) + amt));
+  };
+  if (nonCheque > 0) addSlice(nonCheque, paymentDate);
+  for (const c of cheques) {
+    addSlice(c.amount, chequeRealizeYmd(c) || paymentDate);
+  }
+  if (byDate.size === 0) addSlice(credit, paymentDate);
+  return [...byDate.entries()].map(([settleDate, amount]) => ({ settleDate, amount }));
+}
+
+function splitAmountAcrossSlices(amount, slices) {
+  const collected = round2(amount);
+  if (collected <= 0 || !Array.isArray(slices) || slices.length === 0) return [];
+  const total = round2(slices.reduce((s, sl) => s + sl.amount, 0));
+  if (total <= 0) return [{ amount: collected, settleDate: slices[0].settleDate }];
+  let remaining = collected;
+  return slices
+    .map((slice, i) => {
+      const isLast = i === slices.length - 1;
+      const raw = isLast ? remaining : round2((collected * slice.amount) / total);
+      const share = round2(Math.max(0, Math.min(remaining, raw)));
+      remaining = round2(remaining - share);
+      return { amount: share, settleDate: slice.settleDate };
+    })
+    .filter((s) => s.amount > 0);
 }
 
 function brandLineFromBill(bill, brandKey) {
@@ -113,7 +176,7 @@ function recorderDisplayName(recordedBy, staff = []) {
 /**
  * Collection lines recorded by a collector, manager, or admin.
  * Includes every approved payment allocated to an invoice (full or partial).
- * Amount is the collected portion; days are from bill date to payment date.
+ * Amount is the collected portion; days are from bill date to payment or cheque realize date.
  */
 export function buildSettledCollectionsRows(
   customers,
@@ -152,34 +215,43 @@ export function buildSettledCollectionsRows(
     const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
     const billAmount = round2(bill?.totalAmount);
     const settledDate = billId ? settledLookup.get(billId) || '' : '';
-    const daysToSettle = billDate ? daysBetweenYmd(billDate, paymentDate) : 0;
-    const commissionBucket = commissionBucketForDays(daysToSettle);
-    const brandShares = prorateCollectionAcrossBrands(bill, alloc.amount);
+    const paymentSlices = paymentSettleSlices(payment, paymentDate);
+    let amountSlices = splitAmountAcrossSlices(alloc.amount, paymentSlices);
+    if (amountSlices.length === 0) {
+      amountSlices = [{ amount: round2(alloc.amount), settleDate: paymentDate }];
+    }
 
-    for (const share of brandShares) {
-      if (share.amount <= 0) continue;
-      rowSeq += 1;
-      rows.push({
-        rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${rowSeq}`,
-        paymentId: alloc.paymentId,
-        billId,
-        date: paymentDate,
-        invoiceNumber,
-        shopName,
-        bagType: share.bagType,
-        brandKey: share.brandKey,
-        bagCount: share.bagCount,
-        amount: share.amount,
-        billDate,
-        settledDate,
-        daysToSettle,
-        billAmount,
-        collectorUserId: String(alloc.customer?.collectorUserId ?? ''),
-        collectorName,
-        recordedBy: String(payment?.recordedBy ?? '').trim(),
-        commissionBucket,
-        isPartial: !settledDate,
-      });
+    for (const amountSlice of amountSlices) {
+      const settleDateForDays = amountSlice.settleDate || paymentDate;
+      const daysToSettle = billDate ? daysBetweenYmd(billDate, settleDateForDays) : 0;
+      const commissionBucket = commissionBucketForDays(daysToSettle);
+      const brandShares = prorateCollectionAcrossBrands(bill, amountSlice.amount);
+
+      for (const share of brandShares) {
+        if (share.amount <= 0) continue;
+        rowSeq += 1;
+        rows.push({
+          rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${settleDateForDays}-${rowSeq}`,
+          paymentId: alloc.paymentId,
+          billId,
+          date: paymentDate,
+          invoiceNumber,
+          shopName,
+          bagType: share.bagType,
+          brandKey: share.brandKey,
+          bagCount: share.bagCount,
+          amount: share.amount,
+          billDate,
+          settledDate,
+          daysToSettle,
+          billAmount,
+          collectorUserId: String(alloc.customer?.collectorUserId ?? ''),
+          collectorName,
+          recordedBy: String(payment?.recordedBy ?? '').trim(),
+          commissionBucket,
+          isPartial: !settledDate,
+        });
+      }
     }
   };
 

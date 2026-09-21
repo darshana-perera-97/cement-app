@@ -89,8 +89,9 @@ function subscribeMatchMedia(mq, onChange) {
  * Search / filter row for data tables.
  * Desktop (lg+) keeps the inline bar. Phone and tablet show a Filters button
  * that opens the same controls in a popup.
+ * `actions` stay visible on mobile (e.g. Print summary) instead of hiding in Filters.
  */
-export function TableFiltersBar({ children, hint, className = '' }) {
+export function TableFiltersBar({ children, hint, className = '', actions = null }) {
   const [open, setOpen] = useState(false);
   const titleId = useId();
   const hintId = useId();
@@ -119,7 +120,12 @@ export function TableFiltersBar({ children, hint, className = '' }) {
     };
   }, [open]);
 
-  const fields = <div className={open ? 'flex flex-col gap-3 [&>*]:w-full' : filterFieldsClass}>{children}</div>;
+  const fields = (
+    <div className={open ? 'flex flex-col gap-3 [&>*]:w-full' : filterFieldsClass}>
+      {children}
+      {!open ? actions : null}
+    </div>
+  );
 
   const hintText = hint ? <p className={filterHintClass}>{hint}</p> : null;
 
@@ -184,20 +190,23 @@ export function TableFiltersBar({ children, hint, className = '' }) {
   return (
     <>
       <div className={`${filterBarShell} ${className}`.trim()}>
-        <div className="flex items-center gap-3 lg:hidden">
-          <p className="min-w-0 flex-1 text-xs tabular-nums text-slate-500">
-            {hint || 'Search and filter this table'}
-          </p>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-            aria-haspopup="dialog"
-            aria-expanded={open}
-          >
-            <FilterFunnelIcon />
-            Filters
-          </button>
+        <div className="lg:hidden">
+          <div className="flex items-center gap-3">
+            <p className="min-w-0 flex-1 text-xs tabular-nums text-slate-500">
+              {hint || 'Search and filter this table'}
+            </p>
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              aria-haspopup="dialog"
+              aria-expanded={open}
+            >
+              <FilterFunnelIcon />
+              Filters
+            </button>
+          </div>
+          {actions ? <div className="mt-3 flex flex-col gap-2 [&>*]:w-full">{actions}</div> : null}
         </div>
         {!open ? (
           <div className="hidden lg:block">

@@ -94,7 +94,7 @@ export default function PrintCollectionsSummaryModal({ open, onClose, reportDate
       aria-labelledby="print-collections-summary-title"
     >
       <ModalBackdrop onClose={busy ? undefined : onClose} />
-      <div className={`${modalPanelClassMd} z-10`}>
+      <div className={`${modalPanelClassMd} z-10 pb-[max(1.25rem,env(safe-area-inset-bottom))]`}>
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300/90 sm:hidden" aria-hidden />
         <h2 id="print-collections-summary-title" className="text-lg font-bold text-slate-900">
           Print summary
