@@ -71,7 +71,7 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'unloadRequest':
       return {
-        title: row.priceChangeRequest ? 'Unload price change' : 'Unload request',
+        title: row.priceChangeRequest && row.stockItemUnloadPriceEnabled ? 'Unload price change' : 'Unload request',
         subtitle: [row.date, row.customerName, row.driverName].filter(Boolean).join(' · ') || null,
       };
     case 'purchaseOrder':
@@ -920,7 +920,7 @@ function UnloadRequestDetailContent({ row }) {
         <SummaryField label="Date" value={displayText(row.date)} />
         <SummaryField
           label="Type"
-          value={row.priceChangeRequest ? 'Unload price change' : 'Unload'}
+          value={row.priceChangeRequest && row.stockItemUnloadPriceEnabled ? 'Unload price change' : 'Unload'}
         />
         <SummaryField label="Status" value={status} valueClassName="capitalize" />
         <SummaryField label="Shop" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />

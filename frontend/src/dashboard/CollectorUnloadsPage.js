@@ -470,7 +470,7 @@ export default function CollectorUnloadsPage() {
             <p className="mt-1 text-sm text-slate-500">
               {editRow.stockItemUnloadPriceEnabled
                 ? 'Default is the unloading price per bag from the stock load. Keep it to create the invoice now. Change it and admin must accept the request first.'
-                : 'Set the unit price for bags unloaded at this shop. Pending loads keep these prices for the bill; billed loads update the credit bill.'}
+                : 'Set the unit price for bags unloaded at this shop. Saving creates the invoice for pending loads. Billed loads update the credit bill.'}
             </p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div>

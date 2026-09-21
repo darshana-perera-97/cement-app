@@ -2,7 +2,8 @@
  * Shared helpers and layout for table search / filter bars on dashboard pages.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Spinner shown while page / table data is fetching.
@@ -52,18 +53,161 @@ export function inDateRange(dateStr, from, to) {
   return true;
 }
 
-export function TableFiltersBar({ children, hint, className = '' }) {
+const TABLE_FILTERS_DESKTOP_MQ = '(min-width: 1024px)';
+
+const filterBarShell =
+  'rounded-[20px] bg-white p-3 shadow-md shadow-slate-200/30 ring-1 ring-slate-100 sm:p-4';
+
+const filterFieldsClass =
+  'flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end [&>*]:w-full sm:[&>*]:w-auto';
+
+const filterHintClass = 'mt-3 border-t border-slate-100 pt-3 text-xs tabular-nums text-slate-500';
+
+function FilterFunnelIcon({ className = 'h-4 w-4' }) {
   return (
-    <div
-      className={`rounded-[20px] bg-white p-3 shadow-md shadow-slate-200/30 ring-1 ring-slate-100 sm:p-4 ${className}`.trim()}
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end [&>*]:w-full sm:[&>*]:w-auto">
-        {children}
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 5.25A.75.75 0 014.75 4.5h14.5a.75.75 0 01.56 1.25L14.5 12v6.19a.75.75 0 01-1.09.67l-3-1.5A.75.75 0 0110 16.69V12L4.19 5.75A.75.75 0 014 5.25z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function subscribeMatchMedia(mq, onChange) {
+  if (typeof mq.addEventListener === 'function') {
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }
+  mq.addListener(onChange);
+  return () => mq.removeListener(onChange);
+}
+
+/**
+ * Search / filter row for data tables.
+ * Desktop (lg+) keeps the inline bar. Phone and tablet show a Filters button
+ * that opens the same controls in a popup.
+ */
+export function TableFiltersBar({ children, hint, className = '' }) {
+  const [open, setOpen] = useState(false);
+  const titleId = useId();
+  const hintId = useId();
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia(TABLE_FILTERS_DESKTOP_MQ);
+    const sync = () => {
+      if (mq.matches) setOpen(false);
+    };
+    sync();
+    return subscribeMatchMedia(mq, sync);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open]);
+
+  const fields = <div className={open ? 'flex flex-col gap-3 [&>*]:w-full' : filterFieldsClass}>{children}</div>;
+
+  const hintText = hint ? <p className={filterHintClass}>{hint}</p> : null;
+
+  const popup =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-[120] flex items-end justify-center p-0 sm:items-center sm:p-4"
+            role="presentation"
+          >
+            <ModalBackdrop onClose={() => setOpen(false)} />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              aria-describedby={hint ? hintId : undefined}
+              className={`${modalPanelClass} pb-[max(1.25rem,env(safe-area-inset-bottom))]`}
+            >
+              <div
+                className="mx-auto mb-3 h-1 w-10 shrink-0 rounded-full bg-slate-300/90 sm:hidden"
+                aria-hidden
+              />
+              <div className="flex items-start justify-between gap-3">
+                <h2 id={titleId} className="text-lg font-bold text-slate-900">
+                  Filters
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                  aria-label="Close filters"
+                >
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <path
+                      d="M6 6l12 12M18 6L6 18"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+              {hint ? (
+                <p id={hintId} className="mt-1 text-xs tabular-nums text-slate-500">
+                  {hint}
+                </p>
+              ) : null}
+              <div className="mt-4">{fields}</div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 transition hover:bg-indigo-700"
+              >
+                Done
+              </button>
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <>
+      <div className={`${filterBarShell} ${className}`.trim()}>
+        <div className="flex items-center gap-3 lg:hidden">
+          <p className="min-w-0 flex-1 text-xs tabular-nums text-slate-500">
+            {hint || 'Search and filter this table'}
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            aria-haspopup="dialog"
+            aria-expanded={open}
+          >
+            <FilterFunnelIcon />
+            Filters
+          </button>
+        </div>
+        {!open ? (
+          <div className="hidden lg:block">
+            {fields}
+            {hintText}
+          </div>
+        ) : null}
       </div>
-      {hint ? (
-        <p className="mt-3 border-t border-slate-100 pt-3 text-xs tabular-nums text-slate-500">{hint}</p>
-      ) : null}
-    </div>
+      {popup}
+    </>
   );
 }
 

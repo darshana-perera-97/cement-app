@@ -2016,7 +2016,7 @@ export default function IncentivePage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-white p-4 shadow-md ring-1 ring-slate-100">
+      <TableFiltersBar>
         <label className={filterLabelNarrow}>
           From date
           <input
@@ -2059,7 +2059,7 @@ export default function IncentivePage() {
             Clear filters
           </button>
         )}
-      </div>
+      </TableFiltersBar>
 
       <div className={mobileCardList}>
         {loading ? (

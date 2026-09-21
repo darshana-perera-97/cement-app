@@ -2066,7 +2066,7 @@ export default function ReportsPage() {
                 : 'Cash, cheques, CDM deposits, and bank transfers for the selected day (manager / admin)'
           }
         >
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <TableFiltersBar>
             <label className={filterLabelNarrow}>
               Report date
               <input
@@ -2116,7 +2116,7 @@ export default function ReportsPage() {
                 Print summary
               </button>
             ) : null}
-          </div>
+          </TableFiltersBar>
 
           {loading ? (
             <p className="mt-5 rounded-[20px] bg-slate-50 px-4 py-8 text-center text-sm text-slate-500 ring-1 ring-slate-100">
@@ -2683,7 +2683,7 @@ export default function ReportsPage() {
             : `Payments collected by the selected collector, manager, or admin in ${collectionsMonthLabel}`
         }
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Collected in month
             <input
@@ -2719,7 +2719,7 @@ export default function ReportsPage() {
           >
             Download PDF
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className={`mt-5 ${scrollTableWrap}`}>
           <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
@@ -2837,7 +2837,7 @@ export default function ReportsPage() {
             : `All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`
         }
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -2855,7 +2855,7 @@ export default function ReportsPage() {
           >
             Download bills (PDF)
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className="mt-5 hidden">
           {loading ? (
@@ -2975,7 +2975,7 @@ export default function ReportsPage() {
           dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
         }`}
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -3008,7 +3008,7 @@ export default function ReportsPage() {
           >
             Download report (PDF + Excel)
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className="mt-5 space-y-3 sm:hidden">
           {loading ? (
@@ -3159,7 +3159,7 @@ export default function ReportsPage() {
         title="Shop targets"
         subtitle={`Monthly bag sales vs target for ${shopTargetsMonthLabel} — from credit bills and customer targets`}
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -3177,7 +3177,7 @@ export default function ReportsPage() {
           >
             Download report (PDF)
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className="mt-5 space-y-3 sm:hidden">
           {loading ? (
@@ -3331,7 +3331,7 @@ export default function ReportsPage() {
           stockDistActiveBrand ? ` · ${stockDistActiveBrand.label}` : ' · all brands'
         }${stockDistMonthPurchasesOnly ? ' · stocks purchased this month only' : ''} — rows grouped by stock`}
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -3373,7 +3373,7 @@ export default function ReportsPage() {
           >
             Download stock distribution (PDF)
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className="mt-4 hidden gap-3 sm:grid sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
@@ -3571,7 +3571,7 @@ export default function ReportsPage() {
         title="Total loads summary"
         subtitle={`Bags brought in during ${loadsSummaryMonthLabel} — credit invoices that month with days from bill date, outstanding | total per shop`}
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <TableFiltersBar>
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -3589,7 +3589,7 @@ export default function ReportsPage() {
           >
             Download loads summary (PDF)
           </button>
-        </div>
+        </TableFiltersBar>
 
         <div className="mt-4 hidden gap-3 sm:grid sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl bg-slate-800 p-4 text-white shadow-md ring-1 ring-slate-700">
@@ -3738,7 +3738,7 @@ export default function ReportsPage() {
         subtitle={`Loads purchased, cash in from shops, and cheques to convert — ${fsPeriodLabel}`}
       >
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <TableFiltersBar>
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-slate-600">Period</span>
               <div className="inline-flex rounded-xl bg-slate-100/90 p-1 ring-1 ring-slate-200/60">
@@ -3830,7 +3830,7 @@ export default function ReportsPage() {
             >
               Download financial summary (PDF)
             </button>
-          </div>
+          </TableFiltersBar>
 
           <div className="hidden gap-3 sm:grid sm:grid-cols-3">
             <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">

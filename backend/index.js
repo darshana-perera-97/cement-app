@@ -2688,7 +2688,16 @@ app.get('/api/unload-requests', async (req, res) => {
   try {
     const statusFilter = String(req.query.status ?? 'pending').trim().toLowerCase();
     let rows = await readUnloads();
-    if (statusFilter !== 'all') {
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
+    if (statusFilter === 'all') {
+      rows = rows.filter(
+        (r) =>
+          normalizeStatus(r.status) !== 'pending' ||
+          shouldListUnloadRequestForAdmin(r, stockItemUnloadPriceEnabled),
+      );
+    } else if (statusFilter === 'pending') {
+      rows = rows.filter((r) => shouldListUnloadRequestForAdmin(r, stockItemUnloadPriceEnabled));
+    } else {
       rows = rows.filter((r) => normalizeStatus(r.status) === statusFilter);
     }
     const sorted = [...rows].sort(
@@ -2697,10 +2706,9 @@ app.get('/api/unload-requests', async (req, res) => {
     const products = await getBagProducts();
     const bills = await readBills();
     const stocks = await readStocks();
-    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
     res.json(
       sorted.map((row) =>
-        attachLastPricesToUnload(row, bills, products, { stocks, stockItemUnloadPriceEnabled }),
+        presentUnloadRequestForAdmin(row, bills, products, { stocks, stockItemUnloadPriceEnabled }),
       ),
     );
   } catch (e) {
@@ -2792,6 +2800,48 @@ function submittedPricesMatchStockDefaults(pricedRow, defaults, products) {
     compared += 1;
   }
   return compared > 0;
+}
+
+function collectorHasPricedUnload(row) {
+  return Boolean(String(row?.priceUpdatedAt ?? '').trim() || String(row?.priceUpdatedBy ?? '').trim());
+}
+
+function isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled) {
+  return Boolean(stockItemUnloadPriceEnabled) && Boolean(row?.priceChangeRequest);
+}
+
+/** Pending unloads the admin/manager should see. Collector-priced bags skip lorry stock approval. */
+function shouldListUnloadRequestForAdmin(row, stockItemUnloadPriceEnabled) {
+  if (normalizeStatus(row.status) !== 'pending') return false;
+  if (!collectorHasPricedUnload(row)) return true;
+  return isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled);
+}
+
+function stripCollectorUnitPrices(row, products) {
+  const next = { ...row };
+  for (const p of products || []) {
+    next[p.unitPriceField] = 0;
+    next[`${p.key}Line`] = 0;
+  }
+  next.totalAmount = 0;
+  return next;
+}
+
+function presentUnloadRequestForAdmin(row, bills, products, options = {}) {
+  const stockItemUnloadPriceEnabled = Boolean(options.stockItemUnloadPriceEnabled);
+  const visiblePriceChange = isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled);
+  let next = { ...row, priceChangeRequest: visiblePriceChange };
+  if (!visiblePriceChange && collectorHasPricedUnload(row)) {
+    next = stripCollectorUnitPrices(next, products);
+    next.priceChangeRequest = false;
+    return next;
+  }
+  next = attachLastPricesToUnload(next, bills, products, {
+    stocks: options.stocks,
+    stockItemUnloadPriceEnabled,
+  });
+  next.priceChangeRequest = visiblePriceChange;
+  return next;
 }
 
 function attachLastPricesToUnload(row, bills, products, options = {}) {
@@ -3098,12 +3148,13 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
     const matchesStockDefault =
       stockItemUnloadPriceEnabled &&
       submittedPricesMatchStockDefaults(priced.row, stockPrices, products);
+    const priceChangeRequest = Boolean(stockItemUnloadPriceEnabled && !matchesStockDefault);
 
     unloads[idx] = {
       ...priced.row,
       priceUpdatedBy: updatedBy,
       priceUpdatedAt: now,
-      priceChangeRequest: stockItemUnloadPriceEnabled ? !matchesStockDefault : Boolean(existing.priceChangeRequest),
+      priceChangeRequest,
     };
 
     let billRow = null;
@@ -3126,7 +3177,7 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
       const paymentsList = await readPayments();
       await refreshCustomerBalancesForBillNames(bills, paymentsList, billRow.customerName);
       await writeUnloads(unloads);
-    } else if (status === 'pending' && matchesStockDefault) {
+    } else if (status === 'pending' && (matchesStockDefault || !stockItemUnloadPriceEnabled)) {
       const created = await createBillFromPendingUnload({
         unloads,
         idx,
@@ -3249,7 +3300,10 @@ app.get('/api/requests/pending-count', async (req, res) => {
   if (!auth) return;
   try {
     const unloads = await readUnloads();
-    const unloadRequests = unloads.filter((r) => normalizeStatus(r.status) === 'pending').length;
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
+    const unloadRequests = unloads.filter((r) =>
+      shouldListUnloadRequestForAdmin(r, stockItemUnloadPriceEnabled),
+    ).length;
     const payments = await readPayments();
     const paymentRequests = payments.filter((p) => isPaymentApprovalPending(p)).length;
     res.json({

@@ -620,7 +620,7 @@ export default function SettingsPage() {
                   Allow collector to update the price for unloaded loads
                 </span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
-                  Collectors see lorry unloads for assigned shops and can update unit prices. Pending unloads keep those prices for the bill; billed unloads update the credit bill.
+                  Collectors see lorry unloads for assigned shops and can update unit prices. Saving a price on a pending unload creates the invoice unless stock-load unload prices are on and the collector changed the default. Billed unloads update the credit bill.
                 </span>
               </span>
             </label>

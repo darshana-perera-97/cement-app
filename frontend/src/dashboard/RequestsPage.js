@@ -26,6 +26,7 @@ import {
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { downloadRequestsTablePdf, requestTypeLabel } from './requestsTablePdf';
+import { useStockItemUnloadPriceEnabled } from '../stockItemUnloadPriceSettings';
 
 const apiBase = getApiBase();
 
@@ -126,12 +127,30 @@ function paymentApprovalBreakdown(row) {
   return lines;
 }
 
-function emptyPriceForm(row, brands) {
+function collectorHasPricedUnload(row) {
+  return Boolean(String(row?.priceUpdatedAt ?? '').trim() || String(row?.priceUpdatedBy ?? '').trim());
+}
+
+function isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled) {
+  return Boolean(stockItemUnloadPriceEnabled) && Boolean(row?.priceChangeRequest);
+}
+
+function adminRequestTypeLabel(row, stockItemUnloadPriceEnabled) {
+  if (row?.requestKind === 'payment') return requestTypeLabel(row);
+  return requestTypeLabel({
+    ...row,
+    priceChangeRequest: isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled),
+  });
+}
+
+function emptyPriceForm(row, brands, { hideCollectorPrices = false } = {}) {
   const f = {};
+  const hideStored = hideCollectorPrices && collectorHasPricedUnload(row);
   for (const b of brands) {
     const bags = Number(row[`${b.key}Bags`]) || 0;
     const stored = Number(row[`${b.key}UnitPrice`]);
-    f[`${b.key}UnitPrice`] = bags > 0 && Number.isFinite(stored) && stored > 0 ? String(stored) : '';
+    f[`${b.key}UnitPrice`] =
+      !hideStored && bags > 0 && Number.isFinite(stored) && stored > 0 ? String(stored) : '';
   }
   return f;
 }
@@ -182,6 +201,7 @@ function LastPricesPopup({ open, preview, brands, onApply, onClose }) {
 export default function RequestsPage() {
   const { brands } = useBagProducts();
   const { requestAutoPrint } = usePrinter();
+  const { enabled: stockItemUnloadPriceEnabled } = useStockItemUnloadPriceEnabled();
   const allowed = isManagerOrAdmin();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -242,11 +262,22 @@ export default function RequestsPage() {
     return () => window.clearInterval(id);
   }, [load]);
 
+  useEffect(() => {
+    if (!stockItemUnloadPriceEnabled && typeFilter === 'price_change') {
+      setTypeFilter('');
+    }
+  }, [stockItemUnloadPriceEnabled, typeFilter]);
+
   const filtered = useMemo(() => {
     return rows.filter((r) => {
+      const visiblePriceChange =
+        r.requestKind !== 'payment' && isVisiblePriceChangeRequest(r, stockItemUnloadPriceEnabled);
+      if (r.requestKind !== 'payment' && collectorHasPricedUnload(r) && !visiblePriceChange) {
+        return false;
+      }
       if (typeFilter === 'payment' && r.requestKind !== 'payment') return false;
-      if (typeFilter === 'unload' && (r.requestKind === 'payment' || r.priceChangeRequest)) return false;
-      if (typeFilter === 'price_change' && (r.requestKind === 'payment' || !r.priceChangeRequest)) return false;
+      if (typeFilter === 'unload' && (r.requestKind === 'payment' || visiblePriceChange)) return false;
+      if (typeFilter === 'price_change' && (r.requestKind === 'payment' || !visiblePriceChange)) return false;
       if (!inDateRange(r.date, dateFrom, dateTo)) return false;
       const fields = [
         r.date,
@@ -254,7 +285,7 @@ export default function RequestsPage() {
         r.note,
         r.billNumber,
         r.recordedBy,
-        requestTypeLabel(r),
+        requestTypeLabel({ ...r, priceChangeRequest: visiblePriceChange }),
       ];
       if (r.requestKind === 'payment') {
         fields.push(paymentRequestSummary(r));
@@ -263,7 +294,7 @@ export default function RequestsPage() {
       }
       return rowMatchesQuery(search, fields);
     });
-  }, [rows, search, brands, typeFilter, dateFrom, dateTo]);
+  }, [rows, search, brands, typeFilter, dateFrom, dateTo, stockItemUnloadPriceEnabled]);
 
   const pagination = useTablePagination(filtered.length, [search, typeFilter, dateFrom, dateTo]);
   const paged = useMemo(
@@ -287,7 +318,11 @@ export default function RequestsPage() {
       );
       return;
     }
-    setPriceForm(emptyPriceForm(row, brands));
+    setPriceForm(
+      emptyPriceForm(row, brands, {
+        hideCollectorPrices: !isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled),
+      }),
+    );
     setLastPreview(null);
     setLastPopupOpen(false);
   };
@@ -455,8 +490,9 @@ export default function RequestsPage() {
       <div>
         <h1 className="text-xl font-bold text-slate-900">Requests</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Driver unload submissions, unload price changes, and CDM / online transfer payments waiting for
-          manager approval.
+          Driver unload submissions
+          {stockItemUnloadPriceEnabled ? ', unload price changes,' : ''} and CDM / online transfer
+          payments waiting for manager approval.
         </p>
       </div>
 
@@ -482,7 +518,9 @@ export default function RequestsPage() {
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={filterControl}>
             <option value="">All types</option>
             <option value="unload">Unload</option>
-            <option value="price_change">Unload price change</option>
+            {stockItemUnloadPriceEnabled ? (
+              <option value="price_change">Unload price change</option>
+            ) : null}
             <option value="payment">Payment approval</option>
           </select>
         </label>
@@ -510,7 +548,14 @@ export default function RequestsPage() {
             setTablePdfBusy(true);
             try {
               downloadRequestsTablePdf({
-                rows: filtered,
+                rows: filtered.map((r) =>
+                  r.requestKind === 'payment'
+                    ? r
+                    : {
+                        ...r,
+                        priceChangeRequest: isVisiblePriceChangeRequest(r, stockItemUnloadPriceEnabled),
+                      },
+                ),
                 brands,
                 filters: { search, dateFrom, dateTo, typeFilter },
               });
@@ -545,14 +590,14 @@ export default function RequestsPage() {
                   title={row.customerName}
                   subtitle={
                     row.requestKind === 'payment'
-                      ? `${row.date} · ${requestTypeLabel(row)} · ${paymentRequestSummary(row)}`
+                      ? `${row.date} · ${adminRequestTypeLabel(row, stockItemUnloadPriceEnabled)} · ${paymentRequestSummary(row)}`
                       : `${row.date} · ${row.driverName || 'Driver'} · ${totalBags(row, brands)} bags`
                   }
                   onClick={() => setDetailRow(row)}
                   fields={[
                     {
                       label: 'Type',
-                      value: requestTypeLabel(row),
+                      value: adminRequestTypeLabel(row, stockItemUnloadPriceEnabled),
                     },
                     row.requestKind === 'payment'
                       ? { label: 'Amount', value: money(row.amount) }
@@ -609,7 +654,7 @@ export default function RequestsPage() {
                     >
                       <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{row.date}</td>
                       <td className="px-4 py-3 text-slate-600">
-                        {requestTypeLabel(row)}
+                        {adminRequestTypeLabel(row, stockItemUnloadPriceEnabled)}
                       </td>
                       <td className="px-4 py-3 font-medium text-slate-900">{row.customerName}</td>
                       <td className="px-4 py-3 text-slate-600">
@@ -777,8 +822,16 @@ export default function RequestsPage() {
               </>
             ) : (
               <>
-            <h2 className="text-lg font-bold text-slate-900">Approve unload request</h2>
-            <p className="mt-1 text-sm text-slate-500">Creates a credit bill with the driver&apos;s date and bag counts.</p>
+            <h2 className="text-lg font-bold text-slate-900">
+              {isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
+                ? 'Approve unload price change'
+                : 'Approve unload request'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
+                ? 'Review the collector’s unit prices, then create the credit bill.'
+                : 'Creates a credit bill with the driver’s date and bag counts.'}
+            </p>
 
             <dl className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm">
               <div className="flex justify-between gap-4">

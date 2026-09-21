@@ -13,6 +13,7 @@ import {
 import { downloadCollectorCommissionPdf } from './collectorCommissionPdf';
 import {
   LoadingSpinner,
+  TableFiltersBar,
   filterControl,
   filterLabelNarrow,
   scrollTableWrap,
@@ -262,7 +263,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
         </button>
       </div>
 
-      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+      <TableFiltersBar className="mt-5">
         <label className={filterLabelNarrow}>
           Collected in month
           <input
@@ -287,7 +288,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
             ))}
           </select>
         </label>
-      </div>
+      </TableFiltersBar>
 
       {!selectedCollectorId ? (
         <p className="mt-4 text-sm text-slate-500">Select a collector to view commission details.</p>
