@@ -65,6 +65,8 @@ const emptyCustomerForm = () => ({
   location: '',
   contactNumber: '',
   email: '',
+  ownerName: '',
+  ownerBirthday: '',
   dueDate: '',
   pastBill: '',
   overdueDays: String(DEFAULT_OVERDUE_DAYS),
@@ -84,6 +86,8 @@ function customerToForm(c) {
     location: c.location ?? '',
     contactNumber: c.contactNumber ?? '',
     email: c.email ?? '',
+    ownerName: c.ownerName ?? '',
+    ownerBirthday: c.ownerBirthday ?? '',
     dueDate: c.dueDate ?? '',
     pastBill: c.pastBill === 0 || c.pastBill ? String(c.pastBill) : '',
     overdueDays,
@@ -247,6 +251,8 @@ export default function CustomerTransactionsPage() {
         location: customerForm.location.trim(),
         contactNumber: customerForm.contactNumber.trim(),
         email: customerForm.email.trim(),
+        ownerName: customerForm.ownerName.trim(),
+        ownerBirthday: customerForm.ownerBirthday.trim(),
         dueDate: customerForm.dueDate.trim(),
         pastBill: customerForm.pastBill,
         overdueDays: customerForm.overdueDays,
@@ -688,8 +694,8 @@ export default function CustomerTransactionsPage() {
               Edit customer details
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Updates contact info, payment due date, bill overdue window, and opening balance. Logged in as{' '}
-              {getUsername() || '—'}.
+              Updates contact info, shop owner details, payment due date, bill overdue window, and opening
+              balance. Logged in as {getUsername() || '—'}.
             </p>
             <form className="mt-5 space-y-4" onSubmit={saveCustomerDetails}>
               {customerSaveError ? (
@@ -751,6 +757,30 @@ export default function CustomerTransactionsPage() {
                   placeholder="e.g. shop@example.com"
                   autoComplete="email"
                 />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Shop owner name
+                <input
+                  type="text"
+                  value={customerForm.ownerName}
+                  onChange={(e) => handleCustomerFormChange('ownerName', e.target.value)}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  placeholder="e.g. Sunil Perera"
+                  autoComplete="name"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Owner birthday
+                <input
+                  type="date"
+                  value={customerForm.ownerBirthday}
+                  onChange={(e) => handleCustomerFormChange('ownerBirthday', e.target.value)}
+                  max={today}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  Shown on Analytics when the birthday is today or in the next 3 days.
+                </span>
               </label>
               <label className="block text-sm font-medium text-slate-600">
                 Payment due date

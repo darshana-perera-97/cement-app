@@ -518,6 +518,8 @@ function CustomerDetailContent({ row }) {
         <SummaryField label="Location" value={displayText(row.location)} />
         <SummaryField label="Contact" value={displayText(row.contactNumber)} />
         <SummaryField label="Email" value={displayText(row.email)} />
+        <SummaryField label="Shop owner" value={displayText(row.ownerName)} />
+        <SummaryField label="Owner birthday" value={displayText(row.ownerBirthday)} />
         <SummaryField
           label="Due date"
           value={displayText(row.dueDate)}

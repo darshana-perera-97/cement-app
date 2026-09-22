@@ -39,6 +39,11 @@ import { buildPendingBillRows } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { Link, useLocation } from 'react-router-dom';
 import {
+  birthdayWhenLabel,
+  collectUpcomingOwnerBirthdays,
+  formatBirthdayMonthDay,
+} from './ownerBirthday';
+import {
   buildCashBookSourceEntries,
   buildCashBookLedgerRows,
   summarizeCashBookLedger,
@@ -256,6 +261,103 @@ function formatDisplayDate(ymd) {
   });
 }
 
+function CakeIcon({ className = 'h-6 w-6' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M8 9.2c0-1 .7-1.7 1.5-1.7S11 8.2 11 9.2c0 .4-.2.8-.5 1.1C11.2 10.8 12 11.6 12 12.6c0 1.2-1.1 2-2.5 2S7 13.8 7 12.6c0-1 .8-1.8 1.5-2.3A1.6 1.6 0 018 9.2z"
+        fill="#f59e0b"
+      />
+      <path d="M12 4.5c.3 1.2.1 2.2-.6 2.8-.5.4-1.1.4-1.4 0-.4-.6-.3-1.6.3-2.8.2-.4.6-.4.8 0 .2.3.5.4.9 0z" fill="#fb7185" />
+      <path
+        d="M4.5 15.2c.7-.8 1.9-1.2 3.3-1.2 1.6 0 2.6.6 4.2.6s2.6-.6 4.2-.6c1.4 0 2.6.4 3.3 1.2V13c0-1.4-2.7-2.5-7.5-2.5S4.5 11.6 4.5 13v2.2z"
+        fill="#fda4af"
+      />
+      <path
+        d="M3.8 16.2C5 15.2 7.2 14.6 12 14.6s7 .6 8.2 1.6c.5.4.8 1 .8 1.6v.8c0 .9-.9 1.6-2 1.6H5c-1.1 0-2-.7-2-1.6v-.8c0-.6.3-1.2.8-1.6z"
+        fill="#fb7185"
+      />
+      <path d="M5.5 17.2h13c.3 0 .5.2.5.5s-.2.5-.5.5h-13c-.3 0-.5-.2-.5-.5s.2-.5.5-.5z" fill="#fff7ed" opacity="0.7" />
+    </svg>
+  );
+}
+
+function UpcomingOwnerBirthdaysBanner({ items }) {
+  if (!items.length) return null;
+  const todayCount = items.filter((item) => item.daysUntil === 0).length;
+  const heading =
+    todayCount > 0
+      ? todayCount === 1
+        ? 'A shop owner is celebrating today'
+        : `${todayCount} shop owners are celebrating today`
+      : 'Upcoming shop-owner birthdays';
+
+  return (
+    <section
+      aria-label="Upcoming shop owner birthdays"
+      className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-rose-500 via-fuchsia-500 to-amber-400 p-[1.5px] shadow-lg shadow-rose-300/40"
+    >
+      <div className="relative overflow-hidden rounded-[15px] bg-gradient-to-br from-rose-50 via-amber-50 to-fuchsia-50 px-4 py-4 sm:px-5">
+        <div className="pointer-events-none absolute -left-10 -top-14 h-36 w-36 rounded-full bg-rose-400/30 blur-3xl" />
+        <div className="pointer-events-none absolute -right-8 bottom-0 h-32 w-32 rounded-full bg-amber-300/40 blur-3xl" />
+        <div className="pointer-events-none absolute right-16 top-0 h-16 w-16 rounded-full bg-fuchsia-300/30 blur-2xl" />
+        <div className="relative flex min-w-0 items-start gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/80 shadow-sm ring-1 ring-rose-200">
+            <CakeIcon />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-rose-700">Celebrate</p>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">{heading}</h2>
+            <p className="mt-0.5 text-sm text-slate-600">
+              Birthdays today and over the next 3 days — a good time to call and wish them well.
+            </p>
+          </div>
+        </div>
+        <ul className="relative mt-4 flex gap-3 overflow-x-auto pb-1">
+          {items.map((item) => {
+            const isToday = item.daysUntil === 0;
+            const when = birthdayWhenLabel(item.daysUntil);
+            return (
+              <li key={item.id} className="min-w-[15.5rem] flex-1">
+                <Link
+                  to={`/dashboard/customers/${encodeURIComponent(item.id)}`}
+                  className={`block h-full rounded-2xl px-4 py-3 shadow-sm ring-1 transition hover:-translate-y-0.5 hover:shadow-md ${
+                    isToday
+                      ? 'bg-gradient-to-br from-rose-500 to-amber-400 text-white ring-white/30'
+                      : 'bg-white/80 text-slate-800 ring-rose-100 hover:bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                        isToday ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-900'
+                      }`}
+                    >
+                      {when}
+                    </span>
+                    <span className={`text-xs font-semibold tabular-nums ${isToday ? 'text-white/90' : 'text-slate-500'}`}>
+                      {formatBirthdayMonthDay(item.ownerBirthday)}
+                    </span>
+                  </div>
+                  <p className={`mt-2 truncate text-base font-bold ${isToday ? 'text-white' : 'text-slate-900'}`}>
+                    {item.ownerName}
+                  </p>
+                  <p className={`truncate text-sm ${isToday ? 'text-white/90' : 'text-slate-600'}`}>{item.shopName}</p>
+                  {item.turningAge ? (
+                    <p className={`mt-1 text-xs font-medium ${isToday ? 'text-white/80' : 'text-rose-700'}`}>
+                      Turning {item.turningAge}
+                    </p>
+                  ) : null}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 function GuaranteeExpiryBadge({ expiryInfo }) {
   if (!expiryInfo || expiryInfo.status === 'none' || expiryInfo.status === 'ok') return null;
   const isExpired = expiryInfo.status === 'expired';
@@ -451,6 +553,7 @@ export default function AnalyticsPage() {
   const [recentTransfers, setRecentTransfers] = useState([]);
   const [overdueBills, setOverdueBills] = useState([]);
   const [pendingBills, setPendingBills] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [cashDashLoading, setCashDashLoading] = useState(true);
   const [chequeDepositQueue, setChequeDepositQueue] = useState({
     asOfDate: '',
@@ -522,6 +625,8 @@ export default function AnalyticsPage() {
           }
           // Build pending bills client-side (works without /api/pending-bills on remote).
           const customers = custRes.ok ? await custRes.json() : [];
+          const customerList = Array.isArray(customers) ? customers : [];
+          setCustomers(customerList);
           const bills = billsRes.ok ? await billsRes.json() : [];
           const paymentsData = payRes.ok ? await payRes.json() : [];
           const paymentsList = Array.isArray(paymentsData) ? paymentsData : [];
@@ -540,7 +645,7 @@ export default function AnalyticsPage() {
           }
           setPendingBills(
             buildPendingBillRows(
-              Array.isArray(customers) ? customers : [],
+              customerList,
               Array.isArray(bills) ? bills : [],
               paymentsList,
             ).map(enrichOverdueBillRow),
@@ -607,6 +712,7 @@ export default function AnalyticsPage() {
           setRecentTransfers([]);
           setOverdueBills([]);
           setPendingBills([]);
+          setCustomers([]);
           setPayments([]);
           setCashBookEntries([]);
           setBankGuarantees([]);
@@ -652,6 +758,11 @@ export default function AnalyticsPage() {
       hasData: true,
     };
   }, [cashSummary]);
+
+  const upcomingOwnerBirthdays = useMemo(
+    () => collectUpcomingOwnerBirthdays(customers, todayYmdLocal()),
+    [customers],
+  );
 
   const brandColorByKey = useMemo(() => {
     const map = {};
@@ -871,6 +982,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
+      <UpcomingOwnerBirthdaysBanner items={upcomingOwnerBirthdays} />
       <div className="grid gap-6 lg:grid-cols-3">
         <Card
           title="Bag sales by brand"

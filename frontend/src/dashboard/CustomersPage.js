@@ -31,6 +31,8 @@ const emptyForm = () => ({
   location: '',
   contactNumber: '',
   email: '',
+  ownerName: '',
+  ownerBirthday: '',
   pastBill: '',
   collectorUserId: '',
 });
@@ -147,6 +149,7 @@ export default function CustomersPage() {
         r.location,
         r.contactNumber,
         r.email,
+        r.ownerName,
         r.collectorName,
         r.dueDate,
         String(r.remainingAmount ?? ''),
@@ -201,6 +204,8 @@ export default function CustomersPage() {
           location: form.location.trim(),
           contactNumber: form.contactNumber.trim(),
           email: form.email.trim(),
+          ownerName: form.ownerName.trim(),
+          ownerBirthday: form.ownerBirthday.trim(),
           pastBill: form.pastBill,
         };
       if (isManagerOrAdmin()) {
@@ -520,6 +525,30 @@ export default function CustomersPage() {
                   placeholder="e.g. shop@example.com"
                   autoComplete="email"
                 />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Shop owner name
+                <input
+                  type="text"
+                  value={form.ownerName}
+                  onChange={(e) => handleFormChange('ownerName', e.target.value)}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  placeholder="e.g. Sunil Perera"
+                  autoComplete="name"
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Owner birthday
+                <input
+                  type="date"
+                  value={form.ownerBirthday}
+                  onChange={(e) => handleFormChange('ownerBirthday', e.target.value)}
+                  max={today}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  Optional. Shown on Analytics when the birthday is today or in the next 3 days.
+                </span>
               </label>
               {isManagerOrAdmin() ? (
                 <CollectorSelectField

@@ -367,7 +367,7 @@ function prorateCollectionAcrossBrands(bill, collectedAmount) {
 /**
  * Collection lines for collector commission.
  * Includes every approved payment allocated to an invoice (full or partial).
- * Amount is the collected portion; days are from bill date to payment date.
+ * Amount is the collected portion; days are from bill date to payment or cheque realize date.
  */
 export function buildCollectorCollectionRows(
   customers,
@@ -378,6 +378,11 @@ export function buildCollectorCollectionRows(
 ) {
   const collectorFilter = String(collectorUserId ?? '').trim();
   const settledLookup = settledByBillId instanceof Map ? settledByBillId : new Map();
+  const paymentById = new Map();
+  for (const p of payments || []) {
+    const id = String(p.id ?? '').trim();
+    if (id) paymentById.set(id, p);
+  }
   const rows = [];
   let rowSeq = 0;
 
@@ -398,33 +403,43 @@ export function buildCollectorCollectionRows(
       const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
       const billAmount = round2(bill?.totalAmount);
       const settledDate = billId ? settledLookup.get(billId) || '' : '';
-      const daysToSettle = daysBetweenYmd(billDate, paymentDate);
-      const commissionBucket = commissionBucketForDays(daysToSettle);
-      const brandShares = prorateCollectionAcrossBrands(bill, alloc.amount);
+      const payment = paymentById.get(String(alloc.paymentId ?? '').trim());
+      const paymentSlices = paymentSettleSlices(payment || {}, paymentDate);
+      let amountSlices = splitAmountAcrossSlices(alloc.amount, paymentSlices);
+      if (amountSlices.length === 0) {
+        amountSlices = [{ amount: round2(alloc.amount), settleDate: paymentDate }];
+      }
 
-      for (const share of brandShares) {
-        if (share.amount <= 0) continue;
-        rowSeq += 1;
-        rows.push({
-          rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${rowSeq}`,
-          paymentId: alloc.paymentId,
-          billId,
-          date: paymentDate,
-          invoiceNumber,
-          shopName,
-          bagType: share.bagType,
-          brandKey: share.brandKey,
-          bagCount: share.bagCount,
-          amount: share.amount,
-          billDate,
-          settledDate,
-          daysToSettle,
-          billAmount,
-          collectorUserId: String(cust?.collectorUserId ?? ''),
-          collectorName,
-          commissionBucket,
-          isPartial: !settledDate,
-        });
+      for (const amountSlice of amountSlices) {
+        const settleDateForDays = amountSlice.settleDate || paymentDate;
+        const daysToSettle = daysBetweenYmd(billDate, settleDateForDays);
+        const commissionBucket = commissionBucketForDays(daysToSettle);
+        const brandShares = prorateCollectionAcrossBrands(bill, amountSlice.amount);
+
+        for (const share of brandShares) {
+          if (share.amount <= 0) continue;
+          rowSeq += 1;
+          rows.push({
+            rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${settleDateForDays}-${rowSeq}`,
+            paymentId: alloc.paymentId,
+            billId,
+            date: paymentDate,
+            invoiceNumber,
+            shopName,
+            bagType: share.bagType,
+            brandKey: share.brandKey,
+            bagCount: share.bagCount,
+            amount: share.amount,
+            billDate,
+            settledDate,
+            daysToSettle,
+            billAmount,
+            collectorUserId: String(cust?.collectorUserId ?? ''),
+            collectorName,
+            commissionBucket,
+            isPartial: !settledDate,
+          });
+        }
       }
     }
   }

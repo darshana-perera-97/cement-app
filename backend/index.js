@@ -3914,12 +3914,20 @@ app.post('/api/customers', async (req, res) => {
     }
     collectorUserId = collectorCheck.collectorUserId;
 
+    const ownerName = String(body.ownerName ?? '').trim();
+    const ownerBirthday = String(body.ownerBirthday ?? '').trim();
+    if (ownerBirthday && !/^\d{4}-\d{2}-\d{2}$/.test(ownerBirthday)) {
+      return res.status(400).json({ error: 'ownerBirthday must be YYYY-MM-DD' });
+    }
+
     const row = {
       id: customerId,
       name,
       location,
       contactNumber,
       ...(email ? { email } : {}),
+      ...(ownerName ? { ownerName } : {}),
+      ...(ownerBirthday ? { ownerBirthday } : {}),
       collectorUserId,
       pastBill,
       remainingAmount: pastBill,
@@ -3950,6 +3958,8 @@ app.patch('/api/customers/:id', async (req, res) => {
     const hasLocation = body.location !== undefined;
     const hasContact = body.contactNumber !== undefined;
     const hasEmail = body.email !== undefined;
+    const hasOwnerName = body.ownerName !== undefined;
+    const hasOwnerBirthday = body.ownerBirthday !== undefined;
     const hasDueDate = body.dueDate !== undefined;
     const hasPastBill = body.pastBill !== undefined;
     const hasOverdueDays = body.overdueDays !== undefined;
@@ -3970,6 +3980,8 @@ app.patch('/api/customers/:id', async (req, res) => {
       !hasLocation &&
       !hasContact &&
       !hasEmail &&
+      !hasOwnerName &&
+      !hasOwnerBirthday &&
       !hasDueDate &&
       !hasPastBill &&
       !hasOverdueDays &&
@@ -4030,6 +4042,24 @@ app.patch('/api/customers/:id', async (req, res) => {
         cust.email = email;
       } else {
         delete cust.email;
+      }
+    }
+    if (hasOwnerName) {
+      const ownerName = String(body.ownerName ?? '').trim();
+      if (ownerName) {
+        cust.ownerName = ownerName;
+      } else {
+        delete cust.ownerName;
+      }
+    }
+    if (hasOwnerBirthday) {
+      const ownerBirthday = String(body.ownerBirthday ?? '').trim();
+      if (!ownerBirthday) {
+        delete cust.ownerBirthday;
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(ownerBirthday)) {
+        return res.status(400).json({ error: 'ownerBirthday must be YYYY-MM-DD' });
+      } else {
+        cust.ownerBirthday = ownerBirthday;
       }
     }
     if (hasDueDate) {

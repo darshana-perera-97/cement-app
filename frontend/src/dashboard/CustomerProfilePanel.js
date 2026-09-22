@@ -178,6 +178,12 @@ export default function CustomerProfilePanel({
               <span className="text-slate-400">—</span>
             )}
           </ContactLine>
+          <ContactLine label="Owner">
+            {customer?.ownerName ? customer.ownerName : <span className="text-slate-400">—</span>}
+          </ContactLine>
+          {customer?.ownerBirthday ? (
+            <ContactLine label="Birthday">{formatDisplayDate(customer.ownerBirthday)}</ContactLine>
+          ) : null}
           <ContactLine label="Collector">
             {customer?.collectorName ? (
               <span>{customer.collectorName}</span>
