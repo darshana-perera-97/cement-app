@@ -49,16 +49,19 @@ function incrementPaymentReceiptNumber(last) {
 }
 
 function latestPaymentReceiptNumber(payments) {
-  const list = Array.isArray(payments) ? payments : [];
-  if (list.length === 0) return '';
-  const sorted = [...list].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
-  );
-  for (const p of sorted) {
+  let best = null;
+  for (const p of Array.isArray(payments) ? payments : []) {
     const n = String(p.billNumber ?? '').trim();
-    if (n) return n;
+    const match = n.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { prefix: match[1], num, width: match[2].length };
+    }
   }
-  return '';
+  if (!best) return '';
+  return `${best.prefix}${String(best.num).padStart(best.width, '0')}`;
 }
 
 function nextPaymentReceiptNumber(payments) {

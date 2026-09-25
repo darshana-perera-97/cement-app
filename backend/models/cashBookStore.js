@@ -6,6 +6,9 @@ const CASH_BOOK_FILE = path.join(__dirname, '..', 'data', 'cashBookEntries.json'
 
 const CATEGORIES = [
   'bank_deposit',
+  'bank_withdrawal',
+  'bank_charge',
+  'bank_income',
   'salary',
   'fuel',
   'maintenance',
@@ -17,6 +20,8 @@ const CATEGORIES = [
 
 const OWNER_SHARE_DIRECTIONS = ['from_owner', 'to_owner'];
 const OWNER_SHARE_PAYMENT_METHODS = ['cash', 'cheque'];
+const EXPENSE_PAYMENT_CATEGORIES = ['salary', 'fuel', 'maintenance', 'other'];
+const EXPENSE_PAYMENT_METHODS = ['cash', 'bank_transfer', 'cheque'];
 
 function isIncomingChequeEntry(entry) {
   const category = String(entry?.category ?? '').trim();
@@ -29,6 +34,24 @@ function isIncomingChequeEntry(entry) {
 }
 
 const BANK_DEPOSIT_TYPES = ['transfer', 'bank_deposit', 'deposit_machine', 'other'];
+const BANK_WITHDRAWAL_TYPES = ['cash_cheque', 'atm', 'bank_slip'];
+const BANK_CHARGE_TYPES = ['chequebook_charges', 'od_interest', 'service_charges', 'return_charges', 'other'];
+const BANK_INCOME_TYPES = ['bank_interest', 'other'];
+
+function normalizeIncomeType(value) {
+  const v = String(value ?? '').trim();
+  return BANK_INCOME_TYPES.includes(v) ? v : '';
+}
+
+function normalizeChargeType(value) {
+  const v = String(value ?? '').trim();
+  return BANK_CHARGE_TYPES.includes(v) ? v : '';
+}
+
+function normalizeWithdrawalType(value) {
+  const v = String(value ?? '').trim();
+  return BANK_WITHDRAWAL_TYPES.includes(v) ? v : '';
+}
 
 function normalizeDepositType(value) {
   const v = String(value ?? '').trim();
@@ -105,6 +128,12 @@ function normalizeEntry(row) {
   }
   const depositType = normalizeDepositType(row.depositType);
   if (depositType) entry.depositType = depositType;
+  const withdrawalType = normalizeWithdrawalType(row.withdrawalType);
+  if (withdrawalType) entry.withdrawalType = withdrawalType;
+  const chargeType = normalizeChargeType(row.chargeType);
+  if (chargeType) entry.chargeType = chargeType;
+  const incomeType = normalizeIncomeType(row.incomeType);
+  if (incomeType) entry.incomeType = incomeType;
   const depositTypeOther = String(row.depositTypeOther ?? '').trim();
   if (depositTypeOther) entry.depositTypeOther = depositTypeOther;
   const chequeNumber = String(row.chequeNumber ?? '').trim();
@@ -243,6 +272,11 @@ function validateCreateBody(body, { staffById, lorryById, bankAccountById } = {}
     }
   }
 
+  if (EXPENSE_PAYMENT_CATEGORIES.includes(category)) {
+    const paymentError = applyExpensePayment(payload, body, bankAccountById);
+    if (paymentError) return { error: paymentError };
+  }
+
   if (category === 'company_cheque') {
     const chequeNumber = String(body.chequeNumber ?? '').trim();
     if (!chequeNumber) return { error: 'Cheque number is required' };
@@ -320,7 +354,143 @@ function validateCreateBody(body, { staffById, lorryById, bankAccountById } = {}
     }
   }
 
+  if (category === 'bank_withdrawal') {
+    const rawIds = body.bankAccountIds;
+    const ids = Array.isArray(rawIds)
+      ? [...new Set(rawIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    if (ids.length !== 1) {
+      return { error: 'Select one bank account' };
+    }
+    const acc = bankAccountById?.get(ids[0]);
+    if (!acc) return { error: 'Selected bank account was not found' };
+    payload.bankAccountIds = ids;
+    payload.bankAccounts = [
+      {
+        id: ids[0],
+        nickName: String(acc.nickName ?? '').trim(),
+        bank: String(acc.bank ?? '').trim(),
+        accountNumber: String(acc.accountNumber ?? '').trim(),
+        accountType: String(acc.accountType ?? '').trim(),
+      },
+    ];
+    const withdrawalType = normalizeWithdrawalType(body.withdrawalType);
+    if (!withdrawalType) {
+      return { error: 'Select how the cash was withdrawn' };
+    }
+    payload.withdrawalType = withdrawalType;
+    if (withdrawalType === 'cash_cheque') {
+      const chequeNumber = String(body.chequeNumber ?? '').trim();
+      if (chequeNumber) payload.chequeNumber = chequeNumber;
+    }
+  }
+
+  if (category === 'bank_charge') {
+    const rawIds = body.bankAccountIds;
+    const ids = Array.isArray(rawIds)
+      ? [...new Set(rawIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    if (ids.length !== 1) {
+      return { error: 'Select one bank account' };
+    }
+    const acc = bankAccountById?.get(ids[0]);
+    if (!acc) return { error: 'Selected bank account was not found' };
+    payload.bankAccountIds = ids;
+    payload.bankAccounts = [
+      {
+        id: ids[0],
+        nickName: String(acc.nickName ?? '').trim(),
+        bank: String(acc.bank ?? '').trim(),
+        accountNumber: String(acc.accountNumber ?? '').trim(),
+        accountType: String(acc.accountType ?? '').trim(),
+      },
+    ];
+    const chargeType = normalizeChargeType(body.chargeType);
+    if (!chargeType) {
+      return { error: 'Select an expense reason' };
+    }
+    payload.chargeType = chargeType;
+    if (chargeType === 'other' && !description) {
+      return { error: 'Enter a note for Others' };
+    }
+  }
+
+  if (category === 'bank_income') {
+    const rawIds = body.bankAccountIds;
+    const ids = Array.isArray(rawIds)
+      ? [...new Set(rawIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    if (ids.length !== 1) {
+      return { error: 'Select one bank account' };
+    }
+    const acc = bankAccountById?.get(ids[0]);
+    if (!acc) return { error: 'Selected bank account was not found' };
+    payload.bankAccountIds = ids;
+    payload.bankAccounts = [
+      {
+        id: ids[0],
+        nickName: String(acc.nickName ?? '').trim(),
+        bank: String(acc.bank ?? '').trim(),
+        accountNumber: String(acc.accountNumber ?? '').trim(),
+        accountType: String(acc.accountType ?? '').trim(),
+      },
+    ];
+    const incomeType = normalizeIncomeType(body.incomeType);
+    if (!incomeType) {
+      return { error: 'Select a cash in reason' };
+    }
+    payload.incomeType = incomeType;
+    if (incomeType === 'other' && !description) {
+      return { error: 'Enter a note for Others' };
+    }
+  }
+
   return { payload };
+}
+
+function snapshotBankAccount(acc, id) {
+  return {
+    id,
+    nickName: String(acc.nickName ?? '').trim(),
+    bank: String(acc.bank ?? '').trim(),
+    accountNumber: String(acc.accountNumber ?? '').trim(),
+    accountType: String(acc.accountType ?? '').trim(),
+  };
+}
+
+/** Cash leaves the cashier. Bank transfer and cheque leave the selected bank account. */
+function applyExpensePayment(payload, body, bankAccountById) {
+  let paymentMethod = String(body.paymentMethod ?? '').trim();
+  if (!paymentMethod) paymentMethod = 'cash';
+  if (!EXPENSE_PAYMENT_METHODS.includes(paymentMethod)) {
+    return 'Select cash, bank transfer, or cheque';
+  }
+  payload.paymentMethod = paymentMethod;
+  if (paymentMethod === 'cash') return '';
+
+  const rawIds = Array.isArray(body.bankAccountIds) ? body.bankAccountIds : [];
+  const ids = [...new Set(rawIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+  if (ids.length !== 1) return 'Select one bank account';
+  const acc = bankAccountById?.get(ids[0]);
+  if (!acc) return 'Selected bank account was not found';
+  payload.bankAccountIds = ids;
+  payload.bankAccounts = [snapshotBankAccount(acc, ids[0])];
+
+  if (paymentMethod === 'cheque') {
+    const chequeNumber = String(body.chequeNumber ?? '').trim();
+    if (!chequeNumber) return 'Cheque number is required';
+    const chequeDate = normalizeYmd(body.chequeDate);
+    if (!chequeDate) return 'Cheque date is required';
+    payload.chequeNumber = chequeNumber;
+    payload.chequeDate = chequeDate;
+    return '';
+  }
+
+  const transferDate = normalizeYmd(body.chequeDate) || payload.date;
+  payload.chequeDate = transferDate;
+  const reference = String(body.chequeNumber ?? '').trim();
+  if (reference) payload.chequeNumber = reference;
+  return '';
 }
 
 function markCompanyChequeDeposited(entry, { recordedBy, depositedAt, bankAccountId, bankAccount, note }) {
@@ -356,7 +526,11 @@ module.exports = {
   isIncomingChequeEntry,
   OWNER_SHARE_DIRECTIONS,
   OWNER_SHARE_PAYMENT_METHODS,
+  EXPENSE_PAYMENT_CATEGORIES,
+  EXPENSE_PAYMENT_METHODS,
   BANK_DEPOSIT_TYPES,
+  BANK_WITHDRAWAL_TYPES,
   normalizeDepositType,
+  normalizeWithdrawalType,
   paymentDateDefaultYmd,
 };

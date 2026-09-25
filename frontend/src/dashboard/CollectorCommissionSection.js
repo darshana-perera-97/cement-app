@@ -5,7 +5,7 @@ import { useBagProducts } from './BagProductsContext';
 import {
   COLLECTION_DAY_BUCKETS,
   buildBillSettledDateLookup,
-  buildCollectorCollectionRows,
+  buildSettledCollectionsRows,
   enrichRowsWithCommission,
   normalizeCollectorCommissionRates,
   summarizeCommissionByBucket,
@@ -127,14 +127,28 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
     [customers, bills, payments],
   );
 
+  const selectedCollector = useMemo(
+    () => collectors.find((c) => c.id === selectedCollectorId) || null,
+    [collectors, selectedCollectorId],
+  );
+
+  const recordedByKeys = useMemo(() => {
+    if (!selectedCollector) return [];
+    const keys = [selectedCollector.username, selectedCollector.nic]
+      .map((v) => String(v ?? '').trim().toLowerCase())
+      .filter(Boolean);
+    return [...new Set(keys)];
+  }, [selectedCollector]);
+
   const baseRows = useMemo(
     () =>
-      buildCollectorCollectionRows(customers, bills, payments, settledLookup, {
+      buildSettledCollectionsRows(customers, bills, settledLookup, payments, {
         from: monthRange.from,
         to: monthRange.to,
-        collectorUserId: selectedCollectorId,
+        recordedByKeys,
+        staff: collectors,
       }),
-    [customers, bills, payments, settledLookup, monthRange, selectedCollectorId],
+    [customers, bills, payments, settledLookup, monthRange, recordedByKeys, collectors],
   );
 
   const commissionRows = useMemo(
@@ -156,8 +170,7 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
     [commissionRows],
   );
 
-  const selectedCollectorName =
-    collectors.find((c) => c.id === selectedCollectorId)?.name || '—';
+  const selectedCollectorName = selectedCollector?.name || '—';
 
   const ratesDirty = useMemo(() => {
     const saved = normalizeCollectorCommissionRates(shop?.collectorCommissionRates);
@@ -212,8 +225,8 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
         <div>
           <h2 className="text-sm font-bold text-slate-900">Collector commission</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Commission is calculated on all collections in the selected month, including partial payments.
-            The rate uses days from the bill date to the collection date.
+            Commission uses the same collections as Settled collections for the selected collector,
+            including partial payments. The rate uses days from the bill date to the payment or cheque realize date.
           </p>
         </div>
         <button

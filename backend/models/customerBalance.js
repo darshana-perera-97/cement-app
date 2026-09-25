@@ -123,6 +123,8 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
   const pastOwed = toNonNegMoney(customer.pastBill);
   let pastPaid = 0;
   const openingId = openingBalanceBillId(customer.id);
+  const openingCredit = openingId ? sumItemReturnForBill(returnsRows, openingId) : 0;
+  const pastRoom = Math.max(0, roundMoney(pastOwed - openingCredit));
   if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
 
   const custPayments = (Array.isArray(payments) ? payments : [])
@@ -137,7 +139,7 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
         if (openingId && billId === openingId) {
-          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
+          const room = Math.max(0, roundMoney(pastRoom - pastPaid));
           const toward = Math.min(room, cashAmount);
           pastPaid = roundMoney(pastPaid + toward);
           paidByBillId.set(openingId, pastPaid);
@@ -155,7 +157,7 @@ function computeBillPaymentAllocation(customer, bills, payments, promotions = []
     }
 
     let remaining = credit;
-    const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
+    const towardPast = Math.min(Math.max(0, pastRoom - pastPaid), remaining);
     pastPaid = roundMoney(pastPaid + towardPast);
     if (openingId) paidByBillId.set(openingId, pastPaid);
     remaining = roundMoney(remaining - towardPast);

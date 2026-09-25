@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isCollector, mustUseTodayRecordDate } from '../auth';
+import { authFetch, getUsername, isAdmin, isCollector, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
 import {
   normalizePaymentReceiptInput,
@@ -154,10 +154,13 @@ export default function CollectorSeparateBillSettlementModal({
   customerName = '',
 }) {
   const receiptNumberTouched = useRef(false);
+  const canEditReceiptNumber = isAdmin();
   const [step, setStep] = useState(1);
   const [payments, setPayments] = useState([]);
+  const [nextReceiptNumber, setNextReceiptNumber] = useState('');
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -174,6 +177,17 @@ export default function CollectorSeparateBillSettlementModal({
       setBills(Array.isArray(data) ? data : []);
     } catch {
       setBills([]);
+    }
+  }, []);
+
+  const loadPromotions = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/promotions`);
+      if (!res.ok) throw new Error('Failed to load promotions');
+      const data = await res.json();
+      setPromotions(Array.isArray(data) ? data : []);
+    } catch {
+      setPromotions([]);
     }
   }, []);
 
@@ -199,6 +213,17 @@ export default function CollectorSeparateBillSettlementModal({
     }
   }, []);
 
+  const loadNextReceiptNumber = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/payments/next-receipt-number`);
+      if (!res.ok) throw new Error('Failed to load next receipt number');
+      const data = await res.json();
+      setNextReceiptNumber(String(data?.billNumber ?? '').trim());
+    } catch {
+      setNextReceiptNumber('');
+    }
+  }, []);
+
   const loadBankAccounts = useCallback(async () => {
     try {
       const res = await authFetch(`${apiBase}/api/shop`);
@@ -215,11 +240,14 @@ export default function CollectorSeparateBillSettlementModal({
     receiptNumberTouched.current = false;
     setStep(1);
     setSaveError(null);
+    setNextReceiptNumber('');
     loadCustomers();
     loadBills();
+    loadPromotions();
     loadPayments();
+    loadNextReceiptNumber();
     loadBankAccounts();
-  }, [open, loadCustomers, loadBills, loadPayments, loadBankAccounts]);
+  }, [open, loadCustomers, loadBills, loadPromotions, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -239,14 +267,16 @@ export default function CollectorSeparateBillSettlementModal({
   }, [open, prefillCustomerId, payments]);
 
   useEffect(() => {
-    if (!open || receiptNumberTouched.current) return;
-    const next = suggestNextPaymentReceiptNumber(payments);
+    if (!open) return;
+    if (canEditReceiptNumber && receiptNumberTouched.current) return;
+    const next = nextReceiptNumber || suggestNextPaymentReceiptNumber(payments);
+    if (!next) return;
     setForm((f) => (f.billNumber === next ? f : { ...f, billNumber: next }));
-  }, [open, payments]);
+  }, [open, payments, nextReceiptNumber, canEditReceiptNumber]);
 
   const pendingBills = useMemo(() => {
     if (!form.customerId) return [];
-    return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId)].sort((a, b) => {
+    return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId, { promotions })].sort((a, b) => {
       if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
         return a.isOpeningBalance ? -1 : 1;
       }
@@ -254,7 +284,7 @@ export default function CollectorSeparateBillSettlementModal({
       if (dateCmp !== 0) return dateCmp;
       return String(a.invoiceNumber || a.id).localeCompare(String(b.invoiceNumber || b.id));
     });
-  }, [form.customerId, customers, bills, payments]);
+  }, [form.customerId, customers, bills, payments, promotions]);
 
   const chequeTotal = useMemo(
     () => form.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0),
@@ -280,6 +310,7 @@ export default function CollectorSeparateBillSettlementModal({
   const handleChange = (field, value) => {
     if (field === 'date' && lockDateToToday) return;
     if (field === 'billNumber') {
+      if (!canEditReceiptNumber) return;
       receiptNumberTouched.current = true;
       setForm((f) => ({ ...f, billNumber: String(value).slice(0, 40) }));
       return;
@@ -701,16 +732,31 @@ export default function CollectorSeparateBillSettlementModal({
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="block text-sm font-medium text-slate-600">
                       Payment receipt #
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        required
-                        maxLength={40}
-                        value={form.billNumber}
-                        onChange={(e) => handleChange('billNumber', e.target.value)}
-                        className={`${inputClass} font-mono`}
-                        placeholder="e.g. PAY-012"
-                      />
+                      {canEditReceiptNumber ? (
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          required
+                          maxLength={40}
+                          value={form.billNumber}
+                          onChange={(e) => handleChange('billNumber', e.target.value)}
+                          className={`${inputClass} font-mono`}
+                          placeholder="e.g. PAY-012"
+                        />
+                      ) : (
+                        <>
+                          <p
+                            className="mt-1 flex min-h-[2.75rem] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm text-slate-800 ring-1 ring-slate-200"
+                            aria-readonly="true"
+                          >
+                            {form.billNumber || '…'}
+                            <span className="sr-only"> (assigned automatically, cannot be changed)</span>
+                          </p>
+                          <span className="mt-1 block text-xs font-normal text-slate-500">
+                            Next number after the last saved payment. Only an admin can change it.
+                          </span>
+                        </>
+                      )}
                     </label>
                     <label className="block text-sm font-medium text-slate-600">
                       Payment date

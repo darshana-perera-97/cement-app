@@ -72,10 +72,59 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
   return rows;
 }
 
+const EXPENSE_PAYMENT_CATEGORIES = new Set(['salary', 'fuel', 'maintenance', 'other']);
+
+function collectExpenseOutgoingPayments(cashBookEntries) {
+  const rows = [];
+  for (const row of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    if (row?.cancelled) continue;
+    const category = String(row.category ?? '').trim();
+    if (!EXPENSE_PAYMENT_CATEGORIES.has(category)) continue;
+    const paymentType = String(row.paymentMethod ?? '').trim();
+    if (paymentType !== 'bank_transfer' && paymentType !== 'cheque') continue;
+    const bankAccountId = Array.isArray(row.bankAccountIds)
+      ? String(row.bankAccountIds[0] ?? '').trim()
+      : '';
+    const amount = toNonNegMoney(row.amount);
+    if (!bankAccountId || amount <= 0) continue;
+    rows.push({
+      bankAccountId,
+      amount,
+      paymentType,
+      chequeNumber: String(row.chequeNumber ?? '').trim(),
+      chequeDate: String(row.chequeDate ?? row.date ?? '').trim().slice(0, 10),
+      source: 'expense',
+      category,
+      entryId: String(row.id ?? '').trim(),
+    });
+  }
+  return rows;
+}
+
+function sumWithdrawalsByAccount(cashBookEntries) {
+  const totals = {};
+  for (const row of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
+    if (row.cancelled) continue;
+    const category = String(row.category ?? '').trim();
+    if (category !== 'bank_withdrawal' && category !== 'bank_charge') continue;
+    const amt = toNonNegMoney(row.amount);
+    if (amt <= 0) continue;
+    const ids = Array.isArray(row.bankAccountIds) ? row.bankAccountIds : [];
+    for (const rawId of ids) {
+      const id = String(rawId ?? '').trim();
+      if (!id) continue;
+      totals[id] = (totals[id] || 0) + amt;
+    }
+  }
+  return totals;
+}
+
 function sumDepositsByAccount(cashBookEntries) {
   const totals = {};
   for (const row of Array.isArray(cashBookEntries) ? cashBookEntries : []) {
-    if (String(row.category ?? '').trim() !== 'bank_deposit') continue;
+    if (row.cancelled) continue;
+    const category = String(row.category ?? '').trim();
+    if (category !== 'bank_deposit' && category !== 'bank_income') continue;
     const amt = toNonNegMoney(row.amount);
     if (amt <= 0) continue;
     const ids = Array.isArray(row.bankAccountIds) ? row.bankAccountIds : [];
@@ -147,8 +196,8 @@ function sumDepositedCompanyChequesByAccount(cashBookEntries) {
 /**
  * Running bank balance per account (may be negative).
  * Credits: cash-book deposits + deposited customer/company cheques + approved CDM / online transfers.
- * Cleared PO cheques / bank transfers: converting or transfer date (chequeDate) <= asOf.
- * Pending PO cheques / bank transfers: date > asOf.
+ * Debits: cashier withdrawals + cleared PO and expense cheques / bank transfers (chequeDate <= asOf).
+ * Pending PO and expense cheques / bank transfers: date > asOf.
  */
 function computeBankAccountBalances({
   bankAccounts,
@@ -160,10 +209,14 @@ function computeBankAccountBalances({
   const asOfDate = normalizeAsOfDate(asOf);
   const accounts = Array.isArray(bankAccounts) ? bankAccounts : [];
   const deposits = sumDepositsByAccount(cashBookEntries);
+  const withdrawals = sumWithdrawalsByAccount(cashBookEntries);
   const incomingCheques = sumDepositedPaymentChequesByAccount(payments);
   const incomingOther = sumApprovedOtherMethodsByAccount(payments);
   const companyCheques = sumDepositedCompanyChequesByAccount(cashBookEntries);
-  const outgoing = collectPurchaseOrderOutgoingCheques(purchaseOrders);
+  const outgoing = [
+    ...collectPurchaseOrderOutgoingCheques(purchaseOrders),
+    ...collectExpenseOutgoingPayments(cashBookEntries),
+  ];
 
   const clearedOutgoing = {};
   const pendingOutgoing = {};
@@ -184,17 +237,19 @@ function computeBankAccountBalances({
     const id = String(a.id ?? '').trim();
     if (!id) continue;
     const depositTotal = deposits[id] || 0;
+    const withdrawalTotal = withdrawals[id] || 0;
     const otherTotal = incomingOther[id] || 0;
     const incomingTotal = (incomingCheques[id] || 0) + (companyCheques[id] || 0) + otherTotal;
     const cleared = clearedOutgoing[id] || 0;
     const pending = pendingOutgoing[id] || 0;
-    const balance = Math.round((depositTotal + incomingTotal - cleared) * 100) / 100;
+    const balance = Math.round((depositTotal + incomingTotal - cleared - withdrawalTotal) * 100) / 100;
     byAccountId[id] = {
       bankAccountId: id,
       balance,
       pendingOutgoing: Math.round(pending * 100) / 100,
       clearedOutgoing: Math.round(cleared * 100) / 100,
       deposits: Math.round(depositTotal * 100) / 100,
+      withdrawals: Math.round(withdrawalTotal * 100) / 100,
       incomingCheques: Math.round(incomingTotal * 100) / 100,
       incomingOther: Math.round(otherTotal * 100) / 100,
     };
@@ -205,6 +260,7 @@ function computeBankAccountBalances({
 
 module.exports = {
   collectPurchaseOrderOutgoingCheques,
+  collectExpenseOutgoingPayments,
   computeBankAccountBalances,
   normalizeAsOfDate,
 };

@@ -22,6 +22,26 @@ function toNonNegMoney(n) {
   return Math.round(v * 100) / 100;
 }
 
+/** System rule cashback applied to one invoice (`rule_cashback`). */
+function sumRuleCashbackForBill(promotions, billId) {
+  const id = String(billId ?? '').trim();
+  if (!id) return 0;
+  let sum = 0;
+  for (const row of Array.isArray(promotions) ? promotions : []) {
+    if (String(row?.type ?? '').trim() !== 'rule_cashback') continue;
+    if (String(row.billId ?? '').trim() !== id) continue;
+    sum += toNonNegMoney(row.discountAmount);
+  }
+  return Math.round(sum * 100) / 100;
+}
+
+/** Invoice total still to be paid after a system rule cashback on that invoice. */
+function payableBillTotal(bill, promotions = []) {
+  const base = toNonNegMoney(bill?.totalAmount);
+  const cashback = sumRuleCashbackForBill(promotions, bill?.id);
+  return Math.max(0, Math.round((base - cashback) * 100) / 100);
+}
+
 /** Matches backend `paymentCreditToCustomer`. */
 export function paymentCreditToCustomer(p) {
   if (!isPaymentCreditActive(p)) return 0;
@@ -85,7 +105,7 @@ function comparePaymentsChronological(a, b) {
  * Payments with billCashAllocations apply only to those bills (skip FIFO).
  * Other payments apply pastBill first, then oldest bills.
  */
-function computeBillPaymentAllocation(customer, bills, payments) {
+function computeBillPaymentAllocation(customer, bills, payments, promotions = []) {
   const nk = normalizeCustomerName(customer.name);
   const custBills = sortBillsChronological(
     (Array.isArray(bills) ? bills : []).filter(
@@ -123,7 +143,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
         }
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = toNonNegMoney(bill?.totalAmount);
+        const total = payableBillTotal(bill, promotions);
         const current = paidByBillId.get(billId) || 0;
         const room = Math.max(0, toNonNegMoney(total - current));
         const toward = Math.min(room, cashAmount);
@@ -142,7 +162,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
       if (remaining <= 0) break;
       const id = String(bill.id ?? '').trim();
       if (!id) continue;
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = payableBillTotal(bill, promotions);
       const current = paidByBillId.get(id) || 0;
       const room = Math.max(0, toNonNegMoney(total - current));
       const toward = Math.min(room, remaining);
@@ -158,7 +178,7 @@ function computeBillPaymentAllocation(customer, bills, payments) {
  * Each approved payment’s amount applied to a specific invoice (FIFO or explicit allocation).
  * Opening past-bill amounts are not included — those have no invoice date for aging.
  */
-export function listCustomerBillPaymentAllocations(customer, bills, payments) {
+export function listCustomerBillPaymentAllocations(customer, bills, payments, promotions = []) {
   if (!customer) return [];
   const nk = normalizeCustomerName(customer.name);
   const custBills = sortBillsChronological(
@@ -203,7 +223,7 @@ export function listCustomerBillPaymentAllocations(customer, bills, payments) {
         if (isOpeningBalanceBillId(billId, customer.id)) continue;
         if (!paidByBillId.has(billId)) continue;
         const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = toNonNegMoney(bill?.totalAmount);
+        const total = payableBillTotal(bill, promotions);
         const current = paidByBillId.get(billId) || 0;
         const room = Math.max(0, toNonNegMoney(total - current));
         const toward = Math.min(room, cashAmount);
@@ -222,7 +242,7 @@ export function listCustomerBillPaymentAllocations(customer, bills, payments) {
       if (remaining <= 0) break;
       const id = String(bill.id ?? '').trim();
       if (!id) continue;
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = payableBillTotal(bill, promotions);
       const current = paidByBillId.get(id) || 0;
       const room = Math.max(0, toNonNegMoney(total - current));
       const toward = Math.min(room, remaining);
@@ -272,12 +292,14 @@ function daysBetweenYmd(fromYmd, toYmd) {
   return Math.max(0, Math.round((t1 - t0) / (24 * 60 * 60 * 1000)));
 }
 
-export function billDetailsLine(bill) {
+export function billDetailsLine(bill, { includeStockId = true } = {}) {
   const parts = [];
   const invoiceNumber = String(bill.invoiceNumber ?? '').trim();
-  if (invoiceNumber) parts.push(`Inv ${invoiceNumber}`);
-  const stockId = String(bill.stockId ?? '').trim();
-  if (stockId) parts.push(`Stock ${stockId}`);
+  if (invoiceNumber) parts.push(includeStockId ? `Inv ${invoiceNumber}` : `Invoice ${invoiceNumber}`);
+  if (includeStockId) {
+    const stockId = String(bill.stockId ?? '').trim();
+    if (stockId) parts.push(`Stock ${stockId}`);
+  }
   const bagParts = [];
   for (const [key, label] of [
     ['tokyo', 'Tokyo'],
@@ -310,7 +332,7 @@ function sortBillsChronological(bills) {
 }
 
 /** Payment date (YYYY-MM-DD) when each bill was fully cleared. */
-function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, customerId = '') {
+function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, customerId = '', promotions = []) {
   const settledByBillId = new Map();
   const sortedBills = sortBillsChronological(custBills);
   const runningPaid = new Map();
@@ -343,7 +365,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
         }
         if (!runningPaid.has(billId)) continue;
         const bill = sortedBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = toNonNegMoney(bill?.totalAmount);
+        const total = payableBillTotal(bill, promotions);
         const current = runningPaid.get(billId) || 0;
         const room = Math.max(0, toNonNegMoney(total - current));
         const toward = Math.min(room, cashAmount);
@@ -365,7 +387,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
       if (credit <= 0) break;
       const id = String(bill.id ?? '').trim();
       if (!id) continue;
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = payableBillTotal(bill, promotions);
       const current = runningPaid.get(id) || 0;
       const room = Math.max(0, toNonNegMoney(total - current));
       const toward = Math.min(room, credit);
@@ -379,7 +401,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
   return settledByBillId;
 }
 
-function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
+function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotions = []) {
   if (!customer) return new Map();
 
   const nk = normalizeCustomerName(customer.name);
@@ -389,11 +411,11 @@ function buildSettledDateByBillIdForCustomer(customer, bills, payments) {
   const custPayments = (Array.isArray(payments) ? payments : []).filter(
     (p) => p.customerId === customer.id,
   );
-  return buildSettledDateByBillId(custBills, custPayments, customer.pastBill, customer.id);
+  return buildSettledDateByBillId(custBills, custPayments, customer.pastBill, customer.id, promotions);
 }
 
 /** Map bill id → settled date when fully paid (FIFO or explicit allocations). */
-export function buildBillSettledDateLookup(customers, bills, payments) {
+export function buildBillSettledDateLookup(customers, bills, payments, promotions = []) {
   const settledByBillId = new Map();
   const safeCustomers = Array.isArray(customers) ? customers : [];
   const safeBills = Array.isArray(bills) ? bills : [];
@@ -404,7 +426,7 @@ export function buildBillSettledDateLookup(customers, bills, payments) {
     const nk = normalizeCustomerName(cust.name);
     if (!nk) continue;
     registeredNk.add(nk);
-    for (const [id, date] of buildSettledDateByBillIdForCustomer(cust, safeBills, safePayments)) {
+    for (const [id, date] of buildSettledDateByBillIdForCustomer(cust, safeBills, safePayments, promotions)) {
       settledByBillId.set(id, date);
     }
   }
@@ -419,7 +441,7 @@ export function buildBillSettledDateLookup(customers, bills, payments) {
 
   for (const [nk, obills] of orphanBillsByNk) {
     const custPayments = safePayments.filter((p) => normalizeCustomerName(p.customerName) === nk);
-    for (const [id, date] of buildSettledDateByBillId(obills, custPayments, 0)) {
+    for (const [id, date] of buildSettledDateByBillId(obills, custPayments, 0, '', promotions)) {
       settledByBillId.set(id, date);
     }
   }
@@ -428,10 +450,10 @@ export function buildBillSettledDateLookup(customers, bills, payments) {
 }
 
 /** True when approved payments have fully cleared the bill (no outstanding balance). */
-export function isBillFullySettled(bill, customers, bills, payments) {
+export function isBillFullySettled(bill, customers, bills, payments, promotions = []) {
   const nk = normalizeCustomerName(bill?.customerName);
   const id = String(bill?.id ?? '').trim();
-  const total = toNonNegMoney(bill?.totalAmount);
+  const total = payableBillTotal(bill, promotions);
   if (!id || total <= 0) return false;
 
   const cust = (Array.isArray(customers) ? customers : []).find(
@@ -439,7 +461,7 @@ export function isBillFullySettled(bill, customers, bills, payments) {
   );
 
   if (cust) {
-    const { paidByBillId } = computeBillPaymentAllocation(cust, bills, payments);
+    const { paidByBillId } = computeBillPaymentAllocation(cust, bills, payments, promotions);
     const paid = paidByBillId.get(id) || 0;
     return Math.round((total - paid) * 100) / 100 <= 0;
   }
@@ -453,7 +475,7 @@ export function isBillFullySettled(bill, customers, bills, payments) {
   }
   let remainingCredit = paySum;
   for (const b of obills) {
-    const bTotal = toNonNegMoney(b.totalAmount);
+    const bTotal = payableBillTotal(b, promotions);
     const paidToward = Math.min(bTotal, remainingCredit);
     remainingCredit -= paidToward;
     const bId = String(b.id ?? '').trim();
@@ -474,7 +496,7 @@ export function buildPendingBillRows(
   customers = [],
   bills = [],
   payments = [],
-  { includeOrphanBills = true } = {},
+  { includeOrphanBills = true, promotions = [] } = {},
 ) {
   const todayYmd = todayYmdLocal();
   const rows = [];
@@ -492,7 +514,12 @@ export function buildPendingBillRows(
 
   for (const cust of safeCustomers) {
     const settlementDays = settlementDaysForCustomer(cust);
-    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(cust, safeBills, safePayments);
+    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(
+      cust,
+      safeBills,
+      safePayments,
+      promotions,
+    );
 
     const pastOwed = toNonNegMoney(cust.pastBill);
     const openingRemaining = Math.round((pastOwed - pastPaid) * 100) / 100;
@@ -515,7 +542,7 @@ export function buildPendingBillRows(
     }
 
     for (const bill of custBills) {
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = payableBillTotal(bill, promotions);
       const id = String(bill.id ?? '').trim();
       const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
       const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -553,7 +580,7 @@ export function buildPendingBillRows(
       }
       let remainingCredit = paySum;
       for (const bill of sortBillsChronological(obills)) {
-        const total = toNonNegMoney(bill.totalAmount);
+        const total = payableBillTotal(bill, promotions);
         const paidTowardBill = Math.min(total, remainingCredit);
         remainingCredit -= paidTowardBill;
         const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -593,12 +620,17 @@ export function buildPendingBillRows(
  * Explicit per-bill allocations are honored; other payments use FIFO.
  * Newest bill date first.
  */
-export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
+export function buildCustomerInvoiceRows(customer, bills = [], payments = [], promotions = []) {
   if (!customer) return [];
   const todayYmd = todayYmdLocal();
   const settlementDays = settlementDaysForCustomer(customer);
-  const settledByBillId = buildSettledDateByBillIdForCustomer(customer, bills, payments);
-  const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(customer, bills, payments);
+  const settledByBillId = buildSettledDateByBillIdForCustomer(customer, bills, payments, promotions);
+  const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(
+    customer,
+    bills,
+    payments,
+    promotions,
+  );
 
   const rows = [];
   const pastOwed = toNonNegMoney(customer.pastBill);
@@ -638,7 +670,7 @@ export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
   }
 
   for (const bill of custBills) {
-    const total = toNonNegMoney(bill.totalAmount);
+    const total = payableBillTotal(bill, promotions);
     const id = String(bill.id ?? '').trim();
     const paidTowardBill = id ? paidByBillId.get(id) || 0 : 0;
     const outstanding = Math.round((total - paidTowardBill) * 100) / 100;
@@ -666,7 +698,7 @@ export function buildCustomerInvoiceRows(customer, bills = [], payments = []) {
       paidAmount: paidTowardBill,
       outstandingAmount: outstanding,
       status,
-      details: billDetailsLine(bill),
+      details: billDetailsLine(bill, { includeStockId: false }),
       daysLeftUntilDue: dueDate && todayYmd <= dueDate ? daysBetweenYmd(todayYmd, dueDate) : 0,
       daysOverdue: isOverdue ? daysBetweenYmd(dueDate, todayYmd) : 0,
       isOverdue,
@@ -688,7 +720,7 @@ export function buildCustomerOutstandingBills(
   bills = [],
   payments = [],
   customerId,
-  { excludePaymentId = null } = {},
+  { excludePaymentId = null, promotions = [] } = {},
 ) {
   const idKey = String(customerId ?? '').trim();
   const cust = (Array.isArray(customers) ? customers : []).find(
@@ -698,5 +730,5 @@ export function buildCustomerOutstandingBills(
   const pay = excludePaymentId
     ? (Array.isArray(payments) ? payments : []).filter((p) => p.id !== excludePaymentId)
     : payments;
-  return buildPendingBillRows([cust], bills, pay, { includeOrphanBills: false });
+  return buildPendingBillRows([cust], bills, pay, { includeOrphanBills: false, promotions });
 }

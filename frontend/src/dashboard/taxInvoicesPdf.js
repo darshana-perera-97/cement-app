@@ -84,10 +84,19 @@ function drawInvoiceAcknowledgement(doc, startY, generatedAt) {
   }
 }
 
+function roundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
 function lineTotal(bags, unitPrice) {
   const b = Number(bags) || 0;
   const u = Number(unitPrice) || 0;
-  return Math.round(b * u * 100) / 100;
+  return roundMoney(b * u);
+}
+
+/** Selling prices are VAT-inclusive. Supply = total / 1.18 so supply + 18% VAT equals the invoice total. */
+function valueOfSupplyFromInclusive(inclusiveTotal) {
+  return roundMoney((Number(inclusiveTotal) || 0) / (1 + VAT_RATE));
 }
 
 function buildBillLineItems(bill) {
@@ -102,7 +111,7 @@ function buildBillLineItems(bill) {
       description: formatBrandLabel(brand) || brand.label,
       quantity: bags,
       unitPrice,
-      amountExVat: lineTotal(bags, unitPrice),
+      inclusiveAmount: lineTotal(bags, unitPrice),
     });
   }
   return items;
@@ -113,7 +122,8 @@ function sumInvoiceDiscountForBill(promotions, billId) {
   if (!id) return 0;
   let sum = 0;
   for (const row of Array.isArray(promotions) ? promotions : []) {
-    if (String(row?.type ?? '').trim() !== 'invoice_discount') continue;
+    const type = String(row?.type ?? '').trim();
+    if (type !== 'invoice_discount' && type !== 'rule_cashback') continue;
     if (String(row.billId ?? '').trim() !== id) continue;
     sum += Number(row.discountAmount) || 0;
   }
@@ -307,27 +317,48 @@ function renderTaxInvoicePage(doc, bill, opts) {
 
   const lineItems = buildBillLineItems(bill);
   const invoiceDiscount = sumInvoiceDiscountForBill(opts.promotions, bill.id);
-  let subtotalExVat = lineItems.reduce((sum, row) => sum + row.amountExVat, 0);
-  if (lineItems.length === 0) {
-    subtotalExVat = Number(bill.totalAmount) || 0;
+  const grossInclusive =
+    lineItems.length > 0
+      ? lineItems.reduce((sum, row) => sum + row.inclusiveAmount, 0)
+      : Number(bill.totalAmount) || 0;
+  const invoiceTotal = Math.max(0, roundMoney(grossInclusive - invoiceDiscount));
+  const valueOfSupply = valueOfSupplyFromInclusive(invoiceTotal);
+  const vatAmount = roundMoney(invoiceTotal - valueOfSupply);
+  const totalIncVat = invoiceTotal;
+
+  const exVatLines = lineItems.map((row) => {
+    const amountExVat = valueOfSupplyFromInclusive(row.inclusiveAmount);
+    return {
+      ...row,
+      amountExVat,
+      unitPriceExVat: row.quantity > 0 ? roundMoney(amountExVat / row.quantity) : valueOfSupplyFromInclusive(row.unitPrice),
+    };
+  });
+  const discountExVat = valueOfSupplyFromInclusive(invoiceDiscount);
+  if (exVatLines.length > 0) {
+    const linedSum = roundMoney(
+      exVatLines.reduce((sum, row) => sum + row.amountExVat, 0) - discountExVat,
+    );
+    const drift = roundMoney(valueOfSupply - linedSum);
+    if (drift) {
+      const last = exVatLines[exVatLines.length - 1];
+      last.amountExVat = roundMoney(last.amountExVat + drift);
+    }
   }
-  subtotalExVat = Math.max(0, Math.round((subtotalExVat - invoiceDiscount) * 100) / 100);
-  const vatAmount = Math.round(subtotalExVat * VAT_RATE * 100) / 100;
-  const totalIncVat = Math.round((subtotalExVat + vatAmount) * 100) / 100;
 
   const tableBody =
-    lineItems.length > 0
-      ? lineItems.map((row, i) => [
+    exVatLines.length > 0
+      ? exVatLines.map((row, i) => [
           row.reference || String(i + 1),
           row.description,
           String(row.quantity),
-          formatAmount(row.unitPrice),
+          formatAmount(row.unitPriceExVat),
           formatAmount(row.amountExVat),
         ])
-      : [['—', 'Credit sale (cement bags)', '—', '—', formatAmount(subtotalExVat)]];
+      : [['—', 'Credit sale (cement bags)', '—', '—', formatAmount(valueOfSupply)]];
 
   if (invoiceDiscount > 0) {
-    tableBody.push(['', 'Promotion discount', '', '', formatAmount(-invoiceDiscount)]);
+    tableBody.push(['', 'Promotion discount', '', '', formatAmount(-discountExVat)]);
   }
 
   autoTable(doc, {
@@ -343,7 +374,7 @@ function renderTaxInvoicePage(doc, bill, opts) {
     ],
     body: tableBody,
     foot: [
-      ['', 'Total Value of Supply:', '', '', formatAmount(subtotalExVat)],
+      ['', 'Total Value of Supply:', '', '', formatAmount(valueOfSupply)],
       ['', `VAT Amount (Total Value of Supply @ ${VAT_RATE * 100}%):`, '', '', formatAmount(vatAmount)],
       ['', 'Total Amount including VAT:', '', '', formatAmount(totalIncVat)],
     ],

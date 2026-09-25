@@ -137,6 +137,14 @@ export function formatBrandLabel(brand) {
   return code || label || '';
 }
 
+/** Reports tables: item code and the first 10 characters of the item name. */
+export function formatReportItemLabel(brand) {
+  const label = String(brand?.label ?? '').trim().slice(0, 10);
+  const code = String(brand?.code ?? '').trim();
+  if (code && label) return `${code} · ${label}`;
+  return code || label || '';
+}
+
 /** Resolve a stored product name (e.g. on a PO) to `CODE · name` when the catalog has a code. */
 export function formatProductNameWithCode(productName, brands = getCachedBrands()) {
   const raw = String(productName ?? '').trim();

@@ -1,4 +1,4 @@
-import { formatBrandLabel, getCachedBrands } from './brandTheme';
+import { formatReportItemLabel, getCachedBrands } from './brandTheme';
 import { getPaymentCheques } from './paymentCheques';
 import {
   buildBillSettledDateLookup,
@@ -330,7 +330,7 @@ function prorateCollectionAcrossBrands(bill, collectedAmount) {
     if (bagCount <= 0) continue;
     brandLines.push({
       brandKey: brand.key,
-      bagType: formatBrandLabel(brand) || brand.label,
+      bagType: formatReportItemLabel(brand) || brand.label,
       bagCount,
       lineAmount: brandLineFromBill(bill, brand.key),
     });
@@ -462,12 +462,10 @@ export function summarizeCollectionsByBucket(rows) {
     COLLECTION_DAY_BUCKETS.map((b) => [b.key, { lineCount: 0, amount: 0 }]),
   );
   for (const row of rows || []) {
-    const buckets = summaryBucketsForDays(row.daysToSettle);
-    for (const key of buckets) {
-      if (!totals[key]) continue;
-      totals[key].lineCount += 1;
-      totals[key].amount = round2(totals[key].amount + row.amount);
-    }
+    const key = row.commissionBucket || commissionBucketForDays(row.daysToSettle);
+    if (!key || !totals[key]) continue;
+    totals[key].lineCount += 1;
+    totals[key].amount = round2(totals[key].amount + row.amount);
   }
   return totals;
 }

@@ -100,6 +100,7 @@ export default function CustomerPendingBillsPanel({
 }) {
   const [tab, setTab] = useState('remaining');
   const [bills, setBills] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [billsLoading, setBillsLoading] = useState(true);
   const [detailRow, setDetailRow] = useState(null);
 
@@ -108,11 +109,21 @@ export default function CustomerPendingBillsPanel({
     (async () => {
       setBillsLoading(true);
       try {
-        const res = await authFetch(`${apiBase}/api/bills`);
-        const data = await res.json().catch(() => []);
-        if (!cancelled) setBills(Array.isArray(data) ? data : []);
+        const [billsRes, promoRes] = await Promise.all([
+          authFetch(`${apiBase}/api/bills`),
+          authFetch(`${apiBase}/api/promotions`),
+        ]);
+        const data = await billsRes.json().catch(() => []);
+        const promoData = await promoRes.json().catch(() => []);
+        if (!cancelled) {
+          setBills(Array.isArray(data) ? data : []);
+          setPromotions(Array.isArray(promoData) ? promoData : []);
+        }
       } catch {
-        if (!cancelled) setBills([]);
+        if (!cancelled) {
+          setBills([]);
+          setPromotions([]);
+        }
       } finally {
         if (!cancelled) setBillsLoading(false);
       }
@@ -126,10 +137,10 @@ export default function CustomerPendingBillsPanel({
 
   const allRows = useMemo(() => {
     if (!customer?.id) return [];
-    return buildCustomerOutstandingBills([customer], bills, payments, customer.id)
+    return buildCustomerOutstandingBills([customer], bills, payments, customer.id, { promotions })
       .map((row) => enrichPendingRow(row, todayYmd))
       .sort(comparePendingRows);
-  }, [customer, bills, payments, todayYmd]);
+  }, [customer, bills, payments, promotions, todayYmd]);
 
   const counts = useMemo(() => {
     let overdue = 0;

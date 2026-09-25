@@ -631,9 +631,11 @@ export default function AnalyticsPage() {
           const paymentsData = payRes.ok ? await payRes.json() : [];
           const paymentsList = Array.isArray(paymentsData) ? paymentsData : [];
           setPayments(paymentsList);
+          let promoList = [];
           if (promoRes.ok) {
             const promoData = await promoRes.json();
-            setPromotions(Array.isArray(promoData) ? promoData : []);
+            promoList = Array.isArray(promoData) ? promoData : [];
+            setPromotions(promoList);
           } else {
             setPromotions([]);
           }
@@ -648,6 +650,7 @@ export default function AnalyticsPage() {
               customerList,
               Array.isArray(bills) ? bills : [],
               paymentsList,
+              { promotions: promoList },
             ).map(enrichOverdueBillRow),
           );
           if (cbeRes.ok) {

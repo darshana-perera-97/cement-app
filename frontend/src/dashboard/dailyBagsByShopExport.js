@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import { formatBrandLabel, getCachedBrands } from './brandTheme';
+import { formatReportItemLabel, getCachedBrands } from './brandTheme';
 import { inDateRange } from './tableToolbar';
 
 const MARGIN = 10;
@@ -56,7 +56,7 @@ export function buildDailyBagsByShopBrandRows(bills, monthValue, brandKey = '') 
         map.set(key, {
           rowKey: key,
           shop,
-          brand: formatBrandLabel(brand) || brand.label,
+          brand: formatReportItemLabel(brand) || brand.label,
           brandKey: brand.key,
           dayBags: Array.from({ length: daysInMonth }, () => 0),
           total: 0,

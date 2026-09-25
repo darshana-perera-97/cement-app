@@ -10,20 +10,24 @@ export function incrementPaymentReceiptNumber(last) {
   return `${prefix}${next.padStart(numStr.length, '0')}`;
 }
 
+/** Highest receipt # across every payment, so the next number follows all users. */
 export function latestPaymentReceiptNumber(payments) {
-  const list = Array.isArray(payments) ? payments : [];
-  if (list.length === 0) return '';
-  const sorted = [...list].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
-  );
-  for (const p of sorted) {
+  let best = null;
+  for (const p of Array.isArray(payments) ? payments : []) {
     const n = String(p.billNumber ?? '').trim();
-    if (n) return n;
+    const match = n.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { prefix: match[1], num, width: match[2].length };
+    }
   }
-  return '';
+  if (!best) return '';
+  return `${best.prefix}${String(best.num).padStart(best.width, '0')}`;
 }
 
-/** Next receipt # from the most recently recorded payment. */
+/** Next receipt # after the highest number already used by any user. */
 export function suggestNextPaymentReceiptNumber(payments) {
   return incrementPaymentReceiptNumber(latestPaymentReceiptNumber(payments));
 }

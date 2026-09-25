@@ -3,7 +3,12 @@ import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
 import { getUsername } from '../auth';
 import { modalPanelClass } from './tableToolbar';
-import { modalTitleForCategory, BANK_DEPOSIT_TYPE_OPTIONS } from './cashBookCategories';
+import {
+  modalTitleForCategory,
+  BANK_DEPOSIT_TYPE_OPTIONS,
+  EXPENSE_PAYMENT_CATEGORIES,
+  EXPENSE_PAYMENT_METHOD_OPTIONS,
+} from './cashBookCategories';
 
 const apiBase = getApiBase();
 
@@ -25,6 +30,9 @@ const emptyForm = (initialBankAccountIds = []) => ({
   bankAccountIds: Array.isArray(initialBankAccountIds) ? [...initialBankAccountIds] : [],
   depositType: 'bank_deposit',
   depositTypeOther: '',
+  paymentMethod: 'cash',
+  chequeNumber: '',
+  chequeDate: todayYmdLocal(),
 });
 
 const fieldClass =
@@ -47,6 +55,9 @@ function normalizeFormFields(form) {
     depositType: String(form?.depositType ?? base.depositType),
     depositTypeOther: String(form?.depositTypeOther ?? ''),
     description: String(form?.description ?? ''),
+    paymentMethod: String(form?.paymentMethod ?? 'cash') || 'cash',
+    chequeNumber: String(form?.chequeNumber ?? ''),
+    chequeDate: String(form?.chequeDate ?? base.chequeDate),
   };
 }
 
@@ -101,6 +112,15 @@ export default function CashBookExpenseModal({
       setSaveError('Describe the deposit type when Other is selected.');
       return;
     }
+    const paysFromBank = EXPENSE_PAYMENT_CATEGORIES.includes(category) && f.paymentMethod !== 'cash';
+    if (paysFromBank && f.bankAccountIds.length === 0) {
+      setSaveError('Select the bank account for this payment.');
+      return;
+    }
+    if (EXPENSE_PAYMENT_CATEGORIES.includes(category) && f.paymentMethod === 'cheque' && !f.chequeNumber.trim()) {
+      setSaveError('Cheque number is required.');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -116,6 +136,9 @@ export default function CashBookExpenseModal({
         bankAccountIds: f.bankAccountIds,
         depositType: f.depositType,
         depositTypeOther: f.depositTypeOther,
+        paymentMethod: EXPENSE_PAYMENT_CATEGORIES.includes(category) ? f.paymentMethod : undefined,
+        chequeNumber: paysFromBank ? f.chequeNumber.trim() : undefined,
+        chequeDate: paysFromBank ? f.chequeDate : undefined,
       };
       const res = await fetch(`${apiBase}/api/cash-book-entries`, {
         method: 'POST',
@@ -140,12 +163,16 @@ export default function CashBookExpenseModal({
 
   const f = normalizeFormFields(form);
   const title = modalTitleForCategory(category);
+  const isExpensePayment = EXPENSE_PAYMENT_CATEGORIES.includes(category);
+  const paysFromBank = isExpensePayment && f.paymentMethod !== 'cash';
   const depositBlocked =
-    category === 'bank_deposit' &&
-    (bankAccounts.length === 0 ||
-      f.bankAccountIds.length === 0 ||
-      !f.depositType ||
-      (f.depositType === 'other' && !f.depositTypeOther.trim()));
+    (category === 'bank_deposit' &&
+      (bankAccounts.length === 0 ||
+        f.bankAccountIds.length === 0 ||
+        !f.depositType ||
+        (f.depositType === 'other' && !f.depositTypeOther.trim()))) ||
+    (paysFromBank && (bankAccounts.length === 0 || f.bankAccountIds.length === 0)) ||
+    (isExpensePayment && f.paymentMethod === 'cheque' && !f.chequeNumber.trim());
 
   return (
     <div
@@ -166,7 +193,11 @@ export default function CashBookExpenseModal({
           <p className="mt-1 text-sm text-slate-500">
             {category === 'bank_deposit'
               ? 'Reduces cashier cash on hand and adds a deposit on the selected bank account(s).'
-              : 'Recorded as cash out from the cashier.'}
+              : f.paymentMethod === 'bank_transfer'
+                ? 'Deducted from the selected bank account on the transfer date. Cash on hand stays the same.'
+                : f.paymentMethod === 'cheque'
+                  ? 'Held until the converting date, then deducted from the selected bank account. Cash on hand stays the same.'
+                  : 'Recorded as cash out from the cashier.'}
           </p>
         </div>
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
@@ -237,6 +268,102 @@ export default function CashBookExpenseModal({
                     </select>
                   )}
                 </label>
+              </>
+            ) : null}
+
+            {isExpensePayment ? (
+              <>
+                <label className="block text-sm font-medium text-slate-600">
+                  Pay with
+                  <select
+                    required
+                    value={f.paymentMethod}
+                    onChange={(e) => {
+                      const method = e.target.value;
+                      setForm((prev) =>
+                        normalizeFormFields({
+                          ...prev,
+                          paymentMethod: method,
+                          bankAccountIds: method === 'cash' ? [] : prev.bankAccountIds,
+                        }),
+                      );
+                    }}
+                    className={fieldClass}
+                    disabled={saving}
+                  >
+                    {EXPENSE_PAYMENT_METHOD_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {paysFromBank ? (
+                  <>
+                    <label className="block text-sm font-medium text-slate-600">
+                      Bank account <span className="text-rose-600">*</span>
+                      {bankAccounts.length === 0 ? (
+                        <p className="mt-2 text-sm font-normal text-slate-500">
+                          No bank accounts yet.{' '}
+                          <Link to="/dashboard/shop" className="font-semibold text-indigo-700 hover:text-indigo-900">
+                            Add accounts in Shop
+                          </Link>
+                          .
+                        </p>
+                      ) : (
+                        <select
+                          required
+                          value={f.bankAccountIds[0] || ''}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            handleChange('bankAccountIds', id ? [id] : []);
+                          }}
+                          className={fieldClass}
+                          disabled={saving}
+                        >
+                          <option value="">Select account…</option>
+                          {bankAccounts.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {bankAccountOptionLabel(a)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </label>
+                    <label className="block text-sm font-medium text-slate-600">
+                      {f.paymentMethod === 'cheque' ? (
+                        <>
+                          Cheque number <span className="text-rose-600">*</span>
+                        </>
+                      ) : (
+                        <>
+                          Reference <span className="font-normal text-slate-400">(optional)</span>
+                        </>
+                      )}
+                      <input
+                        type="text"
+                        required={f.paymentMethod === 'cheque'}
+                        value={f.chequeNumber}
+                        onChange={(e) => handleChange('chequeNumber', e.target.value)}
+                        className={fieldClass}
+                        placeholder={f.paymentMethod === 'cheque' ? 'e.g. 001234' : 'Transfer reference'}
+                        disabled={saving}
+                      />
+                    </label>
+                    <label className="block text-sm font-medium text-slate-600">
+                      {f.paymentMethod === 'cheque' ? 'Converting date' : 'Transfer date'}{' '}
+                      <span className="text-rose-600">*</span>
+                      <input
+                        type="date"
+                        required
+                        value={f.chequeDate}
+                        onChange={(e) => handleChange('chequeDate', e.target.value)}
+                        className={fieldClass}
+                        disabled={saving}
+                      />
+                    </label>
+                  </>
+                ) : null}
               </>
             ) : null}
 

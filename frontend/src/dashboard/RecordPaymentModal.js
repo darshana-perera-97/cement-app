@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isCollector, mustUseTodayRecordDate } from '../auth';
+import { authFetch, getUsername, isAdmin, isCollector, mustUseTodayRecordDate } from '../auth';
 import { modalPanelClass } from './tableToolbar';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { SRI_LANKA_BANKS, bankCodeForName } from './sriLankaBanks';
@@ -222,9 +222,12 @@ export default function RecordPaymentModal({
   customerName = '',
 }) {
   const receiptNumberTouched = useRef(false);
+  const canEditReceiptNumber = isAdmin();
   const [payments, setPayments] = useState([]);
+  const [nextReceiptNumber, setNextReceiptNumber] = useState('');
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -241,6 +244,17 @@ export default function RecordPaymentModal({
       setBills(Array.isArray(data) ? data : []);
     } catch {
       setBills([]);
+    }
+  }, []);
+
+  const loadPromotions = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/promotions`);
+      if (!res.ok) throw new Error('Failed to load promotions');
+      const data = await res.json();
+      setPromotions(Array.isArray(data) ? data : []);
+    } catch {
+      setPromotions([]);
     }
   }, []);
 
@@ -266,6 +280,20 @@ export default function RecordPaymentModal({
     }
   }, []);
 
+  const loadNextReceiptNumber = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/payments/next-receipt-number`);
+      if (!res.ok) throw new Error('Failed to load next receipt number');
+      const data = await res.json();
+      const next = String(data?.billNumber ?? '').trim();
+      setNextReceiptNumber(next);
+      return next;
+    } catch {
+      setNextReceiptNumber('');
+      return '';
+    }
+  }, []);
+
   const loadBankAccounts = useCallback(async () => {
     try {
       const res = await authFetch(`${apiBase}/api/shop`);
@@ -281,11 +309,14 @@ export default function RecordPaymentModal({
     if (!open) return;
     receiptNumberTouched.current = false;
     setSaveError(null);
+    setNextReceiptNumber('');
     loadCustomers();
     loadBills();
+    loadPromotions();
     loadPayments();
+    loadNextReceiptNumber();
     loadBankAccounts();
-  }, [open, loadCustomers, loadBills, loadPayments, loadBankAccounts]);
+  }, [open, loadCustomers, loadBills, loadPromotions, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -309,16 +340,19 @@ export default function RecordPaymentModal({
   }, [open, editPayment, prefillCustomerId, payments]);
 
   useEffect(() => {
-    if (!open || editPayment || receiptNumberTouched.current) return;
-    const next = suggestNextPaymentReceiptNumber(payments);
+    if (!open || editPayment) return;
+    if (canEditReceiptNumber && receiptNumberTouched.current) return;
+    const next = nextReceiptNumber || suggestNextPaymentReceiptNumber(payments);
+    if (!next) return;
     setForm((f) => (f.billNumber === next ? f : { ...f, billNumber: next }));
-  }, [open, editPayment, payments]);
+  }, [open, editPayment, payments, nextReceiptNumber, canEditReceiptNumber]);
 
   const lockDateToToday = mustUseTodayRecordDate();
 
   const handleChange = (field, value) => {
     if (field === 'date' && lockDateToToday) return;
     if (field === 'billNumber') {
+      if (!canEditReceiptNumber) return;
       receiptNumberTouched.current = true;
       setForm((f) => ({ ...f, billNumber: String(value).slice(0, 40) }));
       return;
@@ -360,6 +394,7 @@ export default function RecordPaymentModal({
     if (!form.customerId) return [];
     const outstanding = buildCustomerOutstandingBills(customers, bills, payments, form.customerId, {
       excludePaymentId: editPayment?.id || null,
+      promotions,
     });
     const byId = new Map(outstanding.map((r) => [r.id, r]));
     for (const id of form.appliedBillIds) {
@@ -393,7 +428,7 @@ export default function RecordPaymentModal({
       }
       return String(a.billDate).localeCompare(String(b.billDate));
     });
-  }, [form.customerId, form.appliedBillIds, customers, bills, payments, editPayment?.id]);
+  }, [form.customerId, form.appliedBillIds, customers, bills, payments, promotions, editPayment?.id]);
 
   const handleChequeChange = (key, field, value) => {
     setForm((f) => ({
@@ -806,16 +841,26 @@ export default function RecordPaymentModal({
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-medium text-slate-600">
                     Payment receipt #
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      required
-                      maxLength={40}
-                      value={form.billNumber}
-                      onChange={(e) => handleChange('billNumber', e.target.value)}
-                      className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-                      placeholder="e.g. PAY-012 or 013"
-                    />
+                    {canEditReceiptNumber ? (
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        required
+                        maxLength={40}
+                        value={form.billNumber}
+                        onChange={(e) => handleChange('billNumber', e.target.value)}
+                        className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                        placeholder="e.g. PAY-012 or 013"
+                      />
+                    ) : (
+                      <p
+                        className="mt-1 flex min-h-[2.75rem] items-center rounded-xl border-0 bg-slate-100 px-3 py-2.5 font-mono text-sm text-slate-800 ring-1 ring-slate-200"
+                        aria-readonly="true"
+                      >
+                        {form.billNumber || '…'}
+                        <span className="sr-only"> (assigned automatically, cannot be changed)</span>
+                      </p>
+                    )}
                   </label>
                   <label className="block text-sm font-medium text-slate-600">
                     Payment date
@@ -844,9 +889,11 @@ export default function RecordPaymentModal({
                   </label>
                 </div>
                 <p className="text-xs font-normal text-slate-500">
-                  {editPayment
-                    ? 'Receipt # is unique across payments. Change either field if needed.'
-                    : 'Receipt # is filled from the last saved payment (+1). You can change it before saving.'}
+                  {canEditReceiptNumber
+                    ? editPayment
+                      ? 'Receipt # is unique across payments. You can change it before saving.'
+                      : 'Receipt # is filled from the last saved payment (+1). You can change it before saving.'
+                    : 'Receipt # is the next number after the last saved payment and cannot be changed.'}
                 </p>
                 <label className="block text-sm font-medium text-slate-600">
                   Cash (LKR)

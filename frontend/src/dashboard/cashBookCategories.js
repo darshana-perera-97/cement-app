@@ -5,6 +5,25 @@ export const BANK_DEPOSIT_TYPE_OPTIONS = [
   { value: 'other', label: 'Other' },
 ];
 
+export const BANK_WITHDRAWAL_TYPE_OPTIONS = [
+  { value: 'cash_cheque', label: 'Cash cheque' },
+  { value: 'atm', label: 'ATM machine' },
+  { value: 'bank_slip', label: 'Bank slip' },
+];
+
+export const BANK_CHARGE_TYPE_OPTIONS = [
+  { value: 'chequebook_charges', label: 'Chequebook charges' },
+  { value: 'od_interest', label: 'OD interest' },
+  { value: 'service_charges', label: 'Service charges' },
+  { value: 'return_charges', label: 'Return charges' },
+  { value: 'other', label: 'Others' },
+];
+
+export const BANK_INCOME_TYPE_OPTIONS = [
+  { value: 'bank_interest', label: 'Bank interest' },
+  { value: 'other', label: 'Others' },
+];
+
 export const BANK_GUARANTEE_TYPE_OPTIONS = [
   { value: 'fixed_deposit', label: 'Fixed deposit' },
   { value: 'property', label: 'Property' },
@@ -22,6 +41,31 @@ export function bankGuaranteeTypeLabel(entry) {
   return found?.label || type || '—';
 }
 
+export function bankIncomeTypeLabel(entry) {
+  if (!entry || typeof entry !== 'object') return '—';
+  const type = String(entry.incomeType ?? '').trim();
+  const found = BANK_INCOME_TYPE_OPTIONS.find((o) => o.value === type);
+  return found?.label || type || '—';
+}
+
+export function bankChargeTypeLabel(entry) {
+  if (!entry || typeof entry !== 'object') return '—';
+  const type = String(entry.chargeType ?? '').trim();
+  if (type === 'other') {
+    const note = String(entry.description ?? '').trim();
+    return note ? `Others · ${note}` : 'Others';
+  }
+  const found = BANK_CHARGE_TYPE_OPTIONS.find((o) => o.value === type);
+  return found?.label || type || '—';
+}
+
+export function bankWithdrawalTypeLabel(entry) {
+  if (!entry || typeof entry !== 'object') return '—';
+  const type = String(entry.withdrawalType ?? '').trim();
+  const found = BANK_WITHDRAWAL_TYPE_OPTIONS.find((o) => o.value === type);
+  return found?.label || type || '—';
+}
+
 export function bankDepositTypeLabel(entry) {
   if (!entry || typeof entry !== 'object') return '—';
   const type = String(entry.depositType ?? '').trim();
@@ -35,6 +79,9 @@ export function bankDepositTypeLabel(entry) {
 
 export const CASH_BOOK_CATEGORY_LABELS = {
   bank_deposit: 'Bank deposit',
+  bank_withdrawal: 'Bank withdrawal',
+  bank_charge: 'Bank expense',
+  bank_income: 'Bank cash in',
   salary: 'Salary payment',
   fuel: 'Fuel cost',
   maintenance: 'Maintenance',
@@ -54,6 +101,33 @@ export const OWNER_SHARE_PAYMENT_METHOD_LABELS = {
   cheque: 'Cheque',
 };
 
+export const EXPENSE_PAYMENT_CATEGORIES = ['salary', 'fuel', 'maintenance', 'other'];
+
+export const EXPENSE_PAYMENT_METHOD_OPTIONS = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'bank_transfer', label: 'Bank transfer' },
+  { value: 'cheque', label: 'Cheque' },
+];
+
+export const EXPENSE_PAYMENT_METHOD_LABELS = {
+  cash: 'Cash',
+  bank_transfer: 'Bank transfer',
+  cheque: 'Cheque',
+};
+
+export function expensePaymentMethod(entry) {
+  const method = String(entry?.paymentMethod ?? '').trim();
+  if (method === 'bank_transfer' || method === 'cheque' || method === 'cash') return method;
+  return 'cash';
+}
+
+export function isBankPaidExpense(entry) {
+  const category = String(entry?.category ?? '').trim();
+  if (!EXPENSE_PAYMENT_CATEGORIES.includes(category)) return false;
+  const method = String(entry?.paymentMethod ?? '').trim();
+  return method === 'bank_transfer' || method === 'cheque';
+}
+
 export const CASHIER_EXPENSE_ACTIONS = [
   { category: 'bank_deposit', label: 'Bank deposit', short: 'To bank' },
   { category: 'salary', label: 'Salary payment', short: 'Salary' },
@@ -68,17 +142,17 @@ export function cashBookEntryDetail(entry) {
   if (cat === 'salary') {
     const who = String(entry.staffName ?? '').trim() || '—';
     const desc = String(entry.description ?? '').trim();
-    return desc ? `${who} — ${desc}` : who;
+    return withExpensePayment(entry, desc ? `${who} — ${desc}` : who);
   }
   if (cat === 'fuel') {
     const v = String(entry.vehicleNumber ?? '').trim() || '—';
     const m = entry.meterReading != null ? entry.meterReading : '—';
-    return `${v} · meter ${m}`;
+    return withExpensePayment(entry, `${v} · meter ${m}`);
   }
   if (cat === 'maintenance') {
     const v = String(entry.vehicleNumber ?? '').trim() || '—';
     const desc = String(entry.description ?? '').trim();
-    return desc ? `${v} — ${desc}` : v;
+    return withExpensePayment(entry, desc ? `${v} — ${desc}` : v);
   }
   if (cat === 'bank_deposit') {
     const typeLabel = bankDepositTypeLabel(entry);
@@ -88,6 +162,33 @@ export function cashBookEntryDetail(entry) {
     const note = String(entry.description ?? '').trim();
     const parts = [typeLabel, accounts, note].filter(Boolean);
     return parts.length > 0 ? parts.join(' · ') : 'Cash deposited to bank';
+  }
+  if (cat === 'bank_withdrawal') {
+    const typeLabel = bankWithdrawalTypeLabel(entry);
+    const accounts = Array.isArray(entry.bankAccounts)
+      ? entry.bankAccounts.map((a) => a.nickName || a.bank).filter(Boolean).join(', ')
+      : '';
+    const cheque = String(entry.chequeNumber ?? '').trim();
+    const note = String(entry.description ?? '').trim();
+    const parts = [typeLabel, accounts, cheque ? `#${cheque}` : '', note].filter(Boolean);
+    return parts.length > 0 ? parts.join(' · ') : 'Cash withdrawn from bank';
+  }
+  if (cat === 'bank_charge') {
+    const typeLabel = bankChargeTypeLabel(entry);
+    const accounts = Array.isArray(entry.bankAccounts)
+      ? entry.bankAccounts.map((a) => a.nickName || a.bank).filter(Boolean).join(', ')
+      : '';
+    const parts = [typeLabel, accounts].filter(Boolean);
+    return parts.length > 0 ? parts.join(' · ') : 'Bank expense';
+  }
+  if (cat === 'bank_income') {
+    const typeLabel = bankIncomeTypeLabel(entry);
+    const accounts = Array.isArray(entry.bankAccounts)
+      ? entry.bankAccounts.map((a) => a.nickName || a.bank).filter(Boolean).join(', ')
+      : '';
+    const note = String(entry.description ?? '').trim();
+    const parts = [typeLabel, accounts, note].filter(Boolean);
+    return parts.length > 0 ? parts.join(' · ') : 'Bank cash in';
   }
   if (cat === 'purchase_order') {
     const desc = String(entry.description ?? '').trim();
@@ -121,10 +222,30 @@ export function cashBookEntryDetail(entry) {
   const desc = String(entry.description ?? '').trim();
   if (cat === 'other') {
     const who = String(entry.staffName ?? '').trim();
-    if (who && desc) return `${who} — ${desc}`;
-    if (who) return who;
+    if (who && desc) return withExpensePayment(entry, `${who} — ${desc}`);
+    if (who) return withExpensePayment(entry, who);
+    return withExpensePayment(entry, desc || '—');
   }
   return desc || '—';
+}
+
+function withExpensePayment(entry, detail) {
+  const method = String(entry?.paymentMethod ?? '').trim();
+  if (method !== 'cash' && method !== 'bank_transfer' && method !== 'cheque') return detail;
+  const label = EXPENSE_PAYMENT_METHOD_LABELS[method] || method;
+  const accounts = Array.isArray(entry.bankAccounts)
+    ? entry.bankAccounts.map((a) => a.nickName || a.bank).filter(Boolean).join(', ')
+    : '';
+  const num = String(entry.chequeNumber ?? '').trim();
+  const dated = String(entry.chequeDate ?? '').trim();
+  const parts = [
+    label,
+    accounts,
+    method === 'cheque' && num ? `#${num}` : '',
+    method === 'bank_transfer' && num ? `ref ${num}` : '',
+    method !== 'cash' && dated ? dated : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? `${detail} · ${parts.join(' · ')}` : detail;
 }
 
 export function modalTitleForCategory(category) {

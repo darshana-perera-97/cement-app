@@ -254,7 +254,8 @@ function sumInvoiceDiscountForBill(promotions, billId) {
   if (!id) return 0;
   let sum = 0;
   for (const row of Array.isArray(promotions) ? promotions : []) {
-    if (String(row?.type ?? '').trim() !== 'invoice_discount') continue;
+    const type = String(row?.type ?? '').trim();
+    if (type !== 'invoice_discount' && type !== 'rule_cashback') continue;
     if (String(row.billId ?? '').trim() !== id) continue;
     sum += Number(row.discountAmount) || 0;
   }

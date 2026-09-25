@@ -168,6 +168,7 @@ async function listCollectorStaff() {
     .map((u) => ({
       id: u.id,
       name: collectorDisplayName(u),
+      username: String(u.username || '').trim(),
       contact: u.contact || '',
       nic: u.nic || u.username || '',
     }))
@@ -245,6 +246,7 @@ const {
   suggestNextReturnInvoiceNumber,
   suggestNextDamageInvoiceNumber,
   invoiceNumberTaken,
+  sumItemReturnForBill,
 } = require('./models/returnsStore');
 const {
   getPaymentCheques,
@@ -277,6 +279,7 @@ const {
   todayYmdLocal: paymentDateDefaultYmd,
   normalizePaymentBillNumber,
   isPaymentBillNumberTaken,
+  nextPaymentReceiptNumber,
   allocatePaymentReceiptNumber,
 } = require('./models/paymentsStore');
 const {
@@ -1678,20 +1681,29 @@ function incrementBillInvoiceNumber(last) {
 }
 
 function latestBillInvoiceNumber(bills) {
-  const list = Array.isArray(bills) ? bills : [];
-  if (list.length === 0) return '';
-  const sorted = [...list].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
-  );
-  for (const bill of sorted) {
+  let best = null;
+  for (const bill of Array.isArray(bills) ? bills : []) {
     const n = normalizeBillInvoiceNumber(bill.invoiceNumber);
-    if (n) return n;
+    const match = n.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { prefix: match[1], num, width: match[2].length };
+    }
   }
-  return '';
+  if (!best) return '';
+  return `${best.prefix}${String(best.num).padStart(best.width, '0')}`;
 }
 
 function suggestNextBillInvoiceNumber(bills) {
-  return incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+  let next = incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+  let guard = 0;
+  while (billInvoiceNumberTaken(bills, next) && guard < 1000) {
+    next = incrementBillInvoiceNumber(next);
+    guard += 1;
+  }
+  return next;
 }
 
 function parseBillInvoiceNumber(body) {
@@ -1900,7 +1912,8 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
     );
 
     const pastOwed = toNonNegMoney(cust.pastBill);
-    const openingRemaining = Math.round((pastOwed - pastPaid) * 100) / 100;
+    const openingCredit = sumItemReturnForBill(returnsRows, openingBalanceBillId(cust.id));
+    const openingRemaining = Math.max(0, Math.round((pastOwed - openingCredit - pastPaid) * 100) / 100);
     if (openingRemaining > 0) {
       const billDate = openingBalanceBillDate(cust);
       const dueRaw = String(cust.dueDate ?? '').slice(0, 10);
@@ -3043,7 +3056,7 @@ async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enter
   const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
   let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
   if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
-    invoiceNumber = suggestNextBillInvoiceNumber(bills);
+    invoiceNumber = suggestNextInvoiceForUnload(bills, unloads);
   }
   const billRow = {
     id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -3631,6 +3644,34 @@ app.get('/api/collection-staff', async (req, res) => {
   }
 });
 
+function suggestNextCustomerId(customers) {
+  let best = null;
+  for (const c of Array.isArray(customers) ? customers : []) {
+    const raw = String(c?.id ?? '').trim();
+    const match = raw.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { prefix: match[1], num, width: match[2].length, numericOnly: /^\d+$/.test(raw) };
+    }
+  }
+  if (!best) return '1';
+  const next = String(best.num + 1);
+  if (best.numericOnly) return next;
+  return `${best.prefix}${next.padStart(best.width, '0')}`;
+}
+
+app.get('/api/customers/next-id', async (req, res) => {
+  try {
+    const customers = await readCustomers();
+    res.json({ id: suggestNextCustomerId(customers) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read the next customer id' });
+  }
+});
+
 app.get('/api/customers', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
@@ -3720,7 +3761,12 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
         date: b.date,
         sortAt: b.createdAt || `${b.date}T12:00:00`,
         type: 'Credit sale',
-        details: [b.stockId, b.enteredBy ? `by ${b.enteredBy}` : ''].filter(Boolean).join(' · '),
+        details: [
+          String(b.invoiceNumber ?? '').trim() ? `Invoice ${String(b.invoiceNumber).trim()}` : null,
+          b.enteredBy ? `by ${b.enteredBy}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
         amount: Number(b.totalAmount) || 0,
         direction: 'charge',
       });
@@ -4317,6 +4363,16 @@ app.post('/api/collection-day-close', async (req, res) => {
   }
 });
 
+app.get('/api/payments/next-receipt-number', async (req, res) => {
+  try {
+    const payments = await readPayments();
+    res.json({ billNumber: nextPaymentReceiptNumber(payments) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read the next payment receipt number' });
+  }
+});
+
 app.get('/api/payments', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
@@ -4388,19 +4444,24 @@ app.post('/api/payments', async (req, res) => {
     const note = String(body.note ?? '').trim();
 
     const payments = await readPayments();
-    const normalizedReceipt = normalizePaymentBillNumber(body.billNumber);
+    const receiptAuth = getAuthFromRequest(req);
     let billNumber;
-    if (normalizedReceipt) {
-      billNumber = normalizedReceipt;
-      if (isPaymentBillNumberTaken(payments, billNumber)) {
-        return res.status(400).json({ error: 'This payment receipt number is already used.' });
-      }
-    } else if (body.billNumber != null && String(body.billNumber).trim() !== '') {
-      return res.status(400).json({
-        error: 'Payment receipt # must use letters and/or numbers (up to 40 characters).',
-      });
-    } else {
+    if (receiptAuth?.role !== 'admin') {
       billNumber = allocatePaymentReceiptNumber(payments, null);
+    } else {
+      const normalizedReceipt = normalizePaymentBillNumber(body.billNumber);
+      if (normalizedReceipt) {
+        billNumber = normalizedReceipt;
+        if (isPaymentBillNumberTaken(payments, billNumber)) {
+          return res.status(400).json({ error: 'This payment receipt number is already used.' });
+        }
+      } else if (body.billNumber != null && String(body.billNumber).trim() !== '') {
+        return res.status(400).json({
+          error: 'Payment receipt # must use letters and/or numbers (up to 40 characters).',
+        });
+      } else {
+        billNumber = allocatePaymentReceiptNumber(payments, null);
+      }
     }
 
     const customers = await readCustomers();
@@ -4550,13 +4611,6 @@ app.patch('/api/payments/:id', async (req, res) => {
     }
     const note = String(body.note ?? '').trim();
 
-    const billNumber = normalizePaymentBillNumber(body.billNumber);
-    if (!billNumber) {
-      return res.status(400).json({
-        error: 'Payment receipt # is required (letters and/or numbers, up to 40 characters).',
-      });
-    }
-
     const customers = await readCustomers();
     const cust = customers.find((c) => c.id === customerId);
     if (!cust) {
@@ -4567,6 +4621,18 @@ app.patch('/api/payments/:id', async (req, res) => {
     const idx = payments.findIndex((p) => p.id === id);
     if (idx < 0) {
       return res.status(404).json({ error: 'Payment not found' });
+    }
+    const receiptAuth = getAuthFromRequest(req);
+    let billNumber;
+    if (receiptAuth?.role === 'admin') {
+      billNumber = normalizePaymentBillNumber(body.billNumber);
+      if (!billNumber) {
+        return res.status(400).json({
+          error: 'Payment receipt # is required (letters and/or numbers, up to 40 characters).',
+        });
+      }
+    } else {
+      billNumber = String(payments[idx].billNumber ?? '').trim();
     }
     if (isPaymentBillNumberTaken(payments, billNumber, id)) {
       return res.status(400).json({ error: 'This payment receipt number is already used.' });
@@ -5449,6 +5515,16 @@ app.get('/api/activity', async (req, res) => {
   }
 });
 
+app.get('/api/bills/next-invoice-number', async (req, res) => {
+  try {
+    const [bills, unloads] = await Promise.all([readBills(), readUnloads()]);
+    res.json({ invoiceNumber: suggestNextInvoiceForUnload(bills, unloads) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read the next invoice number' });
+  }
+});
+
 app.get('/api/bills', async (req, res) => {
   try {
     const auth = getAuthFromRequest(req);
@@ -5760,6 +5836,76 @@ app.post('/api/returns', async (req, res) => {
       if (anyBags <= 0 || amount <= 0) {
         return res.status(400).json({ error: 'Enter bags to return from this invoice' });
       }
+      const allocationById = new Map();
+      for (const item of Array.isArray(body.billAllocations) ? body.billAllocations : []) {
+        const allocId = String(item?.billId ?? '').trim();
+        const allocAmount = toNonNegMoney(item?.amount ?? item?.cashAmount);
+        if (!allocId || allocAmount <= 0) continue;
+        allocationById.set(allocId, Math.round(((allocationById.get(allocId) || 0) + allocAmount) * 100) / 100);
+      }
+      const billAllocations = [...allocationById.entries()].map(([allocBillId, allocAmount]) => ({
+        billId: allocBillId,
+        amount: allocAmount,
+      }));
+      const [paymentsList, promotions, overdueDates] = await Promise.all([
+        readPayments(),
+        readPromotions(),
+        readOverdueDates(),
+      ]);
+      const openInvoices = collectUnpaidBillRows(
+        customers,
+        bills,
+        paymentsList,
+        overdueDates,
+        { returnsRows: rows },
+        promotions,
+      ).filter((inv) => normalizeCustomerName(inv.customerName) === normalizeCustomerName(customerName || bill.customerName));
+      const openById = new Map(openInvoices.map((inv) => [String(inv.id), inv]));
+      let allocated = 0;
+      for (const alloc of billAllocations) {
+        const inv = openById.get(alloc.billId);
+        if (!inv) {
+          return res.status(400).json({ error: 'One of the invoices is not open for this shop' });
+        }
+        if (alloc.amount - Number(inv.outstandingAmount) > 0.009) {
+          return res.status(400).json({ error: 'Deduction cannot exceed the open amount on an invoice' });
+        }
+        allocated += alloc.amount;
+      }
+      allocated = Math.round(allocated * 100) / 100;
+      const openTotal = Math.round(
+        openInvoices.reduce((sum, inv) => sum + (Number(inv.outstandingAmount) || 0), 0) * 100,
+      ) / 100;
+      const required = Math.min(amount, openTotal);
+      if (allocated + 0.009 < required) {
+        let left = Math.round((required - allocated) * 100) / 100;
+        for (const inv of openInvoices) {
+          if (left <= 0.009) break;
+          const invId = String(inv.id);
+          const already = allocationById.get(invId) || 0;
+          const room = Math.round(((Number(inv.outstandingAmount) || 0) - already) * 100) / 100;
+          if (room <= 0.009) continue;
+          const take = Math.round(Math.min(room, left) * 100) / 100;
+          allocationById.set(invId, Math.round((already + take) * 100) / 100);
+          left = Math.round((left - take) * 100) / 100;
+        }
+        billAllocations.length = 0;
+        allocated = 0;
+        for (const [allocBillId, allocAmount] of allocationById.entries()) {
+          if (allocAmount <= 0) continue;
+          billAllocations.push({ billId: allocBillId, amount: allocAmount });
+          allocated += allocAmount;
+        }
+        allocated = Math.round(allocated * 100) / 100;
+      }
+      if (Math.abs(allocated - required) > 0.009) {
+        return res.status(400).json({
+          error:
+            openTotal <= 0
+              ? 'This shop has no open invoices to deduct'
+              : `Allocate ${required.toFixed(2)} across the open invoices`,
+        });
+      }
       const settlementRaw = String(body.settlement ?? '').trim();
       const settlement =
         settlementRaw === SETTLEMENTS.CASH
@@ -5799,6 +5945,7 @@ app.post('/api/returns', async (req, res) => {
         ...(damageInvoiceNumber ? { damageInvoiceNumber } : {}),
         ...bagFields,
         amount,
+        billAllocations,
       };
     } else if (kind === RETURN_KINDS.DAMAGE) {
       const live = await getLiveStockSummary();

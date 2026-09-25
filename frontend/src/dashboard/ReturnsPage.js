@@ -136,6 +136,10 @@ export default function ReturnsPage() {
   const [kindFilter, setKindFilter] = useState('');
   const [pdfBusyId, setPdfBusyId] = useState(null);
   const [tablePdfBusy, setTablePdfBusy] = useState(false);
+  const [step, setStep] = useState(1);
+  const [openInvoices, setOpenInvoices] = useState([]);
+  const [openLoading, setOpenLoading] = useState(false);
+  const [allocations, setAllocations] = useState({});
 
   const admin = isAdmin();
   const visibleTabs = useMemo(() => TABS.filter((t) => !t.adminOnly || admin), [admin]);
@@ -186,6 +190,9 @@ export default function ReturnsPage() {
     const allowed = visibleTabs.some((t) => t.id === tabId) ? tabId : 'item_return';
     setActiveTab(allowed);
     setForm(emptyForm(brands));
+    setStep(1);
+    setOpenInvoices([]);
+    setAllocations({});
     setSaveError(null);
     setModalOpen(true);
     if (allowed === 'damage') loadStock();
@@ -268,12 +275,72 @@ export default function ReturnsPage() {
   const switchTab = (tabId) => {
     setActiveTab(tabId);
     setForm((f) => ({ ...emptyForm(brands), date: f.date, customerId: f.customerId, note: f.note }));
+    setStep(1);
+    setOpenInvoices([]);
+    setAllocations({});
     setSaveError(null);
     if (tabId === 'damage') loadStock();
   };
 
+  const allocatedTotal = useMemo(() => {
+    let sum = 0;
+    for (const inv of openInvoices) sum += Number(allocations[inv.id]) || 0;
+    return Math.round(sum * 100) / 100;
+  }, [openInvoices, allocations]);
+
+  const openTotal = useMemo(
+    () => Math.round(openInvoices.reduce((sum, inv) => sum + (Number(inv.outstandingAmount) || 0), 0) * 100) / 100,
+    [openInvoices],
+  );
+
+  const goToInvoices = async (e) => {
+    e.preventDefault();
+    if (!form.customerId) {
+      setSaveError('Select a shop.');
+      return;
+    }
+    if (!form.billId) {
+      setSaveError('Select an invoice.');
+      return;
+    }
+    if (returnPreview.bags <= 0 || returnPreview.amount <= 0) {
+      setSaveError('Enter bags to return from this invoice.');
+      return;
+    }
+    setOpenLoading(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/pending-bills`);
+      if (!res.ok) throw new Error('Failed to load open invoices');
+      const data = await res.json();
+      const nk = normalizeCustomerName(selectedCustomer?.name);
+      const invoices = (Array.isArray(data) ? data : []).filter(
+        (inv) => normalizeCustomerName(inv.customerName) === nk && Number(inv.outstandingAmount) > 0,
+      );
+      const next = {};
+      let left = returnPreview.amount;
+      for (const inv of invoices) {
+        if (left <= 0) break;
+        const take = Math.round(Math.min(Number(inv.outstandingAmount) || 0, left) * 100) / 100;
+        if (take > 0) next[inv.id] = String(take);
+        left = Math.round((left - take) * 100) / 100;
+      }
+      setOpenInvoices(invoices);
+      setAllocations(next);
+      setStep(2);
+    } catch {
+      setSaveError('Could not load open invoices.');
+    } finally {
+      setOpenLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (activeTab === 'item_return' && step === 1) {
+      await goToInvoices(e);
+      return;
+    }
     const username = getUsername();
     if (!username) {
       setSaveError('You need to be signed in with a username.');
@@ -305,9 +372,37 @@ export default function ReturnsPage() {
         setSaveError('Enter bags to return from this invoice.');
         return;
       }
+      const required = Math.min(returnPreview.amount, openTotal);
+      const nextAllocations = { ...allocations };
+      if (openInvoices.length > 0 && allocatedTotal + 0.009 < required) {
+        let left = Math.round((required - allocatedTotal) * 100) / 100;
+        for (const inv of openInvoices) {
+          if (left <= 0.009) break;
+          const already = Number(nextAllocations[inv.id]) || 0;
+          const room = Math.round(((Number(inv.outstandingAmount) || 0) - already) * 100) / 100;
+          if (room <= 0.009) continue;
+          const take = Math.round(Math.min(room, left) * 100) / 100;
+          nextAllocations[inv.id] = String(Math.round((already + take) * 100) / 100);
+          left = Math.round((left - take) * 100) / 100;
+        }
+        setAllocations(nextAllocations);
+      }
+      const filledTotal = Math.round(
+        openInvoices.reduce((sum, inv) => sum + (Number(nextAllocations[inv.id]) || 0), 0) * 100,
+      ) / 100;
+      if (openInvoices.length > 0 && Math.abs(filledTotal - required) > 0.009) {
+        setSaveError(`Allocate ${money(required)} across the open invoices.`);
+        return;
+      }
       payload.billId = form.billId;
       payload.settlement = form.settlement;
       for (const b of brands) payload[`${b.key}Bags`] = form[`${b.key}Bags`];
+      payload.billAllocations = openInvoices
+        .map((inv) => ({
+          billId: inv.id,
+          amount: Math.round((Number(nextAllocations[inv.id]) || 0) * 100) / 100,
+        }))
+        .filter((alloc) => alloc.amount > 0);
     } else if (activeTab === 'damage') {
       const any = brands.some((b) => Math.floor(Number(form[`${b.key}Bags`]) || 0) > 0);
       if (!any) {
@@ -601,10 +696,15 @@ export default function ReturnsPage() {
           <ModalBackdrop onClose={closeModal} />
           <div className={`${modalPanelClass2xl} max-h-[90vh] overflow-y-auto`}>
             <h2 id="returns-modal-title" className="text-lg font-bold text-slate-900">
-              New return
+              {activeTab === 'item_return' && step === 2 ? 'Deduct from open invoices' : 'New return'}
             </h2>
-            <p className="mt-1 text-sm text-slate-500">Logged in as {getUsername() || '—'}.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {activeTab === 'item_return'
+                ? `Step ${step} of 2 · Logged in as ${getUsername() || '—'}`
+                : `Logged in as ${getUsername() || '—'}`}
+            </p>
 
+            {activeTab !== 'item_return' || step === 1 ? (
             <div className="mt-4 flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1" role="tablist">
               {visibleTabs.map((tab) => (
                 <button
@@ -623,12 +723,15 @@ export default function ReturnsPage() {
                 </button>
               ))}
             </div>
+            ) : null}
 
             <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
               {saveError ? (
                 <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">{saveError}</p>
               ) : null}
 
+              {activeTab !== 'item_return' || step === 1 ? (
+              <>
               <label className="block text-sm font-medium text-slate-600">
                 Date
                 <input
@@ -864,21 +967,95 @@ export default function ReturnsPage() {
                   placeholder="Optional"
                 />
               </label>
+              </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-xl bg-indigo-50/90 p-4 ring-1 ring-indigo-100">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Return credit</p>
+                    <p className="mt-1 text-2xl font-bold tabular-nums text-indigo-950">{money(returnPreview.amount)}</p>
+                    <p className="mt-1 text-sm text-indigo-800">
+                      {selectedCustomer?.name || 'Shop'} · {returnPreview.bags} bag{returnPreview.bags === 1 ? '' : 's'}
+                    </p>
+                    <p className="mt-2 text-xs text-indigo-700">
+                      The customer ledger still shows this as one return credit.
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-800">Open invoices</p>
+                      <p className="text-xs tabular-nums text-slate-600">
+                        Deducted {money(allocatedTotal)} of {money(Math.min(returnPreview.amount, openTotal || returnPreview.amount))}
+                      </p>
+                    </div>
+                    {openLoading ? (
+                      <p className="mt-3 text-sm text-slate-500">Loading invoices…</p>
+                    ) : openInvoices.length === 0 ? (
+                      <p className="mt-3 text-sm text-slate-500">
+                        No open invoices. Saving will credit the shop ledger only.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {openInvoices.map((inv) => (
+                          <li key={inv.id} className="rounded-lg bg-white px-3 py-3 ring-1 ring-slate-200 sm:flex sm:items-center sm:gap-4">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-slate-900">
+                                {inv.isOpeningBalance ? 'Opening balance' : inv.invoiceNumber ? `Inv ${inv.invoiceNumber}` : inv.billDate || 'Invoice'}
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-500">{inv.billDate || '—'}</p>
+                              <p className="mt-0.5 text-sm font-semibold tabular-nums text-emerald-800">
+                                {money(inv.outstandingAmount)} open
+                              </p>
+                            </div>
+                            <label className="mt-3 block shrink-0 text-sm font-medium text-slate-600 sm:mt-0 sm:w-36">
+                              Deduct (LKR)
+                              <input
+                                type="number"
+                                min={0}
+                                max={inv.outstandingAmount}
+                                step={0.01}
+                                value={allocations[inv.id] ?? ''}
+                                onChange={(e) =>
+                                  setAllocations((current) => ({ ...current, [inv.id]: e.target.value }))
+                                }
+                                className={filterControl}
+                              />
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
+                {activeTab === 'item_return' && step === 2 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep(1);
+                      setSaveError(null);
+                    }}
+                    disabled={saving}
+                    className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Back
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                )}
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || openLoading}
                   className="rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 disabled:opacity-60"
                 >
-                  {saving ? 'Saving…' : 'Save'}
+                  {saving ? 'Saving…' : activeTab === 'item_return' && step === 1 ? 'Next' : 'Save'}
                 </button>
               </div>
             </form>

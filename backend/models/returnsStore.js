@@ -104,14 +104,28 @@ function returnLedgerDeltaForCustomer(row, customer) {
   return 0;
 }
 
+/** Credit applied to one invoice. Explicit allocations win; older returns still reduce their source invoice. */
+function itemReturnCreditForBill(row, billId) {
+  const id = String(billId ?? '').trim();
+  if (!id || !isItemReturn(row)) return 0;
+  if (Array.isArray(row.billAllocations)) {
+    let sum = 0;
+    for (const alloc of row.billAllocations) {
+      if (String(alloc?.billId ?? '').trim() !== id) continue;
+      sum += toNonNegMoney(alloc?.amount ?? alloc?.cashAmount);
+    }
+    return roundMoney(sum);
+  }
+  if (String(row.billId ?? '').trim() !== id) return 0;
+  return returnAmount(row);
+}
+
 function sumItemReturnForBill(returnsRows, billId) {
   const id = String(billId ?? '').trim();
   if (!id) return 0;
   let sum = 0;
   for (const row of Array.isArray(returnsRows) ? returnsRows : []) {
-    if (!isItemReturn(row)) continue;
-    if (String(row.billId ?? '').trim() !== id) continue;
-    sum += returnAmount(row);
+    sum += itemReturnCreditForBill(row, billId);
   }
   return roundMoney(sum);
 }

@@ -1,6 +1,6 @@
 import { inDateRange } from './tableToolbar';
 import { buildChequeTableRows, cashPortion } from './paymentCheques';
-import { CASH_BOOK_CATEGORY_LABELS, cashBookEntryDetail } from './cashBookCategories';
+import { CASH_BOOK_CATEGORY_LABELS, cashBookEntryDetail, isBankPaidExpense } from './cashBookCategories';
 
 function compareByDateAsc(a, b) {
   const dateCmp = String(a.date || '').localeCompare(String(b.date || ''));
@@ -201,6 +201,40 @@ export function buildCashBookSourceEntries(payments, cashBookEntries, promotions
       });
       continue;
     }
+    if (category === 'bank_charge' || category === 'bank_income') continue;
+    if (category === 'bank_withdrawal') {
+      entries.push({
+        id: `in:wd:${e.id}`,
+        kind: 'bank_withdrawal',
+        date,
+        sortAt: e.createdAt || `${date}T12:00:00`,
+        type: CASH_BOOK_CATEGORY_LABELS[category] || 'Bank withdrawal',
+        details: cashBookEntryDetail(e),
+        debit: amt,
+        credit: null,
+        recordedBy: String(e.recordedBy ?? '').trim() || '—',
+        detailKind: 'expense',
+        detailRow: e,
+      });
+      continue;
+    }
+    if (isBankPaidExpense(e)) {
+      entries.push({
+        id: `out:bank:${e.id}`,
+        kind: 'expense_bank',
+        date,
+        sortAt: e.createdAt || `${date}T12:00:00`,
+        type: CASH_BOOK_CATEGORY_LABELS[category] || category || 'Expense',
+        details: cashBookEntryDetail(e),
+        debit: null,
+        credit: amt,
+        affectsBalance: false,
+        recordedBy: String(e.recordedBy ?? '').trim() || '—',
+        detailKind: 'expense',
+        detailRow: e,
+      });
+      continue;
+    }
     const isBankDeposit = category === 'bank_deposit';
     entries.push({
       id: `out:${e.id}`,
@@ -336,7 +370,7 @@ export function summarizeCashBookLedger(ledgerRows) {
   let count = 0;
   for (const row of ledgerRows) {
     if (row.kind === 'starting') continue;
-    if (row.kind === 'cheque_in') continue;
+    if (row.kind === 'cheque_in' || row.kind === 'expense_bank') continue;
     count += 1;
     debit += Number(row.debit) || 0;
     credit += Number(row.credit) || 0;

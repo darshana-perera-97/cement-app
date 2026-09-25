@@ -481,6 +481,7 @@ export default function BillsPage() {
   const [saleInvoiceUrl, setSaleInvoiceUrl] = useState(null);
   const [saleInvoiceFilename, setSaleInvoiceFilename] = useState('');
   const invoiceNumberTouched = useRef(false);
+  const [nextInvoiceNumber, setNextInvoiceNumber] = useState('');
   const invoicePreviewUrlRef = useRef(null);
   const saleInvoiceUrlRef = useRef(null);
   const saleInvoiceFrameRef = useRef(null);
@@ -726,6 +727,20 @@ export default function BillsPage() {
     }
   }, [loadBillsForInvoicePdf, invoicePdfOpts]);
 
+  const loadNextInvoiceNumber = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/bills/next-invoice-number`);
+      if (!res.ok) throw new Error('Failed to load next invoice number');
+      const data = await res.json();
+      const next = String(data?.invoiceNumber ?? '').trim();
+      setNextInvoiceNumber(next);
+      return next;
+    } catch {
+      setNextInvoiceNumber('');
+      return '';
+    }
+  }, []);
+
   const openAdd = () => {
     setSaveError(null);
     invoiceNumberTouched.current = false;
@@ -733,18 +748,21 @@ export default function BillsPage() {
     setAddStep(1);
     setShowAllSaleItems(false);
     revokeSaleInvoiceUrl();
+    setNextInvoiceNumber('');
     setForm({
       ...emptyForm(brands),
       invoiceNumber: suggestNextBillInvoiceNumber(rows),
     });
     setAddOpen(true);
+    loadNextInvoiceNumber();
   };
 
   useEffect(() => {
     if (!addOpen || invoiceNumberTouched.current) return;
-    const next = suggestNextBillInvoiceNumber(rows);
+    const next = nextInvoiceNumber || suggestNextBillInvoiceNumber(rows);
+    if (!next) return;
     setForm((f) => (f.invoiceNumber === next ? f : { ...f, invoiceNumber: next }));
-  }, [addOpen, rows]);
+  }, [addOpen, rows, nextInvoiceNumber]);
 
   const closeAdd = () => {
     setAddOpen(false);
@@ -918,10 +936,10 @@ export default function BillsPage() {
     invoiceNumberTouched.current = true;
     const next = formFromBill(editBill, customers, brands);
     if (!next.invoiceNumber) {
-      next.invoiceNumber = suggestNextBillInvoiceNumber(rows);
+      next.invoiceNumber = nextInvoiceNumber || suggestNextBillInvoiceNumber(rows);
     }
     setForm(next);
-  }, [editBill, customers, rows, brands]);
+  }, [editBill, customers, rows, brands, nextInvoiceNumber]);
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();

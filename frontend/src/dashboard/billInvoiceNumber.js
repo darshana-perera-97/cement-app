@@ -14,22 +14,32 @@ export function normalizeBillInvoiceNumber(value) {
   return String(value ?? '').trim().replace(/\s+/g, ' ');
 }
 
+/** Highest invoice # across every bill, so the next number follows all users. */
 export function latestBillInvoiceNumber(bills) {
-  const list = Array.isArray(bills) ? bills : [];
-  if (list.length === 0) return '';
-  const sorted = [...list].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
-  );
-  for (const bill of sorted) {
+  let best = null;
+  for (const bill of Array.isArray(bills) ? bills : []) {
     const n = normalizeBillInvoiceNumber(bill.invoiceNumber);
-    if (n) return n;
+    const match = n.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { prefix: match[1], num, width: match[2].length };
+    }
   }
-  return '';
+  if (!best) return '';
+  return `${best.prefix}${String(best.num).padStart(best.width, '0')}`;
 }
 
-/** Next invoice # from the most recently recorded bill. */
+/** Next invoice # after the highest number already used by any user. */
 export function suggestNextBillInvoiceNumber(bills) {
-  return incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+  let next = incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+  let guard = 0;
+  while (isBillInvoiceNumberTaken(bills, next) && guard < 1000) {
+    next = incrementBillInvoiceNumber(next);
+    guard += 1;
+  }
+  return next;
 }
 
 export function isBillInvoiceNumberTaken(bills, invoiceNumber, excludeBillId = null) {

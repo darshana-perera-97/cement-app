@@ -7,6 +7,9 @@ import CashBookExpenseModal from './CashBookExpenseModal';
 import CashBookChequeDepositModal from './CashBookChequeDepositModal';
 import CashBookCompanyChequeModal from './CashBookCompanyChequeModal';
 import CashBookOwnerShareModal from './CashBookOwnerShareModal';
+import CashBookWithdrawalModal from './CashBookWithdrawalModal';
+import CashBookBankChargeModal from './CashBookBankChargeModal';
+import CashBookBankIncomeModal from './CashBookBankIncomeModal';
 import CashBookBankGuaranteeModal from './CashBookBankGuaranteeModal';
 import {
   collectPurchaseOrderOutgoingCheques,
@@ -16,8 +19,13 @@ import {
 import BankAccountMultiSelect, { formatBankAccountsLabel } from './BankAccountMultiSelect';
 import {
   CASHIER_EXPENSE_ACTIONS,
+  CASH_BOOK_CATEGORY_LABELS,
   cashBookEntryDetail,
+  isBankPaidExpense,
   bankDepositTypeLabel,
+  bankWithdrawalTypeLabel,
+  bankChargeTypeLabel,
+  bankIncomeTypeLabel,
   bankGuaranteeTypeLabel,
   BANK_GUARANTEE_TYPE_OPTIONS,
 } from './cashBookCategories';
@@ -102,6 +110,7 @@ const BANK_TX_KIND_FILTERS = [
   { value: 'paid_cheque', label: 'Paid cheques' },
   { value: 'deposit', label: 'Deposits' },
   { value: 'withdrawal', label: 'Withdrawals' },
+  { value: 'return_cheque', label: 'Return cheques' },
 ];
 
 const TX_KIND_BADGE = {
@@ -109,6 +118,7 @@ const TX_KIND_BADGE = {
   pending_cheque: 'bg-amber-50 text-amber-900 ring-amber-100',
   deposit: 'bg-sky-50 text-sky-900 ring-sky-100',
   withdrawal: 'bg-rose-50 text-rose-900 ring-rose-100',
+  return_cheque: 'bg-rose-50 text-rose-900 ring-rose-100',
 };
 
 const TX_KIND_LABEL = {
@@ -116,6 +126,7 @@ const TX_KIND_LABEL = {
   pending_cheque: 'Pending cheque',
   deposit: 'Deposit',
   withdrawal: 'Withdrawal',
+  return_cheque: 'Return cheque',
 };
 
 const GUARANTEE_TYPE_BADGE = {
@@ -207,7 +218,7 @@ function collectPoOutgoingCheques(purchaseOrders) {
   return rows;
 }
 
-function buildBankTransactionRows(deposits, payments, purchaseOrders, companyCheques, bankAccounts) {
+function buildBankTransactionRows(deposits, withdrawals, payments, purchaseOrders, companyCheques, bankAccounts, expenseEntries = [], charges = [], incomes = []) {
   const rows = [];
 
   for (const d of Array.isArray(deposits) ? deposits : []) {
@@ -226,6 +237,26 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
       sortAt: d.createdAt || `${date}T12:00:00`,
       detailVariant: null,
       detailPayload: d,
+    });
+  }
+
+  for (const w of Array.isArray(withdrawals) ? withdrawals : []) {
+    if (w.cancelled) continue;
+    const date = String(w.date ?? '').slice(0, 10);
+    rows.push({
+      id: `wd:${w.id}`,
+      kind: 'withdrawal',
+      direction: 'out',
+      date: date || '—',
+      amount: Math.max(0, Number(w.amount) || 0),
+      bankAccountIds: Array.isArray(w.bankAccountIds) ? w.bankAccountIds.filter(Boolean) : [],
+      accountLabel: formatBankAccountsLabel(w) || '—',
+      note: String(w.description ?? '').trim() || cashBookEntryDetail(w),
+      subLabel: bankWithdrawalTypeLabel(w),
+      recordedBy: String(w.recordedBy ?? '').trim() || '—',
+      sortAt: w.createdAt || `${date}T12:00:00`,
+      detailVariant: null,
+      detailPayload: w,
     });
   }
 
@@ -337,6 +368,54 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
     return null;
   });
 
+  buildChequeTableRows(payments, (p, c, flat) => {
+    if (!flat.chequeReturned) return null;
+    const bankAccountId = String(c.chequeDepositedBankAccountId ?? '').trim();
+    const snap = c.chequeDepositedBankAccount;
+    const accountLabel =
+      snap && typeof snap === 'object'
+        ? String(snap.nickName ?? '').trim() || String(snap.bank ?? '').trim() || bankAccountId
+        : bankAccountLabel(bankAccountId, bankAccounts);
+    const returnDate = String(c.chequeReturnedAt ?? '').trim().slice(0, 10) || flat.chequeDate || '—';
+    rows.push({
+      id: `ret:${flat.rowKey}`,
+      kind: 'return_cheque',
+      direction: 'out',
+      date: returnDate,
+      amount: flat.amount,
+      bankAccountIds: bankAccountId ? [bankAccountId] : [],
+      accountLabel: accountLabel || '—',
+      note: [
+        flat.chequeNumber && flat.chequeNumber !== '—' ? `#${flat.chequeNumber}` : '',
+        String(p.customerName ?? '').trim(),
+        p.billNumber != null ? `Bill ${p.billNumber}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      subLabel: 'Customer cheque returned',
+      recordedBy: String(c.chequeReturnedBy ?? '').trim() || '—',
+      sortAt: c.chequeReturnedAt || p.createdAt || `${returnDate}T12:00:00`,
+      detailVariant: 'bankCheque',
+      detailPayload: {
+        id: p.id,
+        chequeId: c.id,
+        chequeDate: flat.chequeDate,
+        amount: flat.amount,
+        chequeNumber: flat.chequeNumber,
+        chequeDeposited: flat.chequeDeposited,
+        chequeDepositedAt: flat.chequeDepositedAt,
+        chequeDepositedBy: flat.chequeDepositedBy,
+        chequeReturned: true,
+        chequeReturnedAt: c.chequeReturnedAt,
+        chequeReturnedBy: c.chequeReturnedBy,
+        customerName: String(p.customerName ?? '').trim() || '—',
+        billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+        paymentDate: String(p.date ?? '').slice(0, 10) || '—',
+      },
+    });
+    return null;
+  });
+
   for (const e of Array.isArray(companyCheques) ? companyCheques : []) {
     const chequeDate = String(e.chequeDate ?? e.date ?? '').slice(0, 10);
     const amount = Math.max(0, Number(e.amount) || 0);
@@ -432,6 +511,77 @@ function buildBankTransactionRows(deposits, payments, purchaseOrders, companyChe
     });
   }
 
+  for (const inc of Array.isArray(incomes) ? incomes : []) {
+    if (inc.cancelled) continue;
+    const date = String(inc.date ?? '').slice(0, 10);
+    const amount = Math.max(0, Number(inc.amount) || 0);
+    if (amount <= 0) continue;
+    rows.push({
+      id: `inc:${inc.id}`,
+      kind: 'deposit',
+      direction: 'in',
+      date: date || '—',
+      amount,
+      bankAccountIds: Array.isArray(inc.bankAccountIds) ? inc.bankAccountIds.filter(Boolean) : [],
+      accountLabel: formatBankAccountsLabel(inc) || '—',
+      note: String(inc.description ?? '').trim() || cashBookEntryDetail(inc),
+      subLabel: inc.incomeType === 'other' ? 'Others' : bankIncomeTypeLabel(inc),
+      recordedBy: String(inc.recordedBy ?? '').trim() || '—',
+      sortAt: inc.createdAt || `${date}T12:00:00`,
+      detailVariant: null,
+      detailPayload: inc,
+    });
+  }
+
+  for (const c of Array.isArray(charges) ? charges : []) {
+    if (c.cancelled) continue;
+    const date = String(c.date ?? '').slice(0, 10);
+    const amount = Math.max(0, Number(c.amount) || 0);
+    if (amount <= 0) continue;
+    rows.push({
+      id: `chg:${c.id}`,
+      kind: 'withdrawal',
+      direction: 'out',
+      date: date || '—',
+      amount,
+      bankAccountIds: Array.isArray(c.bankAccountIds) ? c.bankAccountIds.filter(Boolean) : [],
+      accountLabel: formatBankAccountsLabel(c) || '—',
+      note: String(c.description ?? '').trim() || cashBookEntryDetail(c),
+      subLabel: c.chargeType === 'other' ? 'Others' : bankChargeTypeLabel(c),
+      recordedBy: String(c.recordedBy ?? '').trim() || '—',
+      sortAt: c.createdAt || `${date}T12:00:00`,
+      detailVariant: null,
+      detailPayload: c,
+    });
+  }
+
+  for (const e of Array.isArray(expenseEntries) ? expenseEntries : []) {
+    if (!isBankPaidExpense(e) || e.cancelled) continue;
+    const bankAccountId = Array.isArray(e.bankAccountIds) ? String(e.bankAccountIds[0] ?? '').trim() : '';
+    if (!bankAccountId) continue;
+    const chequeDate = String(e.chequeDate ?? e.date ?? '').slice(0, 10);
+    if (isFutureChequeDate(chequeDate)) continue;
+    const isTransfer = String(e.paymentMethod ?? '').trim() === 'bank_transfer';
+    const amount = Math.max(0, Number(e.amount) || 0);
+    if (amount <= 0) continue;
+    const categoryLabel = CASH_BOOK_CATEGORY_LABELS[e.category] || 'Expense';
+    rows.push({
+      id: `exp:${e.id}`,
+      kind: 'withdrawal',
+      direction: 'out',
+      date: chequeDate || '—',
+      amount,
+      bankAccountIds: [bankAccountId],
+      accountLabel: formatBankAccountsLabel(e) || bankAccountLabel(bankAccountId, bankAccounts) || '—',
+      note: cashBookEntryDetail(e),
+      subLabel: isTransfer ? `${categoryLabel} · bank transfer` : `${categoryLabel} · cheque`,
+      recordedBy: String(e.recordedBy ?? '').trim() || '—',
+      sortAt: e.createdAt || `${chequeDate}T12:00:00`,
+      detailVariant: null,
+      detailPayload: e,
+    });
+  }
+
   rows.sort((a, b) => {
     const byDate = b.date.localeCompare(a.date);
     if (byDate !== 0) return byDate;
@@ -465,6 +615,10 @@ function filterBankTransactionRows(rows, { dateFrom, dateTo, search, accountIds 
   }
   if (!search.trim()) return list;
   return list.filter((r) => rowMatchesQuery(search, bankTransactionSearchFields(r)));
+}
+
+function isOutgoingBankKind(kind) {
+  return kind === 'withdrawal' || kind === 'return_cheque';
 }
 
 function isReturnableCustomerChequeRow(r) {
@@ -549,6 +703,7 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
   const [chequeDepositOpen, setChequeDepositOpen] = useState(false);
   const [companyChequeOpen, setCompanyChequeOpen] = useState(false);
   const [ownerShareOpen, setOwnerShareOpen] = useState(false);
+  const [withdrawalOpen, setWithdrawalOpen] = useState(false);
   const [ownerName, setOwnerName] = useState('');
 
   const load = useCallback(async () => {
@@ -658,16 +813,14 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
   };
 
   const openCashierExpense = useCallback(async (category) => {
-    if (category === 'bank_deposit') {
-      try {
-        const res = await fetch(`${apiBase}/api/shop`);
-        if (res.ok) {
-          const shop = await res.json();
-          setBankAccounts(Array.isArray(shop.bankAccounts) ? shop.bankAccounts : []);
-        }
-      } catch {
-        /* keep cached list */
+    try {
+      const res = await fetch(`${apiBase}/api/shop`);
+      if (res.ok) {
+        const shop = await res.json();
+        setBankAccounts(Array.isArray(shop.bankAccounts) ? shop.bankAccounts : []);
       }
+    } catch {
+      /* keep cached list */
     }
     setExpenseModalCategory(category);
   }, []);
@@ -685,13 +838,26 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
     setChequeDepositOpen(true);
   }, []);
 
+  const openWithdrawal = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/shop`);
+      if (res.ok) {
+        const shop = await res.json();
+        setBankAccounts(Array.isArray(shop.bankAccounts) ? shop.bankAccounts : []);
+      }
+    } catch {
+      /* keep cached list */
+    }
+    setWithdrawalOpen(true);
+  }, []);
+
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="min-w-0 rounded-[20px] bg-white p-4 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cash in</p>
           <CashierStatAmount loading={loading} value={ledgerSummary.debit} valueClassName="text-emerald-800" />
-          <p className="mt-1 text-sm text-slate-500">Debit · customer cash</p>
+          <p className="mt-1 text-sm text-slate-500">Debit · customer cash and bank withdrawals</p>
         </div>
         <div className="min-w-0 rounded-[20px] bg-white p-4 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cash out</p>
@@ -723,6 +889,13 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={openWithdrawal}
+              className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-teal-500/20 transition hover:brightness-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+            >
+              Withdrawals
+            </button>
             <button
               type="button"
               onClick={openChequeDeposit}
@@ -785,8 +958,9 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
         <div>
           <h2 className="text-sm font-bold text-slate-900">Cash ledger</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Oldest first. Debits are customer cash; pending cheques (any converting date, not yet deposited) are listed
-            separately and do not change the cash balance; credits are expenses and cash sent to the bank.
+            Oldest first. Debits are customer cash and cash taken from the bank. Pending cheques and expenses paid by
+            bank transfer or cheque are listed separately and do not change the cash balance. Credits are cash expenses
+            and cash sent to the bank.
           </p>
         </div>
         <div className={mobileCardList}>
@@ -815,9 +989,17 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
                     <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-900">
                       Cash in
                     </span>
+                  ) : r.kind === 'bank_withdrawal' ? (
+                    <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-teal-900">
+                      From bank
+                    </span>
                   ) : r.kind === 'bank_deposit' ? (
                     <span className="rounded-md bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-900">
                       To bank
+                    </span>
+                  ) : r.kind === 'expense_bank' ? (
+                    <span className="rounded-md bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-900">
+                      Bank
                     </span>
                   ) : r.kind === 'cheque_in' ? (
                     <span className="rounded-md bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-900">
@@ -914,7 +1096,11 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
                         '—'
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-rose-800">
+                    <td
+                      className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${
+                        r.kind === 'expense_bank' ? 'text-sky-800' : 'text-rose-800'
+                      }`}
+                    >
                       {r.credit != null && r.credit > 0 ? money(r.credit) : '—'}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right font-bold tabular-nums text-slate-900">
@@ -980,14 +1166,26 @@ function CashierPanel({ refreshToken, onBooksChanged }) {
         onSaved={handleExpenseSaved}
         ownerName={ownerName}
       />
+      <CashBookWithdrawalModal
+        open={withdrawalOpen}
+        onClose={() => setWithdrawalOpen(false)}
+        onSaved={handleExpenseSaved}
+        bankAccounts={bankAccounts}
+      />
     </>
   );
 }
 
 function BankPanel({ refreshToken, onBooksChanged }) {
   const [deposits, setDeposits] = useState([]);
+  const [withdrawals, setWithdrawals] = useState([]);
+  const [charges, setCharges] = useState([]);
+  const [incomes, setIncomes] = useState([]);
+  const [chargeOpen, setChargeOpen] = useState(false);
+  const [incomeOpen, setIncomeOpen] = useState(false);
   const [payments, setPayments] = useState([]);
   const [companyCheques, setCompanyCheques] = useState([]);
+  const [expenseEntries, setExpenseEntries] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState([]);
@@ -1010,10 +1208,14 @@ function BankPanel({ refreshToken, onBooksChanged }) {
     setAccountsLoading(true);
     setError(null);
     try {
-      const [depRes, payRes, ccRes, poRes, shopRes, balRes] = await Promise.all([
+      const [depRes, wdRes, chgRes, incRes, payRes, ccRes, expRes, poRes, shopRes, balRes] = await Promise.all([
         fetch(`${apiBase}/api/cash-book-entries?category=bank_deposit`),
+        fetch(`${apiBase}/api/cash-book-entries?category=bank_withdrawal`),
+        fetch(`${apiBase}/api/cash-book-entries?category=bank_charge`),
+        fetch(`${apiBase}/api/cash-book-entries?category=bank_income`),
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/cash-book-entries?category=company_cheque`),
+        fetch(`${apiBase}/api/cash-book-entries`),
         fetch(`${apiBase}/api/purchase-orders`),
         fetch(`${apiBase}/api/shop`),
         fetch(`${apiBase}/api/bank-account-balances`),
@@ -1021,6 +1223,24 @@ function BankPanel({ refreshToken, onBooksChanged }) {
       if (!depRes.ok) throw new Error('Failed to load bank transactions');
       const depData = await depRes.json();
       setDeposits(Array.isArray(depData) ? depData : []);
+      if (wdRes.ok) {
+        const wdData = await wdRes.json();
+        setWithdrawals(Array.isArray(wdData) ? wdData : []);
+      } else {
+        setWithdrawals([]);
+      }
+      if (chgRes.ok) {
+        const chgData = await chgRes.json();
+        setCharges(Array.isArray(chgData) ? chgData : []);
+      } else {
+        setCharges([]);
+      }
+      if (incRes.ok) {
+        const incData = await incRes.json();
+        setIncomes(Array.isArray(incData) ? incData : []);
+      } else {
+        setIncomes([]);
+      }
 
       if (payRes.ok) {
         const payData = await payRes.json();
@@ -1034,6 +1254,13 @@ function BankPanel({ refreshToken, onBooksChanged }) {
         setCompanyCheques(Array.isArray(ccData) ? ccData : []);
       } else {
         setCompanyCheques([]);
+      }
+
+      if (expRes.ok) {
+        const expData = await expRes.json();
+        setExpenseEntries(Array.isArray(expData) ? expData.filter(isBankPaidExpense) : []);
+      } else {
+        setExpenseEntries([]);
       }
 
       if (poRes.ok) {
@@ -1059,8 +1286,12 @@ function BankPanel({ refreshToken, onBooksChanged }) {
     } catch (e) {
       setError(e.message || 'Could not load bank transactions');
       setDeposits([]);
+      setWithdrawals([]);
+      setCharges([]);
+      setIncomes([]);
       setPayments([]);
       setCompanyCheques([]);
+      setExpenseEntries([]);
       setPurchaseOrders([]);
       setBankAccounts([]);
       setBalanceByAccountId({});
@@ -1209,8 +1440,19 @@ function BankPanel({ refreshToken, onBooksChanged }) {
   }, [bankAccounts, balanceByAccountId]);
 
   const allTransactions = useMemo(
-    () => buildBankTransactionRows(deposits, payments, purchaseOrders, companyCheques, bankAccounts),
-    [deposits, payments, purchaseOrders, companyCheques, bankAccounts],
+    () =>
+      buildBankTransactionRows(
+        deposits,
+        withdrawals,
+        payments,
+        purchaseOrders,
+        companyCheques,
+        bankAccounts,
+        expenseEntries,
+        charges,
+        incomes,
+      ),
+    [deposits, withdrawals, payments, purchaseOrders, companyCheques, bankAccounts, expenseEntries, charges, incomes],
   );
 
   const scopedRows = useMemo(
@@ -1225,7 +1467,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
   );
 
   const kindCounts = useMemo(() => {
-    const counts = { paid_cheque: 0, deposit: 0, withdrawal: 0 };
+    const counts = { paid_cheque: 0, deposit: 0, withdrawal: 0, return_cheque: 0 };
     for (const r of scopedRows) {
       if (counts[r.kind] != null) counts[r.kind] += 1;
     }
@@ -1233,7 +1475,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
   }, [scopedRows]);
 
   const filteredRows = useMemo(() => {
-    if (txKindFilter === 'all') return scopedRows;
+    if (txKindFilter === 'all') return scopedRows.filter((r) => r.kind !== 'return_cheque');
     return scopedRows.filter((r) => r.kind === txKindFilter);
   }, [scopedRows, txKindFilter]);
 
@@ -1264,17 +1506,35 @@ function BankPanel({ refreshToken, onBooksChanged }) {
           <div>
             <h2 className="text-sm font-bold text-slate-900">Bank accounts</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Balance includes deposits, approved CDM / online transfers, and deposited customer cheques, minus PO
-              cheques and bank transfers whose date has passed. Pending PO cheques and transfers show until their
-              date. Balance may go negative.
+              Balance includes deposits, bank cash in such as interest, approved CDM / online transfers, and deposited
+              customer cheques, minus
+              withdrawals to the cashier, bank expenses, and PO or expense cheques and bank transfers whose date has
+              passed. Pending
+              cheques and transfers show until their date. Balance may go negative.
             </p>
           </div>
-          <Link
-            to="/dashboard/shop"
-            className="shrink-0 text-sm font-semibold text-indigo-700 hover:text-indigo-900"
-          >
-            Manage in Shop →
-          </Link>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIncomeOpen(true)}
+              className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-500/20 transition hover:brightness-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+            >
+              Cash in
+            </button>
+            <button
+              type="button"
+              onClick={() => setChargeOpen(true)}
+              className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-rose-600 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-500/20 transition hover:brightness-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40"
+            >
+              Expenses
+            </button>
+            <Link
+              to="/dashboard/shop"
+              className="text-sm font-semibold text-indigo-700 hover:text-indigo-900"
+            >
+              Manage in Shop →
+            </Link>
+          </div>
         </div>
         <div className="mt-4">
           {accountsLoading ? (
@@ -1365,10 +1625,11 @@ function BankPanel({ refreshToken, onBooksChanged }) {
         <div>
           <h2 className="text-sm font-bold text-slate-900">Transaction history</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Deposits, approved CDM / online transfers, deposited customer cheques, and PO cheque or bank transfer
-            withdrawals (after the converting or transfer date). Use{' '}
+            Deposits, cashier withdrawals, approved CDM / online transfers, deposited customer cheques, and PO or
+            expense cheque and bank transfer withdrawals (after the converting or transfer date). Use{' '}
             <span className="font-medium text-slate-700">Mark returned</span> on a deposited customer cheque when the
-            bank dishonours it.
+            bank dishonours it. Those reversals are listed under{' '}
+            <span className="font-medium text-slate-700">Return cheques</span>.
           </p>
         </div>
 
@@ -1465,7 +1726,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                   { label: 'Account', value: r.accountLabel },
                   {
                     label: 'Amount',
-                    value: r.kind === 'withdrawal' ? `−${money(r.amount)}` : money(r.amount),
+                    value: isOutgoingBankKind(r.kind) ? `−${money(r.amount)}` : money(r.amount),
                   },
                   { label: 'Recorded by', value: r.recordedBy },
                 ]}
@@ -1536,10 +1797,10 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                     </td>
                     <td
                       className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${
-                        r.kind === 'withdrawal' ? 'text-rose-800' : 'text-emerald-800'
+                        isOutgoingBankKind(r.kind) ? 'text-rose-800' : 'text-emerald-800'
                       }`}
                     >
-                      {r.kind === 'withdrawal' ? '−' : '+'}
+                      {isOutgoingBankKind(r.kind) ? '−' : '+'}
                       {money(r.amount)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.recordedBy}</td>
@@ -1633,6 +1894,24 @@ function BankPanel({ refreshToken, onBooksChanged }) {
             </div>
           ) : null
         }
+      />
+      <CashBookBankChargeModal
+        open={chargeOpen}
+        onClose={() => setChargeOpen(false)}
+        onSaved={() => {
+          onBooksChanged?.();
+          load();
+        }}
+        bankAccounts={bankAccounts}
+      />
+      <CashBookBankIncomeModal
+        open={incomeOpen}
+        onClose={() => setIncomeOpen(false)}
+        onSaved={() => {
+          onBooksChanged?.();
+          load();
+        }}
+        bankAccounts={bankAccounts}
       />
     </>
   );

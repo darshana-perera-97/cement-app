@@ -137,8 +137,8 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
   }, [open, onClose]);
 
   const allRows = useMemo(
-    () => (customer ? buildCustomerInvoiceRows(customer, bills, payments) : []),
-    [customer, bills, payments],
+    () => (customer ? buildCustomerInvoiceRows(customer, bills, payments, promotions) : []),
+    [customer, bills, payments, promotions],
   );
 
   const filteredRows = useMemo(

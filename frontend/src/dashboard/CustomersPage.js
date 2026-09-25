@@ -67,23 +67,24 @@ function maxNumericSuffixFromIds(customers) {
   return max;
 }
 
-/** Suggest next ID from the most recently created customer, with fallbacks. */
+/** Suggest the next ID after the highest number already used by any user. */
 function suggestNextCustomerId(customers) {
   const list = Array.isArray(customers) ? customers : [];
-  if (list.length === 0) return '1';
-
-  const sorted = [...list].sort((a, b) => {
-    const ta = Date.parse(a?.createdAt || '') || 0;
-    const tb = Date.parse(b?.createdAt || '') || 0;
-    if (tb !== ta) return tb - ta;
-    return String(b?.id ?? '').localeCompare(String(a?.id ?? ''));
-  });
-
-  for (const c of sorted) {
-    const next = incrementCustomerId(c?.id);
+  let best = null;
+  for (const c of list) {
+    const raw = String(c?.id ?? '').trim();
+    const match = raw.match(/^(.*?)(\d+)$/);
+    if (!match) continue;
+    const num = parseInt(match[2], 10);
+    if (!Number.isFinite(num)) continue;
+    if (!best || num > best.num) {
+      best = { raw, prefix: match[1], num, width: match[2].length };
+    }
+  }
+  if (best) {
+    const next = incrementCustomerId(best.raw);
     if (next) return next;
   }
-
   return String(maxNumericSuffixFromIds(list) + 1);
 }
 
@@ -167,8 +168,19 @@ export default function CustomersPage() {
     navigate(`/dashboard/customers/${encodeURIComponent(customerId)}`);
   };
 
-  const openModal = () => {
-    setForm({ ...emptyForm(), id: suggestNextCustomerId(rows) });
+  const openModal = async () => {
+    let nextId = suggestNextCustomerId(rows);
+    try {
+      const res = await authFetch(`${apiBase}/api/customers/next-id`);
+      if (res.ok) {
+        const data = await res.json();
+        const fromAllUsers = String(data?.id ?? '').trim();
+        if (fromAllUsers) nextId = fromAllUsers;
+      }
+    } catch {
+      /* fall back to the customers this user can see */
+    }
+    setForm({ ...emptyForm(), id: nextId });
     setSaveError(null);
     setModalOpen(true);
   };

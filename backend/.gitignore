@@ -9,6 +9,9 @@
 # local JSON stores + WhatsApp session
 /data
 /data2
+/data4
+/data3
+/data5
 
 .WhatsApp
 .wwebjs_cache
