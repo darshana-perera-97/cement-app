@@ -76,7 +76,7 @@ function Login() {
       if (String(data.staffRole || '').trim() === 'Driver') {
         setDriverAuth(resolvedUser, token, data.name);
       } else {
-        setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess);
+        setAuth(resolvedUser, role, token, data.staffRole, data.managerAccess, data.name);
       }
       beginLoginPrinterConnect();
       navigate(getPostLoginPath(), { replace: true });

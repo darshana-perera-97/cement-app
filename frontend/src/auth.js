@@ -91,16 +91,22 @@ export function getPostLoginPath() {
   return getFirstAllowedDashboardPath();
 }
 
-export function setAuth(username, role, token, staffRole, managerAccess) {
+export function setAuth(username, role, token, staffRole, managerAccess, displayName) {
   sessionStorage.setItem(AUTH_KEY, '1');
-  if (username != null && String(username).trim()) {
-    sessionStorage.setItem(USER_KEY, String(username).trim());
+  const loginId = username != null ? String(username).trim() : '';
+  if (loginId) {
+    sessionStorage.setItem(USER_KEY, loginId);
   }
   sessionStorage.setItem(ROLE_KEY, role === 'admin' ? 'admin' : 'staff');
   if (token != null && String(token).trim()) {
     sessionStorage.setItem(TOKEN_KEY, String(token).trim());
   }
-  sessionStorage.removeItem(DISPLAY_NAME_KEY);
+  const name = displayName != null ? String(displayName).trim() : '';
+  if (name && name.toLowerCase() !== loginId.toLowerCase()) {
+    sessionStorage.setItem(DISPLAY_NAME_KEY, name);
+  } else {
+    sessionStorage.removeItem(DISPLAY_NAME_KEY);
+  }
   const sr = staffRole != null ? String(staffRole).trim() : '';
   if (sr) sessionStorage.setItem(STAFF_ROLE_KEY, sr);
   else sessionStorage.removeItem(STAFF_ROLE_KEY);

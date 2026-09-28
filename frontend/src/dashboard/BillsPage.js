@@ -710,6 +710,15 @@ export default function BillsPage() {
     downloadBillsInvoicesPdf(billsForPdf, invoicePdfOpts());
   }, [loadBillsForInvoicePdf, invoicePdfOpts]);
 
+  const handleDownloadDetailBill = useCallback(() => {
+    if (!detailBill) return;
+    const date = String(detailBill.date || '').trim();
+    downloadBillsInvoicesPdf([detailBill], {
+      ...invoicePdfOpts(),
+      ...(date ? { dateFrom: date, dateTo: date } : {}),
+    });
+  }, [detailBill, invoicePdfOpts]);
+
   const handleViewInvoices = useCallback(async () => {
     setInvoicePreviewBusy(true);
     try {
@@ -1449,14 +1458,25 @@ export default function BillsPage() {
         variant="bill"
         onClose={() => setDetailBill(null)}
         actions={
-          canEditDetails() ? (
-            <button
-              type="button"
-              onClick={openBillEditFromDetail}
-              className="mt-4 w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
-            >
-              Edit bill
-            </button>
+          detailBill ? (
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadDetailBill}
+                className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+              >
+                Download bill
+              </button>
+              {canEditDetails() ? (
+                <button
+                  type="button"
+                  onClick={openBillEditFromDetail}
+                  className="w-full rounded-xl border border-indigo-200 bg-white px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-50"
+                >
+                  Edit bill
+                </button>
+              ) : null}
+            </div>
           ) : null
         }
       />

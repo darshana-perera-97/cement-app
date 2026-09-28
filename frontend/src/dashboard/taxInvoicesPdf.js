@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
+import { invoiceCollectorName } from './collectorPrintName';
 import {
   purchaserTaxAddress,
   purchaserTaxName,
@@ -81,7 +82,9 @@ function drawInvoiceAcknowledgement(doc, startY, generatedAt) {
   if (stamp) {
     doc.setFontSize(8);
     doc.text(stamp, MARGIN, y);
+    y += 4;
   }
+  return y;
 }
 
 function roundMoney(n) {
@@ -425,7 +428,18 @@ function renderTaxInvoicePage(doc, bill, opts) {
   );
   y += 12;
   drawLabeledField(doc, 'Mode of Payment:', modeOfPayment, MARGIN, y, contentWidth, 10);
-  drawInvoiceAcknowledgement(doc, y + 10, opts.generatedAt instanceof Date ? opts.generatedAt : new Date());
+  const ackY = drawInvoiceAcknowledgement(
+    doc,
+    y + 10,
+    opts.generatedAt instanceof Date ? opts.generatedAt : new Date(),
+  );
+  const collectorName = invoiceCollectorName(bill);
+  if (collectorName && ackY) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
+    doc.text(`Collector : ${collectorName}`, MARGIN, ackY + 5);
+  }
 }
 
 /**

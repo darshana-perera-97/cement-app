@@ -12,6 +12,7 @@ import {
   onlineTransferPortion,
 } from './paymentCheques';
 import { getPaymentReceiptInvoices } from './paymentReceipt';
+import { collectedByPrintLabel } from './collectorPrintName';
 
 const MARGIN = 8;
 const BLACK = [0, 0, 0];
@@ -351,7 +352,7 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   const customerLines = doc.splitTextToSize(`Received from : ${customerName}`, contentWidth);
   doc.text(customerLines, MARGIN, y);
   y += customerLines.length * LINE;
-  doc.text(`Collected by : ${display(payment.recordedBy)}`, MARGIN, y);
+  doc.text(`Collected by : ${display(collectedByPrintLabel(payment))}`, MARGIN, y);
   y += LINE + 1.8;
 
   y = drawSectionTitle(doc, 'AMOUNT RECEIVED', y);

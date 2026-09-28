@@ -1,4 +1,6 @@
+import { getUsername } from '../auth';
 import { formatBrandLabel, getCachedBrands } from '../dashboard/brandTheme';
+import { collectedByPrintLabel, invoiceCollectorName } from '../dashboard/collectorPrintName';
 import { cashPortion, cdmPortion, chequePortion, getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from '../dashboard/paymentCheques';
 import { getPaymentReceiptInvoices } from '../dashboard/paymentReceipt';
 import { printEscPosLines } from './bluetoothPrinter';
@@ -130,6 +132,12 @@ function itemTableLines(items, { includeAmount = false } = {}) {
   return lines;
 }
 
+function collectorLines(record) {
+  const name = invoiceCollectorName(record);
+  if (!name) return [];
+  return [{ kind: 'cols', left: 'Collector', right: name }];
+}
+
 function footerLines() {
   return [
     { kind: 'blank' },
@@ -187,6 +195,7 @@ export function buildUnloadReceiptLines(unload, shop) {
     { kind: 'cols', left: 'Invoice #', right: display(unload?.invoiceNumber) },
     { kind: 'cols', left: 'Date', right: formatDate(unload?.date) },
     { kind: 'cols', left: 'Customer', right: display(unload?.customerName) },
+    ...collectorLines(unload),
     ...(unload?.driverName
       ? [{ kind: 'cols', left: 'Driver', right: display(unload.driverName) }]
       : []),
@@ -232,7 +241,7 @@ export function buildPaymentReceiptLines(payment, shop) {
     { kind: 'align', value: 'left' },
     { kind: 'cols', left: 'Date', right: formatDate(payment?.date) },
     { kind: 'cols', left: 'Customer', right: display(payment?.customerName) },
-    { kind: 'cols', left: 'Collected by', right: display(payment?.recordedBy) },
+    { kind: 'cols', left: 'Collected by', right: display(collectedByPrintLabel(payment)) },
     { kind: 'rule', char: '=' },
     { kind: 'align', value: 'center' },
     { text: 'AMOUNT RECEIVED', bold: true },
@@ -353,14 +362,18 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
     report?.chequeTotal != null
       ? Number(report.chequeTotal) || 0
       : chequeRows.reduce((s, r) => s + (Number(r?.amount) || 0), 0);
-  const collectorName = String(report?.collectorName ?? '').trim();
+  const loginId = String(getUsername() ?? '').trim();
+  let collectorName = String(report?.collectorName ?? '').trim();
+  if (!collectorName || (loginId && collectorName.toLowerCase() === loginId.toLowerCase())) {
+    collectorName = invoiceCollectorName(report);
+  }
   const lines = [
     ...shopLines(shop),
     { kind: 'align', value: 'center' },
     { text: 'DAILY COLLECTIONS', bold: true, double: true },
     { text: formatDate(report?.reportDate), bold: true },
   ];
-  if (collectorName) lines.push({ text: collectorName });
+  if (collectorName) lines.push({ text: `Collector: ${collectorName}` });
   lines.push({ kind: 'rule', char: '=' });
   lines.push({ kind: 'align', value: 'left' });
   lines.push({ kind: 'cols', left: 'Cash', right: money(cashTotal), bold: true, invert: true });
@@ -451,6 +464,7 @@ export function buildBillReceiptLines(bill, shop) {
     { kind: 'cols', left: 'Invoice #', right: display(bill?.invoiceNumber) },
     { kind: 'cols', left: 'Date', right: formatDate(bill?.date) },
     { kind: 'cols', left: 'Customer', right: display(bill?.customerName) },
+    ...collectorLines(bill),
     ...(bill?.driverName
       ? [{ kind: 'cols', left: 'Driver', right: display(bill.driverName) }]
       : []),

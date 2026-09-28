@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { loadShopDetailsForPdf } from './paymentReceiptPdf';
+import { invoiceCollectorName } from './collectorPrintName';
 
 const MARGIN = 16;
 const BLACK = [0, 0, 0];
@@ -208,6 +209,15 @@ export function buildReturnInvoicePdf(row, shop = {}, opts = {}) {
     const noteLines = doc.splitTextToSize(`Note: ${row.note}`, contentWidth);
     doc.text(noteLines, MARGIN, y);
     y += noteLines.length * 5 + 4;
+  }
+
+  const collectorName = invoiceCollectorName(row);
+  if (collectorName) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
+    doc.text(`Collector : ${collectorName}`, MARGIN, y);
+    y += 6;
   }
 
   doc.setFont('helvetica', 'normal');

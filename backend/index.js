@@ -152,6 +152,58 @@ function collectorDisplayName(user) {
   return String(user.name || '').trim() || user.username || '';
 }
 
+/** Collector's name for printouts. Empty when the only label is the login ID / NIC. */
+function collectorNameForLogin(users, loginId) {
+  const key = String(loginId ?? '').trim().toLowerCase();
+  if (!key) return '';
+  const user = (Array.isArray(users) ? users : []).find((u) => {
+    if (String(u.role || '').trim() !== 'Collector') return false;
+    const username = String(u.username || '').trim().toLowerCase();
+    const nic = String(u.nic || '').trim().toLowerCase();
+    return username === key || (nic && nic === key);
+  });
+  if (!user) return '';
+  const name = String(user.name || '').trim();
+  const username = String(user.username || '').trim().toLowerCase();
+  const nic = String(user.nic || '').trim().toLowerCase();
+  if (!name || name.toLowerCase() === username || (nic && name.toLowerCase() === nic)) return '';
+  return name;
+}
+
+function stampCollectorName(row, users, loginField) {
+  if (!row || typeof row !== 'object') return row;
+  const collectorName = collectorNameForLogin(users, row[loginField]);
+  if (!collectorName) return row;
+  return { ...row, collectorName };
+}
+
+async function attachCollectorName(row, loginField) {
+  const users = await readUsers();
+  return stampCollectorName(row, users, loginField);
+}
+
+async function attachCollectorNames(rows, loginField) {
+  const users = await readUsers();
+  return (Array.isArray(rows) ? rows : []).map((row) => stampCollectorName(row, users, loginField));
+}
+
+/** Phrase for an invoice line: collector name, never their ID. Other staff keep "by {login}". */
+function invoiceActorPhrase(users, loginId) {
+  const raw = String(loginId ?? '').trim();
+  if (!raw) return '';
+  const name = collectorNameForLogin(users, raw);
+  if (name) return `Collector ${name}`;
+  const key = raw.toLowerCase();
+  const isCollectorLogin = (Array.isArray(users) ? users : []).some((u) => {
+    if (String(u.role || '').trim() !== 'Collector') return false;
+    const username = String(u.username || '').trim().toLowerCase();
+    const nic = String(u.nic || '').trim().toLowerCase();
+    return username === key || nic === key;
+  });
+  if (isCollectorLogin) return '';
+  return `by ${raw}`;
+}
+
 function enrichCustomerWithCollector(customer, users) {
   const collectorUserId = String(customer.collectorUserId ?? '').trim();
   if (!collectorUserId) {
@@ -3216,7 +3268,7 @@ app.patch('/api/collector/unloads/:id/prices', async (req, res) => {
       unload: enrichUnloadForCollector(unloads[idx], billsForView, stocksForView, products, {
         stockItemUnloadPriceEnabled,
       }),
-      bill: billRow,
+      bill: billRow ? await attachCollectorName(billRow, 'enteredBy') : billRow,
       billedImmediately: Boolean(billRow && status === 'pending'),
     });
   } catch (e) {
@@ -3250,7 +3302,10 @@ app.post('/api/unload-requests/:id/approve', async (req, res) => {
     if (!created.ok) {
       return res.status(created.status || 400).json({ error: created.error });
     }
-    res.status(201).json({ request: created.requestRow, bill: created.billRow });
+    res.status(201).json({
+      request: created.requestRow,
+      bill: await attachCollectorName(created.billRow, 'enteredBy'),
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to approve request' });
@@ -3763,7 +3818,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
         type: 'Credit sale',
         details: [
           String(b.invoiceNumber ?? '').trim() ? `Invoice ${String(b.invoiceNumber).trim()}` : null,
-          b.enteredBy ? `by ${b.enteredBy}` : '',
+          invoiceActorPhrase(users, b.enteredBy),
         ]
           .filter(Boolean)
           .join(' · '),
@@ -3784,7 +3839,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
           paymentSettlementSummary(p),
           p.billNumber ? `Bill #${p.billNumber}` : null,
           p.note,
-          p.recordedBy ? `by ${p.recordedBy}` : '',
+          invoiceActorPhrase(users, p.recordedBy),
         ]
           .filter(Boolean)
           .join(' · ') || '—',
@@ -3873,7 +3928,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
             row.returnInvoiceNumber ? `Return ${row.returnInvoiceNumber}` : null,
             row.damageInvoiceNumber ? `Damage ${row.damageInvoiceNumber}` : null,
             row.note,
-            row.enteredBy ? `by ${row.enteredBy}` : null,
+            invoiceActorPhrase(users, row.enteredBy),
           ]
             .filter(Boolean)
             .join(' · ') || '—',
@@ -4387,7 +4442,7 @@ app.get('/api/payments', async (req, res) => {
     );
     rows = await filterRowsForCollector(rows, auth, (p) => p.customerName);
     hydratePaymentReceiptInvoices(rows, payments, bills, customers, promotions);
-    res.json(rows);
+    res.json(await attachCollectorNames(rows, 'recordedBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read payments' });
@@ -4553,7 +4608,7 @@ app.post('/api/payments', async (req, res) => {
         console.error('payment whatsapp notification', err),
       );
     }
-    res.status(201).json(row);
+    res.status(201).json(await attachCollectorName(row, 'recordedBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save payment' });
@@ -4729,7 +4784,7 @@ app.patch('/api/payments/:id', async (req, res) => {
       cust.id,
     );
 
-    res.json(row);
+    res.json(await attachCollectorName(row, 'recordedBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update payment' });
@@ -5539,7 +5594,7 @@ app.get('/api/bills', async (req, res) => {
       return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     });
     sorted = await filterRowsForCollector(sorted, auth, (row) => row.customerName);
-    res.json(sorted);
+    res.json(await attachCollectorNames(sorted, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read bills' });
@@ -5634,7 +5689,7 @@ app.post('/api/bills', async (req, res) => {
       );
     }
 
-    res.status(201).json(row);
+    res.status(201).json(await attachCollectorName(row, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save bill' });
@@ -5723,7 +5778,7 @@ app.patch('/api/bills/:id', async (req, res) => {
       console.error('liveStock refresh after bill update', err);
     }
 
-    res.json(row);
+    res.json(await attachCollectorName(row, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update bill' });
@@ -5739,7 +5794,7 @@ app.get('/api/returns', async (req, res) => {
       if (da !== db) return db.localeCompare(da);
       return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     });
-    res.json(sorted);
+    res.json(await attachCollectorNames(sorted, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to load returns' });
@@ -6023,7 +6078,7 @@ app.post('/api/returns', async (req, res) => {
       }
     }
 
-    res.status(201).json(row);
+    res.status(201).json(await attachCollectorName(row, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save return' });

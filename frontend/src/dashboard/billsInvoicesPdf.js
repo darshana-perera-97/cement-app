@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
+import { invoiceCollectorName } from './collectorPrintName';
 
 const MARGIN = 16;
 const BLACK = [0, 0, 0];
@@ -381,6 +382,15 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
   y = (doc.lastAutoTable?.finalY || y) + 8;
   y = drawInvoiceAcknowledgement(doc, y, generatedAt);
 
+  const collectorName = invoiceCollectorName(bill);
+  if (collectorName) {
+    y += 4;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
+    doc.text(`Collector : ${collectorName}`, MARGIN, y);
+  }
+
   if (opts.deliveryNote) {
     y += 6;
     doc.setFont('helvetica', 'normal');
@@ -428,11 +438,23 @@ export function buildBillsInvoicesPdf(bills, opts = {}) {
     renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName, unloadLookups, generatedAt);
   });
 
+  return { doc, filename: invoicePdfFilename(list, opts, generatedAt) };
+}
+
+function invoicePdfFilename(list, opts, generatedAt) {
+  if (list.length === 1) {
+    const inv = invoiceNumberForBill(list[0]);
+    const slug =
+      inv && inv !== '—'
+        ? inv.replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+        : '';
+    if (slug) return `invoice-${slug}.pdf`;
+  }
   const { dateFrom = '', dateTo = '' } = opts;
   const rangeSlug =
     dateFrom && dateTo ? `${dateFrom}_to_${dateTo}` : dateFrom || dateTo || 'all-dates';
   const stamp = generatedAt.toISOString().slice(0, 10);
-  return { doc, filename: `invoices-${rangeSlug}-${stamp}.pdf` };
+  return `invoices-${rangeSlug}-${stamp}.pdf`;
 }
 
 /** Download the generated invoices PDF. */
