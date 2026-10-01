@@ -4,8 +4,8 @@ import * as XLSX from 'xlsx';
 
 const MARGIN = 14;
 
-const PDF_HEAD = [['Date', 'Type', 'Details', 'Debit (LKR)', 'Credit (LKR)', 'Balance (LKR)']];
-const EXCEL_HEAD = ['Date', 'Type', 'Details', 'Debit (LKR)', 'Credit (LKR)', 'Balance (LKR)'];
+const PDF_HEAD = [['Date', 'Type', 'Invoice', 'Details', 'Debit (LKR)', 'Credit (LKR)', 'Balance (LKR)']];
+const EXCEL_HEAD = ['Date', 'Type', 'Invoice', 'Details', 'Debit (LKR)', 'Credit (LKR)', 'Balance (LKR)'];
 
 function formatLkr(n) {
   return new Intl.NumberFormat(undefined, {
@@ -58,6 +58,7 @@ function buildPdfBody(rows) {
   return rows.map((r) => [
     dateCell(r.date),
     r.type || '—',
+    r.invoice || '—',
     r.details || '—',
     r.debit != null && r.debit > 0 ? formatLkr(r.debit) : '—',
     r.credit != null && r.credit > 0 ? formatLkr(r.credit) : '—',
@@ -69,6 +70,7 @@ function buildExcelBody(rows) {
   return rows.map((r) => [
     /^\d{4}-\d{2}-\d{2}$/.test(dateCell(r.date)) ? dateCell(r.date) : '',
     r.type || '',
+    r.invoice || '',
     r.details || '',
     r.debit != null && r.debit > 0 ? Number(r.debit) : '',
     r.credit != null && r.credit > 0 ? Number(r.credit) : '',
@@ -115,7 +117,7 @@ export function downloadCustomerLedgerPdf(customer, rows, options = {}) {
   doc.text(range, MARGIN, metaY);
   metaY += 5;
   doc.text(
-    'Debits increase amount owed; credits are payments. Balance is amount still owed (negative = overpaid).',
+    'Debits increase amount owed. Payments are listed per invoice they were applied to. Balance is amount still owed (negative = overpaid).',
     MARGIN,
     metaY,
   );
@@ -127,6 +129,7 @@ export function downloadCustomerLedgerPdf(customer, rows, options = {}) {
     [
       '',
       '',
+      '',
       `Totals (${totals.count} entr${totals.count === 1 ? 'y' : 'ies'})`,
       formatLkr(totals.debit),
       formatLkr(totals.credit),
@@ -136,7 +139,7 @@ export function downloadCustomerLedgerPdf(customer, rows, options = {}) {
 
   autoTable(doc, {
     head: PDF_HEAD,
-    body: body.length > 0 ? body : [['—', '—', '—', '—', '—', '0.00']],
+    body: body.length > 0 ? body : [['—', '—', '—', '—', '—', '—', '0.00']],
     foot,
     startY: tableStartY,
     margin: { top: tableStartY, left: MARGIN, right: MARGIN, bottom: 16 },
@@ -153,9 +156,9 @@ export function downloadCustomerLedgerPdf(customer, rows, options = {}) {
     },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      3: { halign: 'right' },
       4: { halign: 'right' },
       5: { halign: 'right' },
+      6: { halign: 'right' },
     },
     showHead: 'everyPage',
   });
@@ -187,6 +190,7 @@ export function downloadCustomerLedgerExcel(customer, rows, options = {}) {
     [
       '',
       '',
+      '',
       `Totals (${totals.count})`,
       totals.debit,
       totals.credit,
@@ -198,6 +202,7 @@ export function downloadCustomerLedgerExcel(customer, rows, options = {}) {
   worksheet['!cols'] = [
     { wch: 12 },
     { wch: 22 },
+    { wch: 16 },
     { wch: 40 },
     { wch: 14 },
     { wch: 14 },

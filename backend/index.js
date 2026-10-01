@@ -105,6 +105,11 @@ const {
 } = require('./models/lorriesStore');
 const { readMapShops, writeMapShops, normalizeMapShop, coordKey } = require('./models/mapShopsStore');
 const {
+  isInSriLanka: isFieldLocationInSriLanka,
+  upsertFieldLocation,
+  listFreshFieldLocations,
+} = require('./models/fieldLocationsStore');
+const {
   MAX_UPDATE_DISTANCE_M,
   distanceMeters,
   readShopStocks,
@@ -1024,6 +1029,84 @@ app.put('/api/map-shops', async (req, res) => {
   }
 });
 
+async function latestLorryNumberForDriver(user) {
+  const orders = await readPurchaseOrders();
+  const id = String(user?.id || '').trim();
+  const name = String(user?.name || '').trim().toLowerCase();
+  const byId = [];
+  const byName = [];
+  for (const po of orders) {
+    const vehicleNumber = String(po?.vehicleNumber || '').trim();
+    if (!vehicleNumber) continue;
+    const stamp = String(po?.createdAt || po?.date || '');
+    const poDriverId = String(po?.driverId || '').trim();
+    const poName = String(po?.driverName || '').trim().toLowerCase();
+    if (id && poDriverId && poDriverId === id) byId.push({ stamp, vehicleNumber });
+    else if (name && poName && poName === name) byName.push({ stamp, vehicleNumber });
+  }
+  const pick = (rows) => {
+    rows.sort((a, b) => b.stamp.localeCompare(a.stamp));
+    return rows[0]?.vehicleNumber || '';
+  };
+  return pick(byId) || pick(byName);
+}
+
+/** Collectors and drivers share GPS. Admin map is the only reader. */
+app.post('/api/field-locations', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in to share your location' });
+  }
+  try {
+    const user = await findUserByUsername(auth.username);
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    const role = String(user.role || '').trim();
+    if (role !== 'Collector' && role !== 'Driver') {
+      return res.status(403).json({ error: 'Only collectors and drivers share location' });
+    }
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!isFieldLocationInSriLanka(lat, lng)) {
+      return res.status(400).json({ error: 'Location must be inside Sri Lanka' });
+    }
+    const accuracy = Number(req.body?.accuracy);
+    const lorryNumber = role === 'Driver' ? await latestLorryNumberForDriver(user) : '';
+    const saved = await upsertFieldLocation({
+      userId: user.id,
+      name: String(user.name || '').trim() || user.username,
+      role,
+      lat,
+      lng,
+      accuracy,
+      lorryNumber,
+      updatedAt: new Date().toISOString(),
+    });
+    res.json({ ok: true, updatedAt: saved.updatedAt });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save location' });
+  }
+});
+
+app.get('/api/field-locations', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again to view locations' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can see collector and lorry locations' });
+  }
+  try {
+    const people = await listFreshFieldLocations();
+    res.json(people);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load locations' });
+  }
+});
+
 app.get('/api/shop-stocks', async (req, res) => {
   const auth = await requireMapStockViewer(req, res);
   if (!auth) return;
@@ -1565,6 +1648,38 @@ function hydratePaymentReceiptInvoices(rows, allPayments, bills, customers, prom
   }
 }
 
+/** Short method list for ledger lines (no amounts — amounts are per invoice). */
+function paymentMethodLabels(p) {
+  const parts = [];
+  if (toNonNegMoney(p?.cashAmount) > 0) parts.push('cash');
+  if (cdmPortion(p) > 0) parts.push('CDM');
+  if (onlineTransferPortion(p) > 0) parts.push('online transfer');
+  const chequeLines = getPaymentCheques(p);
+  if (chequeLines.some((c) => toNonNegMoney(c.amount) > 0) || toNonNegMoney(p?.chequeAmount) > 0) {
+    parts.push('cheque');
+  }
+  return parts.join(', ');
+}
+
+function returnedChequeLedgerNote(p) {
+  const lines = getPaymentCheques(p).filter((c) => c.chequeReturned && toNonNegMoney(c.amount) > 0);
+  if (!lines.length) return '';
+  return lines
+    .map((c) => {
+      const label = c.chequeNumber ? `Cheque #${c.chequeNumber}` : 'Cheque';
+      return `${label} later returned`;
+    })
+    .join(' · ');
+}
+
+function returnedChequeLedgerAmount(p) {
+  return roundMoney2(
+    getPaymentCheques(p)
+      .filter((c) => c.chequeReturned)
+      .reduce((sum, c) => sum + toNonNegMoney(c.amount), 0),
+  );
+}
+
 /** How a payment settled the account (customer transaction list). */
 function paymentSettlementSummary(p) {
   const credit = paymentCreditToCustomer(p);
@@ -1717,42 +1832,52 @@ async function buildLoadRowFromBody(body, meta = {}) {
   return { row, products, missingRefs };
 }
 
+const BILL_INVOICE_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+/** Bill-date prefix: 2-digit year + 3-letter month, e.g. 2026-10-01 → 26OCT_ */
+function billInvoicePrefixFromDate(dateStr) {
+  let year;
+  let month;
+  const match = String(dateStr ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    year = Number(match[1]);
+    month = Number(match[2]);
+  }
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    const today = new Date();
+    year = today.getFullYear();
+    month = today.getMonth() + 1;
+  }
+  return `${String(year).slice(-2)}${BILL_INVOICE_MONTHS[month - 1]}_`;
+}
+
 function normalizeBillInvoiceNumber(value) {
   return String(value ?? '').trim().replace(/\s+/g, ' ');
 }
 
-function incrementBillInvoiceNumber(last) {
-  const s = String(last ?? '').trim();
-  if (!s) return '001';
-  const match = s.match(/^(.*?)(\d+)$/);
-  if (!match) return `${s}1`;
-  const prefix = match[1];
-  const numStr = match[2];
-  const next = String(parseInt(numStr, 10) + 1);
-  return `${prefix}${next.padStart(numStr.length, '0')}`;
-}
-
-function latestBillInvoiceNumber(bills) {
+function latestBillInvoiceSequence(bills) {
   let best = null;
   for (const bill of Array.isArray(bills) ? bills : []) {
     const n = normalizeBillInvoiceNumber(bill.invoiceNumber);
-    const match = n.match(/^(.*?)(\d+)$/);
+    const match = n.match(/(\d+)$/);
     if (!match) continue;
-    const num = parseInt(match[2], 10);
+    const num = parseInt(match[1], 10);
     if (!Number.isFinite(num)) continue;
-    if (!best || num > best.num) {
-      best = { prefix: match[1], num, width: match[2].length };
-    }
+    if (!best || num > best.num) best = { num, width: match[1].length };
   }
-  if (!best) return '';
-  return `${best.prefix}${String(best.num).padStart(best.width, '0')}`;
+  return best;
 }
 
-function suggestNextBillInvoiceNumber(bills) {
-  let next = incrementBillInvoiceNumber(latestBillInvoiceNumber(bills));
+function suggestNextBillInvoiceNumber(bills, dateStr) {
+  const prefix = billInvoicePrefixFromDate(dateStr);
+  const best = latestBillInvoiceSequence(bills);
+  const width = best ? best.width : 3;
+  let num = best ? best.num + 1 : 1;
+  let next = `${prefix}${String(num).padStart(width, '0')}`;
   let guard = 0;
   while (billInvoiceNumberTaken(bills, next) && guard < 1000) {
-    next = incrementBillInvoiceNumber(next);
+    num += 1;
+    next = `${prefix}${String(num).padStart(Math.max(width, String(num).length), '0')}`;
     guard += 1;
   }
   return next;
@@ -1784,17 +1909,21 @@ function billInvoiceNumberTaken(bills, invoiceNumber, excludeId = null) {
 function ensureBillInvoiceNumbers(bills) {
   const list = Array.isArray(bills) ? bills : [];
   let changed = false;
-  let last = latestBillInvoiceNumber(list);
+  const seq = latestBillInvoiceSequence(list);
+  let num = seq ? seq.num : 0;
+  const width = seq ? seq.width : 3;
   const missing = list
     .filter((bill) => !normalizeBillInvoiceNumber(bill.invoiceNumber))
     .sort(
       (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime(),
     );
   for (const bill of missing) {
+    let candidate;
     do {
-      last = incrementBillInvoiceNumber(last);
-    } while (billInvoiceNumberTaken(list, last));
-    bill.invoiceNumber = last;
+      num += 1;
+      candidate = `${billInvoicePrefixFromDate(bill.date)}${String(num).padStart(Math.max(width, String(num).length), '0')}`;
+    } while (billInvoiceNumberTaken(list, candidate));
+    bill.invoiceNumber = candidate;
     changed = true;
   }
   return changed;
@@ -2999,11 +3128,11 @@ function enrichUnloadForCollector(row, bills, stocks, products, options = {}) {
   return next;
 }
 
-function suggestNextInvoiceForUnload(bills, unloads) {
+function suggestNextInvoiceForUnload(bills, unloads, dateStr) {
   const pending = (Array.isArray(unloads) ? unloads : [])
     .filter((r) => normalizeStatus(r.status) === 'pending')
     .map((r) => ({ createdAt: r.createdAt, invoiceNumber: r.invoiceNumber }));
-  return suggestNextBillInvoiceNumber([...(Array.isArray(bills) ? bills : []), ...pending]);
+  return suggestNextBillInvoiceNumber([...(Array.isArray(bills) ? bills : []), ...pending], dateStr);
 }
 
 app.get('/api/bills/last-unit-prices', async (req, res) => {
@@ -3108,7 +3237,7 @@ async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enter
   const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
   let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
   if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
-    invoiceNumber = suggestNextInvoiceForUnload(bills, unloads);
+    invoiceNumber = suggestNextInvoiceForUnload(bills, unloads, requestRow.date);
   }
   const billRow = {
     id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -3574,7 +3703,7 @@ app.post('/api/unloads', async (req, res) => {
       bills,
       products,
     );
-    row.invoiceNumber = suggestNextInvoiceForUnload(bills, unloadsExisting);
+    row.invoiceNumber = suggestNextInvoiceForUnload(bills, unloadsExisting, date);
 
     const unloads = await readUnloads();
     unloads.push(row);
@@ -3785,6 +3914,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
       readReturns(),
     ]);
     const transactions = [];
+    const affectedByPaymentId = mapPaymentAffectedInvoices(cust, bills, payments, promotions);
 
     const openingDetails = [
       'Past bill owed on account',
@@ -3829,6 +3959,8 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
 
     for (const p of payments) {
       if (p.customerId !== cust.id) continue;
+      const paymentId = String(p.id ?? '').trim();
+      const hits = paymentId ? affectedByPaymentId.get(paymentId) || [] : [];
       transactions.push({
         kind: 'payment',
         id: p.id,
@@ -3845,6 +3977,19 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
           .join(' · ') || '—',
         amount: paymentGrossCredit(p),
         direction: 'credit',
+        netCredit: paymentCreditToCustomer(p),
+        paymentMethods: paymentMethodLabels(p),
+        entryNote: [p.note, invoiceActorPhrase(users, p.recordedBy)].filter(Boolean).join(' · '),
+        returnedChequeAmount: returnedChequeLedgerAmount(p),
+        returnedChequeDetails: returnedChequeLedgerNote(p),
+        applications: hits.map((hit) => ({
+          billId: hit.billId,
+          invoiceNumber: hit.invoiceNumber,
+          date: hit.date,
+          appliedAmount: hit.appliedAmount,
+          remainingAfter: hit.remainingAfter,
+          settled: hit.settled,
+        })),
       });
       for (const c of getPaymentCheques(p)) {
         if (!c.chequeReturned) continue;
@@ -5572,8 +5717,9 @@ app.get('/api/activity', async (req, res) => {
 
 app.get('/api/bills/next-invoice-number', async (req, res) => {
   try {
+    const date = String(req.query.date ?? '').trim();
     const [bills, unloads] = await Promise.all([readBills(), readUnloads()]);
-    res.json({ invoiceNumber: suggestNextInvoiceForUnload(bills, unloads) });
+    res.json({ invoiceNumber: suggestNextInvoiceForUnload(bills, unloads, date) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read the next invoice number' });

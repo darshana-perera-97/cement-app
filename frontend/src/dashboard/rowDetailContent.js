@@ -426,6 +426,7 @@ function LoadDetailContent({ row }) {
 
 function BillDetailContent({ row }) {
   const { brands } = useBagProducts();
+  const soldBrands = brands.filter((b) => (Number(row[`${b.key}Bags`]) || 0) > 0);
   return (
     <>
       <SummaryGrid>
@@ -437,28 +438,50 @@ function BillDetailContent({ row }) {
         <SummaryField
           label="Total bill"
           value={formatMoney(row.totalAmount)}
-          className="col-span-2 bg-indigo-50 ring-indigo-100"
+          className={
+            Number(row.invoiceDiscount) > 0 ? '' : 'col-span-2 bg-indigo-50 ring-indigo-100'
+          }
         />
+        {Number(row.invoiceDiscount) > 0 ? (
+          <>
+            <SummaryField
+              label="Invoice discount"
+              value={formatMoney(row.invoiceDiscount)}
+              valueClassName="tabular-nums font-semibold text-emerald-800"
+            />
+            <SummaryField
+              label="Amount to pay"
+              value={formatMoney(row.amountToPay)}
+              className="col-span-2 bg-emerald-50 ring-emerald-100"
+              valueClassName="tabular-nums font-semibold text-emerald-900"
+            />
+          </>
+        ) : null}
       </SummaryGrid>
       {row.note ? <NoteBlock value={row.note} /> : null}
       <BrandSections title="Bags sold">
-        {brands.map((b) => {
-          const bags = Number(row[`${b.key}Bags`]) || 0;
-          const active = bags > 0;
-          return (
-            <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No bags on this bill">
-              <dl className="grid grid-cols-2 gap-px bg-slate-100">
-                <BrandFieldCell brand={b} lead label="Bags" value={bags} valueClassName="tabular-nums font-semibold" />
-                <BrandFieldCell
-                  brand={b}
-                  label="Price / bag"
-                  value={formatMoney(row[`${b.key}UnitPrice`])}
-                  valueClassName="tabular-nums font-medium"
-                />
-              </dl>
-            </BrandSectionShell>
-          );
-        })}
+        {soldBrands.length === 0 ? (
+          <p className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-400 ring-1 ring-slate-100">
+            No bags on this bill
+          </p>
+        ) : (
+          soldBrands.map((b) => {
+            const bags = Number(row[`${b.key}Bags`]) || 0;
+            return (
+              <BrandSectionShell key={b.key} brand={b} active>
+                <dl className="grid grid-cols-2 gap-px bg-slate-100">
+                  <BrandFieldCell brand={b} lead label="Bags" value={bags} valueClassName="tabular-nums font-semibold" />
+                  <BrandFieldCell
+                    brand={b}
+                    label="Price / bag"
+                    value={formatMoney(row[`${b.key}UnitPrice`])}
+                    valueClassName="tabular-nums font-medium"
+                  />
+                </dl>
+              </BrandSectionShell>
+            );
+          })
+        )}
       </BrandSections>
     </>
   );

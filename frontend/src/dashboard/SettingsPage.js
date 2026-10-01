@@ -20,6 +20,13 @@ import {
 } from './tableToolbar';
 import {
   EMPTY_PRINTER_SETTINGS,
+  TEST_PRINT_BANK_DETAILS_MAX,
+  TEST_PRINT_FONT_MAX,
+  TEST_PRINT_FONT_MIN,
+  TEST_PRINT_LINE_SPACE_MAX,
+  TEST_PRINT_LINE_SPACE_MIN,
+  TEST_PRINT_LOCATION_MAX,
+  TEST_PRINT_SHOP_NAME_MAX,
   PRINTER_ROLE_OPTIONS,
   PRINTER_SCENARIOS,
   notifyPrinterSettingsChanged,
@@ -47,6 +54,51 @@ function formatEmails(emails) {
   return Array.isArray(emails) && emails.length > 0 ? emails.join(', ') : '—';
 }
 
+function clampFontPoints(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 12;
+  return Math.min(TEST_PRINT_FONT_MAX, Math.max(TEST_PRINT_FONT_MIN, n));
+}
+
+function testPrintFontPoints(raw, fallback, legacyMagnification) {
+  const toPoints = (value) => {
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < TEST_PRINT_FONT_MIN) return null;
+    if (legacyMagnification && n <= 8) return n * 12;
+    return Math.min(TEST_PRINT_FONT_MAX, n);
+  };
+  return toPoints(raw) ?? toPoints(fallback) ?? 12;
+}
+
+function testPrintLineSpacing(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(TEST_PRINT_LINE_SPACE_MAX, Math.max(TEST_PRINT_LINE_SPACE_MIN, n));
+}
+
+function TestPrintNumber({ label, value, min, max, step = 1, normalize, onChange }) {
+  return (
+    <label className="block text-sm font-medium text-slate-600 sm:w-32 sm:shrink-0">
+      {label}
+      <input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={step}
+        className={inputClass}
+        value={value}
+        onChange={(e) => {
+          const n = Math.floor(Number(e.target.value));
+          if (!Number.isFinite(n)) return;
+          onChange(n);
+        }}
+        onBlur={(e) => onChange(normalize(e.target.value))}
+      />
+    </label>
+  );
+}
+
 function formFromSettings(data) {
   const src = data && typeof data === 'object' ? data : {};
   const scenarios = {};
@@ -57,10 +109,25 @@ function formFromSettings(data) {
       copies: String(Math.max(1, Math.min(9, Number(row.copies) || 1))),
     };
   }
+  const printSettings = src.testPrint && typeof src.testPrint === 'object' ? src.testPrint : {};
+  const legacySize = printSettings.shopNameLineSpacing == null
+    && printSettings.locationLineSpacing == null
+    && printSettings.bankDetailsLineSpacing == null;
   return {
     enabled: Boolean(src.enabled),
     allowedRoles: Array.isArray(src.allowedRoles) && src.allowedRoles.length > 0 ? [...src.allowedRoles] : ['all'],
     scenarios,
+    testPrint: {
+      shopName: String(printSettings.shopName ?? ''),
+      location: String(printSettings.location ?? ''),
+      bankDetails: String(printSettings.bankDetails ?? src.printMessage ?? ''),
+      shopNameFontSize: testPrintFontPoints(printSettings.shopNameFontSize, printSettings.fontSize, legacySize),
+      locationFontSize: testPrintFontPoints(printSettings.locationFontSize, printSettings.fontSize, legacySize),
+      bankDetailsFontSize: testPrintFontPoints(printSettings.bankDetailsFontSize, printSettings.fontSize, legacySize),
+      shopNameLineSpacing: testPrintLineSpacing(src.testPrint?.shopNameLineSpacing),
+      locationLineSpacing: testPrintLineSpacing(src.testPrint?.locationLineSpacing),
+      bankDetailsLineSpacing: testPrintLineSpacing(src.testPrint?.bankDetailsLineSpacing),
+    },
   };
 }
 
@@ -299,6 +366,17 @@ export default function SettingsPage() {
           enabled: Boolean(form.enabled),
           allowedRoles: form.allowedRoles,
           scenarios,
+          testPrint: {
+            shopName: form.testPrint.shopName,
+            location: form.testPrint.location,
+            bankDetails: form.testPrint.bankDetails,
+            shopNameFontSize: form.testPrint.shopNameFontSize,
+            locationFontSize: form.testPrint.locationFontSize,
+            bankDetailsFontSize: form.testPrint.bankDetailsFontSize,
+            shopNameLineSpacing: form.testPrint.shopNameLineSpacing,
+            locationLineSpacing: form.testPrint.locationLineSpacing,
+            bankDetailsLineSpacing: form.testPrint.bankDetailsLineSpacing,
+          },
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -946,6 +1024,127 @@ export default function SettingsPage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Test print</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Shop name, location, and bank details. Test print centers each part at the point size you enter, from {TEST_PRINT_FONT_MIN} to {TEST_PRINT_FONT_MAX}. Line space is the extra gap between lines, in points. Save before printing.
+            </p>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+              <label className="block min-w-0 flex-1 text-sm font-medium text-slate-600">
+                Shop name
+                <input
+                  type="text"
+                  maxLength={TEST_PRINT_SHOP_NAME_MAX}
+                  className={inputClass}
+                  value={form.testPrint.shopName}
+                  onChange={(e) => {
+                    setSaveOk(false);
+                    setForm((f) => ({ ...f, testPrint: { ...f.testPrint, shopName: e.target.value } }));
+                  }}
+                  placeholder="Shakya Transport"
+                />
+              </label>
+              <TestPrintNumber
+                label="Shop size (pt)"
+                min={TEST_PRINT_FONT_MIN}
+                max={TEST_PRINT_FONT_MAX}
+                step={1}
+                normalize={clampFontPoints}
+                onChange={(shopNameFontSize) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, shopNameFontSize } }));
+                }}
+              />
+              <TestPrintNumber
+                label="Shop line space (pt)"
+                min={TEST_PRINT_LINE_SPACE_MIN}
+                max={TEST_PRINT_LINE_SPACE_MAX}
+                normalize={testPrintLineSpacing}
+                onChange={(shopNameLineSpacing) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, shopNameLineSpacing } }));
+                }}
+              />
+            </div>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+              <label className="block min-w-0 flex-1 text-sm font-medium text-slate-600">
+                Location
+                <input
+                  type="text"
+                  maxLength={TEST_PRINT_LOCATION_MAX}
+                  className={inputClass}
+                  value={form.testPrint.location}
+                  onChange={(e) => {
+                    setSaveOk(false);
+                    setForm((f) => ({ ...f, testPrint: { ...f.testPrint, location: e.target.value } }));
+                  }}
+                  placeholder="Colombo"
+                />
+              </label>
+              <TestPrintNumber
+                label="Location size (pt)"
+                min={TEST_PRINT_FONT_MIN}
+                max={TEST_PRINT_FONT_MAX}
+                step={1}
+                normalize={clampFontPoints}
+                onChange={(locationFontSize) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, locationFontSize } }));
+                }}
+              />
+              <TestPrintNumber
+                label="Location line space (pt)"
+                min={TEST_PRINT_LINE_SPACE_MIN}
+                max={TEST_PRINT_LINE_SPACE_MAX}
+                normalize={testPrintLineSpacing}
+                onChange={(locationLineSpacing) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, locationLineSpacing } }));
+                }}
+              />
+            </div>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
+              <label className="block min-w-0 flex-1 text-sm font-medium text-slate-600">
+                Bank details
+                <textarea
+                  rows={5}
+                  maxLength={TEST_PRINT_BANK_DETAILS_MAX}
+                  className={`${inputClass} resize-y`}
+                  value={form.testPrint.bankDetails}
+                  onChange={(e) => {
+                    setSaveOk(false);
+                    setForm((f) => ({ ...f, testPrint: { ...f.testPrint, bankDetails: e.target.value } }));
+                  }}
+                  placeholder={'ABC Bank\nA/C Name: Shop Name\nA/C No: 1234567890\nBranch: Colombo'}
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  {form.testPrint.bankDetails.length}/{TEST_PRINT_BANK_DETAILS_MAX} characters. Each line prints on its own line.
+                </span>
+              </label>
+              <TestPrintNumber
+                label="Bank size (pt)"
+                min={TEST_PRINT_FONT_MIN}
+                max={TEST_PRINT_FONT_MAX}
+                step={1}
+                normalize={clampFontPoints}
+                onChange={(bankDetailsFontSize) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, bankDetailsFontSize } }));
+                }}
+              />
+              <TestPrintNumber
+                label="Bank line space (pt)"
+                min={TEST_PRINT_LINE_SPACE_MIN}
+                max={TEST_PRINT_LINE_SPACE_MAX}
+                normalize={testPrintLineSpacing}
+                onChange={(bankDetailsLineSpacing) => {
+                  setSaveOk(false);
+                  setForm((f) => ({ ...f, testPrint: { ...f.testPrint, bankDetailsLineSpacing } }));
+                }}
+              />
             </div>
           </section>
 

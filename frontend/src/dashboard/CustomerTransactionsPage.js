@@ -23,6 +23,7 @@ import CustomerChequesPanel from './CustomerChequesPanel';
 import CustomerPendingBillsPanel from './CustomerPendingBillsPanel';
 import CustomerInvoicesModal from './CustomerInvoicesModal';
 import CustomerLedgerModal from './CustomerLedgerModal';
+import { expandCustomerLedgerTransactions } from './customerLedger';
 import CustomerTaxModal from './CustomerTaxModal';
 import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
@@ -30,6 +31,7 @@ import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { CollectorSelectField, useCollectors } from './useCollectors';
 import { usePrinter } from '../printer/PrinterProvider';
 import { useCollectorCollectionClosed } from './collectionDayClose';
+import { COLLECTOR_CASH_PRINT_TODAY_ONLY, collectorMayPrintCashCollection } from './paymentReceipt';
 
 const apiBase = getApiBase();
 
@@ -335,7 +337,12 @@ export default function CustomerTransactionsPage() {
     setSearchParams({}, { replace: true });
   }, [customer, searchParams, setSearchParams, customerEditOpen]);
 
-  const summary = useMemo(() => summarizeTransactions(transactions), [transactions]);
+  const activityTransactions = useMemo(
+    () => expandCustomerLedgerTransactions(transactions),
+    [transactions],
+  );
+
+  const summary = useMemo(() => summarizeTransactions(activityTransactions), [activityTransactions]);
 
   const overdue = Boolean(customer?.dueDate && customer.dueDate < today);
   const overpayment = Math.max(0, Number(customer?.overpaymentAmount) || 0);
@@ -344,13 +351,19 @@ export default function CustomerTransactionsPage() {
   const allPaid = amountToPay === 0 && overpayment === 0;
 
   const filteredTransactions = useMemo(() => {
-    return transactions
+    return activityTransactions
       .filter((tx) => {
         if (kindFilter !== 'all' && tx.kind !== kindFilter) return false;
-        return rowMatchesQuery(search, [tx.date, tx.type, tx.details, String(tx.amount)]);
+        return rowMatchesQuery(search, [
+          tx.date,
+          tx.type,
+          tx.invoiceNumber,
+          tx.details,
+          String(tx.amount),
+        ]);
       })
       .sort(compareTransactionsByDateDesc);
-  }, [transactions, search, kindFilter]);
+  }, [activityTransactions, search, kindFilter]);
 
   const pagination = useTablePagination(filteredTransactions.length, [customerId, search, kindFilter]);
   const pagedTransactions = useMemo(
@@ -360,7 +373,8 @@ export default function CustomerTransactionsPage() {
 
   const detailPaymentForPrint =
     (isCollector() || isManagerOrAdmin()) && detailTx?.kind === 'payment'
-      ? payments.find((p) => p.id === detailTx.id) || null
+      ? payments.find((p) => p.id === (detailTx.paymentId || String(detailTx.id || '').split('::')[0])) ||
+        null
       : null;
 
   return (
@@ -506,7 +520,8 @@ export default function CustomerTransactionsPage() {
         <div>
           <h2 className="text-base font-bold text-slate-900">Activity</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Newest first. Tap a row for full details.
+            Newest first. A payment that covers more than one invoice is listed once per invoice. Tap a row for
+            full details.
           </p>
         </div>
 
@@ -540,8 +555,8 @@ export default function CustomerTransactionsPage() {
 
         <TableFiltersBar
           hint={
-            !loading && transactions.length > 0
-              ? `Showing ${filteredTransactions.length} of ${transactions.length} item${transactions.length === 1 ? '' : 's'}`
+            !loading && activityTransactions.length > 0
+              ? `Showing ${filteredTransactions.length} of ${activityTransactions.length} item${activityTransactions.length === 1 ? '' : 's'}`
               : null
           }
         >
@@ -572,7 +587,7 @@ export default function CustomerTransactionsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {transactions.length === 0 ? (
+                  {activityTransactions.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-4 py-12 text-center">
                         <p className="font-medium text-slate-700">No activity yet</p>
@@ -638,7 +653,7 @@ export default function CustomerTransactionsPage() {
               </table>
             )}
           </div>
-          {!loading && transactions.length > 0 ? (
+          {!loading && activityTransactions.length > 0 ? (
             <TablePaginationBar
               page={pagination.page}
               totalPages={pagination.totalPages}
@@ -660,16 +675,25 @@ export default function CustomerTransactionsPage() {
         actions={
           detailPaymentForPrint ? (
             <div className="mt-4 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => requestPrint('cashCollection', detailPaymentForPrint)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
-                </svg>
-                Print bill
-              </button>
+              {collectorMayPrintCashCollection(detailPaymentForPrint) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!collectorMayPrintCashCollection(detailPaymentForPrint)) return;
+                    requestPrint('cashCollection', detailPaymentForPrint);
+                  }}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                    <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
+                  </svg>
+                  Print bill
+                </button>
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-4 py-2.5 text-center text-xs text-slate-500 ring-1 ring-slate-100">
+                  {COLLECTOR_CASH_PRINT_TODAY_ONLY}
+                </p>
+              )}
               {isAdmin() ? <PaymentReceiptPdfButton payment={detailPaymentForPrint} /> : null}
             </div>
           ) : null

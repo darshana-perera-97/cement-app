@@ -28,6 +28,26 @@ export const PRINTER_SCENARIOS = [
   },
 ];
 
+export const TEST_PRINT_SHOP_NAME_MAX = 80;
+export const TEST_PRINT_LOCATION_MAX = 160;
+export const TEST_PRINT_BANK_DETAILS_MAX = 1200;
+export const TEST_PRINT_FONT_MIN = 1;
+export const TEST_PRINT_FONT_MAX = 200;
+export const TEST_PRINT_LINE_SPACE_MIN = 0;
+export const TEST_PRINT_LINE_SPACE_MAX = 48;
+
+export const EMPTY_TEST_PRINT = {
+  shopName: '',
+  location: '',
+  bankDetails: '',
+  shopNameFontSize: 12,
+  locationFontSize: 12,
+  bankDetailsFontSize: 12,
+  shopNameLineSpacing: 0,
+  locationLineSpacing: 0,
+  bankDetailsLineSpacing: 0,
+};
+
 export const EMPTY_PRINTER_SETTINGS = {
   enabled: false,
   allowedRoles: ['all'],
@@ -36,6 +56,7 @@ export const EMPTY_PRINTER_SETTINGS = {
     cashCollection: { enabled: false, copies: 1 },
     billGenerate: { enabled: false, copies: 1 },
   },
+  testPrint: { ...EMPTY_TEST_PRINT },
 };
 
 export function notifyPrinterSettingsChanged() {

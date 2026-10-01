@@ -14,6 +14,7 @@ import { formatBrandLabel } from './dashboard/brandTheme';
 import { useBagProducts } from './dashboard/BagProductsContext';
 import { LoadingSpinner, rowMatchesQuery } from './dashboard/tableToolbar';
 import { PrinterStatusButton, usePrinter } from './printer/PrinterProvider';
+import { useFieldLocationReporter } from './dashboard/useFieldLocationReporter';
 
 const apiBase = getApiBase();
 const SEARCH_PRODUCT_THRESHOLD = 8;
@@ -816,6 +817,7 @@ function PrintLastUnloadsModal({ open, rows, bagBrands, onCancel, onPrintOne, on
 }
 
 function UnloadsWorkspace() {
+  useFieldLocationReporter(isDriverAuthed());
   const { brands: bagBrands } = useBagProducts();
   const shopName = useShopName();
   const { requestAutoPrint, requestPrint, showIndicator } = usePrinter();
@@ -886,8 +888,6 @@ function UnloadsWorkspace() {
     loadStock();
     loadCustomers();
     loadRecent();
-    const stockInterval = window.setInterval(loadStock, 5000);
-    return () => window.clearInterval(stockInterval);
   }, [loadStock, loadCustomers, loadRecent]);
 
   useEffect(() => {

@@ -44,6 +44,7 @@ import {
   COLLECTION_DAY_BUCKETS,
 } from './collectionsReport';
 import { downloadCollectionsReportPdf } from './collectorCommissionPdf';
+import { paymentInvoiceNumberLabel } from './paymentReceipt';
 import PrintCollectionsSummaryModal from './PrintCollectionsSummaryModal';
 
 const apiBase = getApiBase();
@@ -703,6 +704,7 @@ function buildDailyCollectionChequeRows(payments, ymd, users = []) {
       amount: flat.amount,
       chequeDeposited: flat.chequeDeposited,
       billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+      invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
       recordedBy: recordedByDisplay(p, users),
     };
   });
@@ -731,6 +733,7 @@ function buildDailyCollectionCdmRows(payments, ymd, users = []) {
         cdmDate: String(d.cdmDate ?? p.date ?? '').slice(0, 10) || '—',
         bankAccount: bankAccountSnapLabel(d.bankAccount, d.bankAccountId),
         billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+        invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
         approval: paymentApprovalLabel(p),
         recordedBy: recordedByDisplay(p, users),
       });
@@ -756,6 +759,7 @@ function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
         transferDate: String(t.transferDate ?? p.date ?? '').slice(0, 10) || '—',
         bankAccount: bankAccountSnapLabel(t.bankAccount, t.bankAccountId),
         billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+        invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
         approval: paymentApprovalLabel(p),
         recordedBy: recordedByDisplay(p, users),
       });
@@ -764,22 +768,59 @@ function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
   return sortDailyCollectionDetailRows(rows);
 }
 
+/** Cash portions on payments recorded on a single calendar day. */
+function buildDailyCollectionCashRows(payments, ymd) {
+  const rows = [];
+  for (const p of payments) {
+    const payDate = String(p.date ?? '').slice(0, 10);
+    if (payDate !== ymd) continue;
+    const amount = cashPortion(p);
+    if (amount <= 0) continue;
+    rows.push({
+      id: p.id || `${payDate}-cash-${rows.length}`,
+      customerName: String(p.customerName ?? '').trim() || '—',
+      amount,
+      invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
+    });
+  }
+  rows.sort((a, b) => a.customerName.localeCompare(b.customerName));
+  return rows;
+}
+
+function addUniqueInvoiceLabels(list, payment) {
+  const label = paymentInvoiceNumberLabel(payment);
+  if (!label) return;
+  for (const part of label.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (list.some((x) => x.toLowerCase() === trimmed.toLowerCase())) continue;
+    list.push(trimmed);
+  }
+}
+
 function enrichDailyShopRows(baseRows, payments, ymd) {
   const cashByShop = new Map();
   const chequeByShop = new Map();
   const cdmByShop = new Map();
   const bankTransferByShop = new Map();
+  const cashInvoicesByShop = new Map();
   for (const p of payments) {
     const d = String(p.date ?? '').slice(0, 10);
     if (d !== ymd) continue;
     const shop = String(p.customerName ?? '').trim() || '—';
-    cashByShop.set(shop, round2((cashByShop.get(shop) || 0) + cashPortion(p)));
+    const cash = cashPortion(p);
+    cashByShop.set(shop, round2((cashByShop.get(shop) || 0) + cash));
     chequeByShop.set(shop, round2((chequeByShop.get(shop) || 0) + chequePortion(p)));
     cdmByShop.set(shop, round2((cdmByShop.get(shop) || 0) + cdmPortion(p)));
     bankTransferByShop.set(
       shop,
       round2((bankTransferByShop.get(shop) || 0) + onlineTransferPortion(p)),
     );
+    if (cash > 0) {
+      const invoices = cashInvoicesByShop.get(shop) || [];
+      addUniqueInvoiceLabels(invoices, p);
+      cashInvoicesByShop.set(shop, invoices);
+    }
   }
   return baseRows.map((r) => ({
     ...r,
@@ -787,6 +828,7 @@ function enrichDailyShopRows(baseRows, payments, ymd) {
     chequeCollected: chequeByShop.get(r.shop) || 0,
     cdmCollected: cdmByShop.get(r.shop) || 0,
     bankTransferCollected: bankTransferByShop.get(r.shop) || 0,
+    cashInvoiceNumbers: (cashInvoicesByShop.get(r.shop) || []).join(', '),
   }));
 }
 
@@ -1647,6 +1689,11 @@ export default function ReportsPage() {
     [dailyReportShopRows],
   );
 
+  const dailyReportCashRows = useMemo(() => {
+    if (!showDailyCollectionsReport) return [];
+    return buildDailyCollectionCashRows(dailyReportPayments, dailyReportDate);
+  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate]);
+
   const dailyReportChequeRows = useMemo(() => {
     if (!showDailyCollectionsReport) return [];
     return buildDailyCollectionChequeRows(dailyReportPayments, dailyReportDate, dailyReportUserChoices);
@@ -1976,6 +2023,7 @@ export default function ReportsPage() {
         totals: dailyReportTotals,
         userRows: adminDailyReportView && !dailyReportUserId ? dailyReportUserRows : [],
         shopRows: dailyReportShopRows,
+        cashRows: collectorReportsView ? dailyReportCashRows : [],
         chequeRows: dailyReportChequeRows,
         chequeTotal: dailyReportChequeTotal,
         cdmRows: dailyReportCdmRows,
@@ -1983,17 +2031,20 @@ export default function ReportsPage() {
         bankTransferRows: dailyReportBankTransferRows,
         bankTransferTotal: dailyReportBankTransferTotal,
         showRecordedBy: showDailyReportRecordedBy,
+        showInvoiceNumber: collectorReportsView,
       },
       { dateSlug: dailyReportDate },
     );
   }, [
     dailyReportDate,
+    collectorReportsView,
     adminDailyReportView,
     dailyReportUserLabel,
     dailyReportUserId,
     dailyReportTotals,
     dailyReportUserRows,
     dailyReportShopRows,
+    dailyReportCashRows,
     dailyReportChequeRows,
     dailyReportChequeTotal,
     dailyReportCdmRows,
@@ -2008,6 +2059,7 @@ export default function ReportsPage() {
       reportDate: dailyReportDate,
       collectorName: collectorDisplayName || getDisplayName() || '',
       cashTotal: dailyReportTotals.cash,
+      cashRows: dailyReportCashRows,
       chequeRows: dailyReportChequeRows,
       chequeTotal: dailyReportChequeTotal,
       cdmRows: dailyReportCdmRows,
@@ -2019,6 +2071,7 @@ export default function ReportsPage() {
       dailyReportDate,
       collectorDisplayName,
       dailyReportTotals.cash,
+      dailyReportCashRows,
       dailyReportChequeRows,
       dailyReportChequeTotal,
       dailyReportCdmRows,

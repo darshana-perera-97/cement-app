@@ -22,6 +22,7 @@ import {
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { formatBrandLabel } from './brandTheme';
+import { buildCustomerInvoiceRows } from './pendingBills';
 
 const apiBase = getApiBase();
 
@@ -223,6 +224,24 @@ function totalBagsOnBill(bill, brands) {
   return brands.reduce((s, b) => s + (Number(bill[`${b.key}Bags`]) || 0), 0);
 }
 
+function roundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function sumOtherInvoiceDiscounts(promotions, billId, excludeId) {
+  const id = String(billId ?? '').trim();
+  const skip = String(excludeId ?? '').trim();
+  if (!id) return 0;
+  let sum = 0;
+  for (const row of Array.isArray(promotions) ? promotions : []) {
+    if (String(row?.type ?? '').trim() !== 'invoice_discount') continue;
+    if (String(row.billId ?? '').trim() !== id) continue;
+    if (skip && String(row.id ?? '').trim() === skip) continue;
+    sum += Number(row.discountAmount) || 0;
+  }
+  return roundMoney(sum);
+}
+
 function computePreviewDiscount(form, selectedBill, brands) {
   const value = Number(form.discountValue);
   if (!Number.isFinite(value) || value <= 0 || !selectedBill) return 0;
@@ -239,6 +258,7 @@ function computePreviewDiscount(form, selectedBill, brands) {
 function SpecialPromotionsPanel() {
   const { brands } = useBagProducts();
   const [rows, setRows] = useState([]);
+  const [ledgerPromotions, setLedgerPromotions] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -256,6 +276,7 @@ function SpecialPromotionsPanel() {
   const [stockSummary, setStockSummary] = useState(null);
   const [stockLoading, setStockLoading] = useState(false);
   const [bills, setBills] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [billsLoading, setBillsLoading] = useState(false);
   const [promoTab, setPromoTab] = useState('free_bags');
 
@@ -277,9 +298,12 @@ function SpecialPromotionsPanel() {
       const res = await fetch(`${apiBase}/api/promotions`);
       if (!res.ok) throw new Error('Failed to load promotions');
       const data = await res.json();
-      setRows(Array.isArray(data) ? data.filter((r) => promoType(r) !== 'rule_cashback') : []);
+      const list = Array.isArray(data) ? data : [];
+      setLedgerPromotions(list);
+      setRows(list.filter((r) => promoType(r) !== 'rule_cashback'));
     } catch (e) {
       setError(e.message || 'Could not load data');
+      setLedgerPromotions([]);
       setRows([]);
     } finally {
       setLoading(false);
@@ -316,12 +340,22 @@ function SpecialPromotionsPanel() {
   const loadBills = useCallback(async () => {
     setBillsLoading(true);
     try {
-      const res = await fetch(`${apiBase}/api/bills`);
-      if (!res.ok) throw new Error('Failed to load bills');
-      const data = await res.json();
+      const [billsRes, paymentsRes] = await Promise.all([
+        fetch(`${apiBase}/api/bills`),
+        fetch(`${apiBase}/api/payments`),
+      ]);
+      if (!billsRes.ok) throw new Error('Failed to load bills');
+      const data = await billsRes.json();
       setBills(Array.isArray(data) ? data : []);
+      if (paymentsRes.ok) {
+        const payData = await paymentsRes.json();
+        setPayments(Array.isArray(payData) ? payData : []);
+      } else {
+        setPayments([]);
+      }
     } catch {
       setBills([]);
+      setPayments([]);
     } finally {
       setBillsLoading(false);
     }
@@ -354,6 +388,34 @@ function SpecialPromotionsPanel() {
     () => computePreviewDiscount(form, selectedBill, brands),
     [form, selectedBill, brands],
   );
+
+  const customerInvoiceById = useMemo(() => {
+    const map = new Map();
+    if (!selectedCustomer) return map;
+    for (const row of buildCustomerInvoiceRows(selectedCustomer, bills, payments, ledgerPromotions)) {
+      if (row?.id) map.set(row.id, row);
+    }
+    return map;
+  }, [selectedCustomer, bills, payments, ledgerPromotions]);
+
+  const otherInvoiceDiscount = useMemo(
+    () => sumOtherInvoiceDiscounts(ledgerPromotions, selectedBill?.id, editPromotion?.id),
+    [ledgerPromotions, selectedBill, editPromotion],
+  );
+
+  const amountToPay = useMemo(() => {
+    if (!selectedBill) return 0;
+    const linked = customerInvoiceById.get(selectedBill.id);
+    const gross = Number(selectedBill.totalAmount) || 0;
+    const savedOutstanding = linked
+      ? Math.max(0, roundMoney(linked.outstandingAmount))
+      : Math.max(0, roundMoney(gross - otherInvoiceDiscount));
+    const savedDiscountOnEdit =
+      editPromotion && String(editPromotion.billId ?? '') === String(selectedBill.id)
+        ? Number(editPromotion.discountAmount) || 0
+        : 0;
+    return Math.max(0, roundMoney(savedOutstanding + savedDiscountOnEdit - previewDiscount));
+  }, [selectedBill, customerInvoiceById, otherInvoiceDiscount, previewDiscount, editPromotion]);
 
   const stockByBrand = useMemo(() => {
     const map = {};
@@ -889,11 +951,20 @@ function SpecialPromotionsPanel() {
                               ? 'No invoices for this customer'
                               : 'Select invoice'}
                       </option>
-                      {customerBills.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.date} · {b.invoiceNumber || b.stockId || b.id} · {money(b.totalAmount)}
-                        </option>
-                      ))}
+                      {customerBills.map((b) => {
+                        const linked = customerInvoiceById.get(b.id);
+                        const discounted =
+                          linked &&
+                          (Number(b.totalAmount) || 0) - (Number(linked.billTotal) || 0) > 0.009;
+                        return (
+                          <option key={b.id} value={b.id}>
+                            {b.date} · {b.invoiceNumber || b.stockId || b.id} ·{' '}
+                            {discounted
+                              ? `to pay ${money(linked.outstandingAmount)}`
+                              : money(b.totalAmount)}
+                          </option>
+                        );
+                      })}
                     </select>
                   </label>
                   <fieldset className="space-y-2">
@@ -931,10 +1002,19 @@ function SpecialPromotionsPanel() {
                     />
                   </label>
                   {selectedBill && previewDiscount > 0 ? (
-                    <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-emerald-100">
-                      Total discount: {money(previewDiscount)} · Invoice total: {money(selectedBill.totalAmount)} ·
-                      Customer owes after discount: {money(Math.max(0, (Number(selectedBill.totalAmount) || 0) - previewDiscount))}
-                    </p>
+                    <div className="rounded-xl bg-emerald-50 px-3 py-2.5 text-sm text-emerald-950 ring-1 ring-emerald-100">
+                      <p>Invoice total: {money(selectedBill.totalAmount)}</p>
+                      <p>Invoice discount: {money(previewDiscount)}</p>
+                      {otherInvoiceDiscount > 0 ? (
+                        <p>Already discounted on this invoice: {money(otherInvoiceDiscount)}</p>
+                      ) : null}
+                      {(Number(customerInvoiceById.get(selectedBill.id)?.paidAmount) || 0) > 0 ? (
+                        <p>
+                          Already paid: {money(customerInvoiceById.get(selectedBill.id).paidAmount)}
+                        </p>
+                      ) : null}
+                      <p className="mt-1 font-semibold">Amount to be paid: {money(amountToPay)}</p>
+                    </div>
                   ) : null}
                 </>
               ) : null}

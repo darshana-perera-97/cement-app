@@ -10,6 +10,7 @@ import {
   BILL_INVOICE_NUMBER_PATTERN,
   isBillInvoiceNumberTaken,
   normalizeBillInvoiceNumber,
+  resolveSuggestedBillInvoiceNumber,
   suggestNextBillInvoiceNumber,
 } from './billInvoiceNumber';
 import {
@@ -35,6 +36,7 @@ import {
   modalPanelClass4xl,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import { buildCustomerInvoiceRows, sumInvoiceDiscountForBill } from './pendingBills';
 
 const apiBase = getApiBase();
 
@@ -293,7 +295,7 @@ function BillSaleFormFields({
             value={form.invoiceNumber}
             onChange={(e) => onChange('invoiceNumber', e.target.value)}
             className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 font-mono text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
-            placeholder="e.g. INV-012 or CS100"
+            placeholder="e.g. 26OCT_778899"
           />
         </label>
         <label className="block text-xs font-medium text-slate-600">
@@ -309,7 +311,7 @@ function BillSaleFormFields({
         <p className="text-[11px] font-normal text-slate-500 sm:col-span-2">
           {isEdit
             ? 'Invoice # must be unique across all credit bills.'
-            : 'Filled from the last saved invoice (+1). You can change it before saving.'}
+            : 'Filled from the bill date and the next number, like 26OCT_778899. You can change it before saving.'}
         </p>
         <label className="block text-xs font-medium text-slate-600 sm:col-span-2">
           Customer
@@ -472,6 +474,7 @@ export default function BillsPage() {
   const [loads, setLoads] = useState([]);
   const [unloads, setUnloads] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [hoverNote, setHoverNote] = useState(null);
   const [invoicePreviewUrl, setInvoicePreviewUrl] = useState(null);
   const [invoicePreviewFilename, setInvoicePreviewFilename] = useState('');
@@ -524,11 +527,12 @@ export default function BillsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [shopRes, loadsRes, unloadsRes, promoRes] = await Promise.all([
+        const [shopRes, loadsRes, unloadsRes, promoRes, paymentsRes] = await Promise.all([
           fetch(`${apiBase}/api/shop`),
           fetch(`${apiBase}/api/stocks`),
           authFetch(`${apiBase}/api/unload-requests?status=all`),
           fetch(`${apiBase}/api/promotions`),
+          fetch(`${apiBase}/api/payments`),
         ]);
         if (shopRes.ok) {
           const data = await shopRes.json();
@@ -557,11 +561,18 @@ export default function BillsPage() {
         } else {
           setPromotions([]);
         }
+        if (paymentsRes.ok) {
+          const data = await paymentsRes.json();
+          setPayments(Array.isArray(data) ? data : []);
+        } else {
+          setPayments([]);
+        }
       } catch {
         setShopDetails({ shopName: DEFAULT_SHOP_NAME });
         setLoads([]);
         setUnloads([]);
         setPromotions([]);
+        setPayments([]);
       }
     })();
   }, []);
@@ -636,6 +647,37 @@ export default function BillsPage() {
     [brands, lastUnloadedKeys, form, showAllSaleItems],
   );
   const hiddenSaleItemCount = Math.max(0, brands.length - visibleAddBrands.length);
+
+  const payableByBillId = useMemo(() => {
+    const map = new Map();
+    for (const cust of customers) {
+      for (const row of buildCustomerInvoiceRows(cust, rows, payments, promotions)) {
+        if (!row?.id || row.isOpeningBalance) continue;
+        map.set(row.id, row);
+      }
+    }
+    return map;
+  }, [customers, rows, payments, promotions]);
+
+  const amountToPayForBill = useCallback(
+    (bill) => {
+      const linked = payableByBillId.get(bill?.id);
+      if (linked) return Math.max(0, Math.round((Number(linked.outstandingAmount) || 0) * 100) / 100);
+      const discount = sumInvoiceDiscountForBill(promotions, bill?.id);
+      return Math.max(0, Math.round(((Number(bill?.totalAmount) || 0) - discount) * 100) / 100);
+    },
+    [payableByBillId, promotions],
+  );
+
+  const detailView = useMemo(() => {
+    if (!detailBill) return null;
+    const invoiceDiscount = sumInvoiceDiscountForBill(promotions, detailBill.id);
+    return {
+      ...detailBill,
+      invoiceDiscount,
+      amountToPay: amountToPayForBill(detailBill),
+    };
+  }, [detailBill, promotions, amountToPayForBill]);
 
   const pagination = useTablePagination(filteredRows.length, [search, stockFilter, dateFrom, dateTo]);
   const pagedRows = useMemo(
@@ -736,15 +778,23 @@ export default function BillsPage() {
     }
   }, [loadBillsForInvoicePdf, invoicePdfOpts]);
 
-  const loadNextInvoiceNumber = useCallback(async () => {
+  const invoiceDateRequest = useRef(0);
+
+  const loadNextInvoiceNumber = useCallback(async (date) => {
+    const requestId = invoiceDateRequest.current + 1;
+    invoiceDateRequest.current = requestId;
+    const billDate = String(date ?? '').trim();
     try {
-      const res = await authFetch(`${apiBase}/api/bills/next-invoice-number`);
+      const params = billDate ? `?date=${encodeURIComponent(billDate)}` : '';
+      const res = await authFetch(`${apiBase}/api/bills/next-invoice-number${params}`);
       if (!res.ok) throw new Error('Failed to load next invoice number');
       const data = await res.json();
       const next = String(data?.invoiceNumber ?? '').trim();
+      if (requestId !== invoiceDateRequest.current) return '';
       setNextInvoiceNumber(next);
       return next;
     } catch {
+      if (requestId !== invoiceDateRequest.current) return '';
       setNextInvoiceNumber('');
       return '';
     }
@@ -758,20 +808,21 @@ export default function BillsPage() {
     setShowAllSaleItems(false);
     revokeSaleInvoiceUrl();
     setNextInvoiceNumber('');
+    const draft = emptyForm(brands);
     setForm({
-      ...emptyForm(brands),
-      invoiceNumber: suggestNextBillInvoiceNumber(rows),
+      ...draft,
+      invoiceNumber: suggestNextBillInvoiceNumber(rows, draft.date),
     });
     setAddOpen(true);
-    loadNextInvoiceNumber();
+    loadNextInvoiceNumber(draft.date);
   };
 
   useEffect(() => {
     if (!addOpen || invoiceNumberTouched.current) return;
-    const next = nextInvoiceNumber || suggestNextBillInvoiceNumber(rows);
+    const next = resolveSuggestedBillInvoiceNumber(nextInvoiceNumber, rows, form.date);
     if (!next) return;
     setForm((f) => (f.invoiceNumber === next ? f : { ...f, invoiceNumber: next }));
-  }, [addOpen, rows, nextInvoiceNumber]);
+  }, [addOpen, rows, nextInvoiceNumber, form.date]);
 
   const closeAdd = () => {
     setAddOpen(false);
@@ -787,6 +838,11 @@ export default function BillsPage() {
     if (field === 'invoiceNumber') {
       invoiceNumberTouched.current = true;
       setForm((f) => ({ ...f, invoiceNumber: String(value).slice(0, 40) }));
+      return;
+    }
+    if (field === 'date') {
+      setForm((f) => ({ ...f, date: value }));
+      if (!invoiceNumberTouched.current) loadNextInvoiceNumber(value);
       return;
     }
     setForm((f) => {
@@ -945,10 +1001,10 @@ export default function BillsPage() {
     invoiceNumberTouched.current = true;
     const next = formFromBill(editBill, customers, brands);
     if (!next.invoiceNumber) {
-      next.invoiceNumber = nextInvoiceNumber || suggestNextBillInvoiceNumber(rows);
+      next.invoiceNumber = suggestNextBillInvoiceNumber(rows, next.date);
     }
     setForm(next);
-  }, [editBill, customers, rows, brands, nextInvoiceNumber]);
+  }, [editBill, customers, rows, brands]);
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();
@@ -1109,6 +1165,9 @@ export default function BillsPage() {
                   value: String(r[`${b.key}Bags`] ?? 0),
                 })),
                 { label: 'Total', value: money(r.totalAmount) },
+                ...(sumInvoiceDiscountForBill(promotions, r.id) > 0
+                  ? [{ label: 'To pay', value: money(amountToPayForBill(r)) }]
+                  : []),
                 ...(billNoteText(r) ? [{ label: 'Note', value: billNoteText(r) }] : []),
               ]}
               onClick={() => setDetailBill(r)}
@@ -1239,6 +1298,11 @@ export default function BillsPage() {
                       className={`border-l border-slate-100 px-3 py-3 text-right font-semibold tabular-nums text-slate-900 ${rowLine} bg-white`}
                     >
                       {money(r.totalAmount)}
+                      {sumInvoiceDiscountForBill(promotions, r.id) > 0 ? (
+                        <span className="mt-0.5 block text-[11px] font-semibold text-emerald-800">
+                          To pay {money(amountToPayForBill(r))}
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                 );
@@ -1453,8 +1517,8 @@ export default function BillsPage() {
       ) : null}
 
       <RowDetailModal
-        open={!!detailBill}
-        row={detailBill}
+        open={!!detailView}
+        row={detailView}
         variant="bill"
         onClose={() => setDetailBill(null)}
         actions={

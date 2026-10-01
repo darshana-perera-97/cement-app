@@ -17,6 +17,7 @@ import {
   subscribePrinterConnection,
   updatePrinterProperties,
 } from './bluetoothPrinter';
+import { collectorMayPrintCashCollection } from '../dashboard/paymentReceipt';
 import { printScenarioReceipt } from './printerReceipts';
 import {
   EMPTY_PRINTER_SETTINGS,
@@ -72,7 +73,14 @@ export function PrinterProvider({ children }) {
     try {
       const res = await fetch(`${apiBase}/api/printer-settings`);
       const data = await res.json().catch(() => ({}));
-      if (res.ok) setSettings({ ...EMPTY_PRINTER_SETTINGS, ...data, scenarios: { ...EMPTY_PRINTER_SETTINGS.scenarios, ...(data.scenarios || {}) } });
+      if (res.ok) {
+        setSettings({
+          ...EMPTY_PRINTER_SETTINGS,
+          ...data,
+          scenarios: { ...EMPTY_PRINTER_SETTINGS.scenarios, ...(data.scenarios || {}) },
+          testPrint: { ...EMPTY_PRINTER_SETTINGS.testPrint, ...(data.testPrint || {}) },
+        });
+      }
     } catch {
       /* keep last */
     } finally {
@@ -161,13 +169,13 @@ export function PrinterProvider({ children }) {
     setTestBusy(true);
     setActionError('');
     try {
-      await printTestPage();
+      await printTestPage(settings.testPrint);
     } catch (e) {
       setActionError(e?.message || 'Test print failed.');
     } finally {
       setTestBusy(false);
     }
-  }, []);
+  }, [settings.testPrint]);
 
   const closePrintJob = useCallback((proceed) => {
     const resolve = printResolver.current;
@@ -189,6 +197,7 @@ export function PrinterProvider({ children }) {
         .catch(() => {})
         .then(async () => {
           if (!payload) return;
+          if (scenarioKey === 'cashCollection' && !collectorMayPrintCashCollection(payload)) return;
           const live = getPrinterConnection();
           if (force) {
             if (!isPrinterRoleAllowed(settings)) {

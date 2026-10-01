@@ -98,8 +98,9 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
             Ledger — {customer?.name || 'Customer'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Account activity in date order. Debits increase what is owed; credits are payments. Balance is amount
-            still owed (negative means overpaid).
+            Account activity in date order. Debits increase what is owed. Each payment is listed against the
+            invoices it was applied to, instead of one cash-in for the whole receipt. Balance is amount still owed
+            (negative means overpaid).
           </p>
         </div>
 
@@ -156,11 +157,12 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
               </p>
             ) : (
               <div className={scrollTableWrap}>
-                <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[840px] data-table border-separate border-spacing-0 text-left text-sm">
                   <thead className={stickyThead}>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
                       <th className="px-4 py-3">Type</th>
+                      <th className="whitespace-nowrap px-4 py-3">Invoice</th>
                       <th className="px-4 py-3">Details</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Debit</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Credit</th>
@@ -181,6 +183,9 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
                           {formatDisplayDate(row.date)}
                         </td>
                         <td className="px-4 py-3 text-slate-800">{row.type}</td>
+                        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-800">
+                          {row.invoice || '—'}
+                        </td>
                         <td className="max-w-[16rem] px-4 py-3 text-xs text-slate-600">{row.details || '—'}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-900">
                           {row.debit != null && row.debit > 0 ? money(row.debit) : '—'}
@@ -201,6 +206,7 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
                       <td className={`whitespace-nowrap px-4 py-3 ${stickyFirstTdMuted}`}>
                         Totals ({totals.count})
                       </td>
+                      <td className="px-4 py-3" />
                       <td className="px-4 py-3" />
                       <td className="px-4 py-3" />
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(totals.debit)}</td>

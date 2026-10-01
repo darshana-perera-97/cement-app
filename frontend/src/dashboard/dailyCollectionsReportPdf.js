@@ -81,6 +81,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     totals = {},
     userRows = [],
     shopRows = [],
+    cashRows = [],
     chequeRows = [],
     chequeTotal = 0,
     cdmRows = [],
@@ -88,6 +89,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     bankTransferRows = [],
     bankTransferTotal = 0,
     showRecordedBy = false,
+    showInvoiceNumber = false,
     generatedAt = new Date(),
   } = data;
 
@@ -184,19 +186,19 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   const shopTitle = userLabel && userLabel !== 'All users' ? `By shop · ${userLabel}` : 'By shop';
   let y = addSectionTitle(doc, shopTitle);
 
-  const shopHead = [['Shop', 'Location', 'Cash', 'Cheque', 'CDM', 'Bank transfer', 'Collections']];
+  const shopAmountCells = (r) => [
+    moneyCell(r?.cashCollected),
+    moneyCell(r?.chequeCollected),
+    moneyCell(r?.cdmCollected),
+    moneyCell(r?.bankTransferCollected),
+    moneyCell(r?.cashIn),
+  ];
+  const shopHead = [['Shop', 'Cash invoice #', 'Cash', 'Cheque', 'CDM', 'Bank transfer', 'Collections']];
+  const emptyShopAmounts = [moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0)];
   const shopBody =
     shopRows.length === 0
-      ? [['—', '—', moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0)]]
-      : shopRows.map((r) => [
-          r.shop || '—',
-          r.location || '—',
-          moneyCell(r.cashCollected),
-          moneyCell(r.chequeCollected),
-          moneyCell(r.cdmCollected),
-          moneyCell(r.bankTransferCollected),
-          moneyCell(r.cashIn),
-        ]);
+      ? [['—', '—', ...emptyShopAmounts]]
+      : shopRows.map((r) => [r.shop || '—', r.cashInvoiceNumbers || '—', ...shopAmountCells(r)]);
 
   const shopFoot =
     shopRows.length === 0
@@ -213,6 +215,9 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
           ],
         ];
 
+  const shopColumnStyles = {};
+  for (let i = 0; i < 5; i += 1) shopColumnStyles[2 + i] = { halign: 'right' };
+
   autoTable(doc, {
     ...TABLE_OPTS,
     styles: { ...TABLE_OPTS.styles, fontSize: 7, cellPadding: 1.4 },
@@ -221,14 +226,41 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     foot: shopFoot || undefined,
     startY: y + 2,
     tableWidth: pageW,
-    columnStyles: {
-      2: { halign: 'right' },
-      3: { halign: 'right' },
-      4: { halign: 'right' },
-      5: { halign: 'right' },
-      6: { halign: 'right' },
-    },
+    columnStyles: shopColumnStyles,
   });
+
+  if (showInvoiceNumber) {
+    y = addSectionTitle(
+      doc,
+      'Cash list',
+      `Cash collected on ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
+    );
+    const cashBody =
+      cashRows.length === 0
+        ? [['—', '—', moneyCell(0)]]
+        : cashRows.map((r) => [r.customerName || '—', r.invoiceNumber || '—', moneyCell(r.amount)]);
+    const cashFoot =
+      cashRows.length === 0
+        ? null
+        : [
+            [
+              `Total (${cashRows.length} payment${cashRows.length === 1 ? '' : 's'})`,
+              '',
+              moneyCell(totals.cash),
+            ],
+          ];
+    autoTable(doc, {
+      ...TABLE_OPTS,
+      head: [['Shop', 'Invoice #', 'Amount']],
+      body: cashBody,
+      foot: cashFoot || undefined,
+      startY: y,
+      tableWidth: pageW,
+      columnStyles: {
+        2: { halign: 'right' },
+      },
+    });
+  }
 
   y = addSectionTitle(
     doc,
@@ -236,12 +268,15 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     `Cheques on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
   );
 
-  const chequeHead = showRecordedBy
-    ? [['Shop', 'Cheque date', 'Amount', 'Cheque #', 'Bill #', 'Deposited', 'Recorded by']]
-    : [['Shop', 'Cheque date', 'Amount', 'Cheque #', 'Bill #', 'Deposited']];
+  const chequeHeadRow = ['Shop', 'Cheque date', 'Amount', 'Cheque #', 'Bill #', 'Deposited'];
+  if (showInvoiceNumber) chequeHeadRow.splice(4, 0, 'Invoice #');
+  if (showRecordedBy) chequeHeadRow.push('Recorded by');
+  const chequeEmpty = ['—', '—', moneyCell(0), '—', '—', '—'];
+  if (showInvoiceNumber) chequeEmpty.splice(4, 0, '—');
+  if (showRecordedBy) chequeEmpty.push('—');
   const chequeBody =
     chequeRows.length === 0
-      ? [showRecordedBy ? ['—', '—', moneyCell(0), '—', '—', '—', '—'] : ['—', '—', moneyCell(0), '—', '—', '—']]
+      ? [chequeEmpty]
       : chequeRows.map((r) => {
           const row = [
             r.customerName || '—',
@@ -251,28 +286,26 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             r.billNumber || '—',
             r.chequeDeposited ? 'Yes' : 'Pending',
           ];
+          if (showInvoiceNumber) row.splice(4, 0, r.invoiceNumber || '—');
           if (showRecordedBy) row.push(r.recordedBy || '—');
           return row;
         });
 
-  const chequeFoot =
-    chequeRows.length === 0
-      ? null
-      : [
-          [
-            `Total (${chequeRows.length} cheque${chequeRows.length === 1 ? '' : 's'})`,
-            '',
-            moneyCell(chequeTotal),
-            '',
-            '',
-            '',
-            ...(showRecordedBy ? [''] : []),
-          ],
-        ];
+  const chequeFootRow = [
+    `Total (${chequeRows.length} cheque${chequeRows.length === 1 ? '' : 's'})`,
+    '',
+    moneyCell(chequeTotal),
+    '',
+    '',
+    '',
+  ];
+  if (showInvoiceNumber) chequeFootRow.splice(4, 0, '');
+  if (showRecordedBy) chequeFootRow.push('');
+  const chequeFoot = chequeRows.length === 0 ? null : [chequeFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
-    head: chequeHead,
+    head: [chequeHeadRow],
     body: chequeBody,
     foot: chequeFoot || undefined,
     startY: y,
@@ -288,12 +321,15 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     `CDM deposits on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
   );
 
-  const cdmHead = showRecordedBy
-    ? [['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
-    : [['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval']];
+  const cdmHeadRow = ['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval'];
+  if (showInvoiceNumber) cdmHeadRow.splice(5, 0, 'Invoice #');
+  if (showRecordedBy) cdmHeadRow.push('Recorded by');
+  const cdmEmpty = ['—', moneyCell(0), '—', '—', '—', '—', '—'];
+  if (showInvoiceNumber) cdmEmpty.splice(5, 0, '—');
+  if (showRecordedBy) cdmEmpty.push('—');
   const cdmBody =
     cdmRows.length === 0
-      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—', '—']]
+      ? [cdmEmpty]
       : cdmRows.map((r) => {
           const row = [
             r.customerName || '—',
@@ -304,29 +340,27 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             r.billNumber || '—',
             r.approval || '—',
           ];
+          if (showInvoiceNumber) row.splice(5, 0, r.invoiceNumber || '—');
           if (showRecordedBy) row.push(r.recordedBy || '—');
           return row;
         });
 
-  const cdmFoot =
-    cdmRows.length === 0
-      ? null
-      : [
-          [
-            `Total (${cdmRows.length} deposit${cdmRows.length === 1 ? '' : 's'})`,
-            moneyCell(cdmTotal),
-            '',
-            '',
-            '',
-            '',
-            '',
-            ...(showRecordedBy ? [''] : []),
-          ],
-        ];
+  const cdmFootRow = [
+    `Total (${cdmRows.length} deposit${cdmRows.length === 1 ? '' : 's'})`,
+    moneyCell(cdmTotal),
+    '',
+    '',
+    '',
+    '',
+    '',
+  ];
+  if (showInvoiceNumber) cdmFootRow.splice(5, 0, '');
+  if (showRecordedBy) cdmFootRow.push('');
+  const cdmFoot = cdmRows.length === 0 ? null : [cdmFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
-    head: cdmHead,
+    head: [cdmHeadRow],
     body: cdmBody,
     foot: cdmFoot || undefined,
     startY: y,
@@ -342,12 +376,15 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     `Online bank transfers on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
   );
 
-  const bankHead = showRecordedBy
-    ? [['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval', 'Recorded by']]
-    : [['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval']];
+  const bankHeadRow = ['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval'];
+  if (showInvoiceNumber) bankHeadRow.splice(5, 0, 'Invoice #');
+  if (showRecordedBy) bankHeadRow.push('Recorded by');
+  const bankEmpty = ['—', moneyCell(0), '—', '—', '—', '—', '—'];
+  if (showInvoiceNumber) bankEmpty.splice(5, 0, '—');
+  if (showRecordedBy) bankEmpty.push('—');
   const bankBody =
     bankTransferRows.length === 0
-      ? [showRecordedBy ? ['—', moneyCell(0), '—', '—', '—', '—', '—', '—'] : ['—', moneyCell(0), '—', '—', '—', '—', '—']]
+      ? [bankEmpty]
       : bankTransferRows.map((r) => {
           const row = [
             r.customerName || '—',
@@ -358,29 +395,27 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             r.billNumber || '—',
             r.approval || '—',
           ];
+          if (showInvoiceNumber) row.splice(5, 0, r.invoiceNumber || '—');
           if (showRecordedBy) row.push(r.recordedBy || '—');
           return row;
         });
 
-  const bankFoot =
-    bankTransferRows.length === 0
-      ? null
-      : [
-          [
-            `Total (${bankTransferRows.length} transfer${bankTransferRows.length === 1 ? '' : 's'})`,
-            moneyCell(bankTransferTotal),
-            '',
-            '',
-            '',
-            '',
-            '',
-            ...(showRecordedBy ? [''] : []),
-          ],
-        ];
+  const bankFootRow = [
+    `Total (${bankTransferRows.length} transfer${bankTransferRows.length === 1 ? '' : 's'})`,
+    moneyCell(bankTransferTotal),
+    '',
+    '',
+    '',
+    '',
+    '',
+  ];
+  if (showInvoiceNumber) bankFootRow.splice(5, 0, '');
+  if (showRecordedBy) bankFootRow.push('');
+  const bankFoot = bankTransferRows.length === 0 ? null : [bankFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
-    head: bankHead,
+    head: [bankHeadRow],
     body: bankBody,
     foot: bankFoot || undefined,
     startY: y,

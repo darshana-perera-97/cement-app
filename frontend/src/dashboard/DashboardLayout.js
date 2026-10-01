@@ -10,6 +10,7 @@ import { NavIcon } from './NavIcon';
 import { LoadingSpinner } from './tableToolbar';
 import { BagProductsProvider } from './BagProductsContext';
 import { PrinterStatusButton } from '../printer/PrinterProvider';
+import { useFieldLocationReporter } from './useFieldLocationReporter';
 
 function formatLkr(n) {
   return new Intl.NumberFormat(undefined, {
@@ -293,6 +294,7 @@ export default function DashboardLayout() {
     location.pathname.startsWith('/dashboard/map') ||
     location.pathname.startsWith('/dashboard/profiles') ||
     isDsr();
+  useFieldLocationReporter(isCollector());
 
   useEffect(() => {
     window.scrollTo(0, 0);

@@ -658,6 +658,13 @@ export function buildEscPosReceipt(lines, options = {}) {
       pushBytes(out, 0x0a);
       continue;
     }
+    if (kind === 'raster' && line.data instanceof Uint8Array) {
+      const x = Math.max(1, Math.floor(Number(line.widthBytes) || 0));
+      const y = Math.max(1, Math.floor(Number(line.height) || 0));
+      pushBytes(out, 0x1b, 0x61, 0x00);
+      pushBytes(out, 0x1d, 0x76, 0x30, 0x00, x & 0xff, (x >> 8) & 0xff, y & 0xff, (y >> 8) & 0xff, line.data);
+      continue;
+    }
     if (kind === 'cols') {
       const rows = formatCols(line.left, line.right, width);
       if (line.bold) pushBytes(out, 0x1b, 0x45, 0x01);
@@ -683,25 +690,39 @@ export function buildEscPosReceipt(lines, options = {}) {
       continue;
     }
     const text = String(line.text ?? '');
-    const wide = Boolean(line.double);
-    const tall = Boolean(line.tall) && !wide;
-    if (wide) pushBytes(out, 0x1d, 0x21, 0x11);
+    const scale = line.size != null
+      ? Math.max(1, Math.min(8, Math.floor(Number(line.size) || 1)))
+      : 1;
+    const wide = Boolean(line.double) && line.size == null;
+    const tall = Boolean(line.tall) && !wide && line.size == null;
+    if (line.size != null && scale > 1) {
+      const mag = scale - 1;
+      pushBytes(out, 0x1d, 0x21, (mag << 4) | mag);
+    } else if (wide) pushBytes(out, 0x1d, 0x21, 0x11);
     else if (tall) pushBytes(out, 0x1d, 0x21, 0x01);
     if (line.bold) pushBytes(out, 0x1b, 0x45, 0x01);
     if (line.invert) pushBytes(out, 0x1d, 0x42, 0x01);
-    const chunks = wrapText(text, wide ? Math.floor(width / 2) : width);
+    if (line.lineSpacingDots != null) {
+      const dots = Math.max(0, Math.min(255, Math.floor(Number(line.lineSpacingDots) || 0)));
+      pushBytes(out, 0x1b, 0x33, dots);
+    }
+    const charWidth = wide || scale > 1 ? Math.max(8, Math.floor(width / (wide ? 2 : scale))) : width;
+    const chunks = wrapText(text, charWidth);
     for (const chunk of chunks) {
-      const padded = line.invert && chunk.length < (wide ? Math.floor(width / 2) : width)
-        ? `${chunk}${' '.repeat((wide ? Math.floor(width / 2) : width) - chunk.length)}`
+      const padded = line.invert && chunk.length < charWidth
+        ? `${chunk}${' '.repeat(charWidth - chunk.length)}`
         : chunk;
       pushBytes(out, encodeText(padded), 0x0a);
     }
     if (line.invert) pushBytes(out, 0x1d, 0x42, 0x00);
     if (line.bold) pushBytes(out, 0x1b, 0x45, 0x00);
-    if (wide || tall) pushBytes(out, 0x1d, 0x21, 0x00);
+    if (wide || tall || (line.size != null && scale > 1)) pushBytes(out, 0x1d, 0x21, 0x00);
   }
 
-  if (feedLines > 0) pushBytes(out, 0x1b, 0x64, feedLines);
+  if (feedLines > 0) {
+    pushBytes(out, 0x1b, 0x32);
+    pushBytes(out, 0x1b, 0x64, feedLines);
+  }
   if (autoCut) pushBytes(out, 0x1d, 0x56, 0x41, 0x10);
   return Uint8Array.from(out);
 }
@@ -789,16 +810,147 @@ export async function printEscPosLines(lines) {
   await printRawBytes(bytes);
 }
 
-export async function printTestPage() {
-  await printEscPosLines([
-    { kind: 'align', value: 'center' },
-    { text: 'XPrinter 80mm', bold: true, double: true },
-    { text: 'Bluetooth test print', bold: true },
-    { kind: 'rule' },
-    { kind: 'align', value: 'left' },
-    { text: 'If you can read this, the printer is connected and ready.' },
-    { kind: 'blank' },
-    { kind: 'cols', left: 'Width', right: '80mm' },
-    { kind: 'cols', left: 'Chars / line', right: String(readProps().charsPerLine) },
-  ]);
+function pushCenteredText(lines, text, { bold = false, size = 1, lineSpacingDots = null } = {}) {
+  for (const part of String(text ?? '').split('\n')) {
+    if (!part.trim()) lines.push({ kind: 'blank' });
+    else lines.push({ text: part, bold, size, lineSpacingDots });
+  }
+}
+
+const TEST_PRINT_DPI = 203;
+
+function paperDotWidth(charsPerLine) {
+  return Number(charsPerLine) === 42 ? 384 : 576;
+}
+
+function pointsToDots(pt) {
+  const n = Number(pt);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(1, Math.round((n * TEST_PRINT_DPI) / 72));
+}
+
+function wrapCanvasLines(ctx, text, maxWidth) {
+  const out = [];
+  for (const para of String(text ?? '').split('\n')) {
+    if (!para.trim()) {
+      out.push('');
+      continue;
+    }
+    const words = para.trim().split(/\s+/);
+    let line = '';
+    const pushWide = (word) => {
+      let chunk = '';
+      for (const ch of word) {
+        const next = chunk + ch;
+        if (ctx.measureText(next).width <= maxWidth) chunk = next;
+        else {
+          if (chunk) out.push(chunk);
+          chunk = ch;
+        }
+      }
+      return chunk;
+    };
+    for (const word of words) {
+      const trial = line ? `${line} ${word}` : word;
+      if (ctx.measureText(trial).width <= maxWidth) {
+        line = trial;
+        continue;
+      }
+      if (line) out.push(line);
+      line = ctx.measureText(word).width > maxWidth ? pushWide(word) : word;
+    }
+    if (line) out.push(line);
+  }
+  return out.length ? out : [''];
+}
+
+function canvasToRasterStrips(canvas, maxRows) {
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  const widthBytes = Math.ceil(width / 8);
+  const strips = [];
+  for (let y0 = 0; y0 < height; y0 += maxRows) {
+    const rows = Math.min(maxRows, height - y0);
+    const img = ctx.getImageData(0, y0, width, rows);
+    const data = new Uint8Array(widthBytes * rows);
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = (y * width + x) * 4;
+        const lum = img.data[i] * 0.299 + img.data[i + 1] * 0.587 + img.data[i + 2] * 0.114;
+        if (lum < 180) data[y * widthBytes + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+    strips.push({ kind: 'raster', widthBytes, height: rows, data });
+  }
+  return strips;
+}
+
+function rasterizeTextBlock(text, { fontPt, lineSpacingPt, bold, paperWidth }) {
+  if (typeof document === 'undefined') return [];
+  const fontPx = pointsToDots(fontPt);
+  const gapPx = Math.max(0, pointsToDots(lineSpacingPt) - 1);
+  const measure = document.createElement('canvas').getContext('2d');
+  if (!measure) return [];
+  measure.font = `${bold ? 700 : 400} ${fontPx}px Arial, Helvetica, sans-serif`;
+  const maxWidth = Math.max(8, paperWidth - 16);
+  const wrapped = wrapCanvasLines(measure, text, maxWidth);
+  const lineHeight = fontPx + gapPx;
+  const canvas = document.createElement('canvas');
+  canvas.width = paperWidth;
+  canvas.height = Math.max(1, wrapped.length * lineHeight);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000000';
+  ctx.font = measure.font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  wrapped.forEach((line, index) => {
+    if (line) ctx.fillText(line, paperWidth / 2, index * lineHeight);
+  });
+  return canvasToRasterStrips(canvas, 256);
+}
+
+export async function printTestPage(details) {
+  const src = details && typeof details === 'object' ? details : {};
+  const shopName = String(src.shopName ?? '').trim();
+  const location = String(src.location ?? '').trim();
+  const bankDetails = String(src.bankDetails ?? '').trim();
+  const fontPt = (value, fallback) => {
+    const n = Math.floor(Number(value));
+    if (Number.isFinite(n) && n >= 1) return Math.min(200, n);
+    const previous = Math.floor(Number(fallback));
+    if (Number.isFinite(previous) && previous >= 1) return Math.min(200, previous);
+    return 12;
+  };
+  const paperWidth = paperDotWidth(readProps().charsPerLine);
+  const lines = [];
+  const pushBlock = (text, size, spacing, bold) => {
+    const strips = rasterizeTextBlock(text, {
+      fontPt: size,
+      lineSpacingPt: spacing,
+      bold,
+      paperWidth,
+    });
+    if (strips.length) {
+      lines.push(...strips);
+      return;
+    }
+    pushCenteredText(lines, text, { bold, size: Math.max(1, Math.min(8, Math.round(size / 12) || 1)) });
+  };
+  if (!shopName && !location && !bankDetails) {
+    lines.push({ kind: 'align', value: 'center' });
+    lines.push({ text: 'No test print details saved.', bold: true });
+    lines.push({ kind: 'blank' });
+    lines.push({ text: 'Add shop name, location, and bank details in Settings, then print again.' });
+  } else {
+    if (shopName) pushBlock(shopName, fontPt(src.shopNameFontSize, src.fontSize), src.shopNameLineSpacing, true);
+    if (location) pushBlock(location, fontPt(src.locationFontSize, src.fontSize), src.locationLineSpacing, false);
+    if (bankDetails) {
+      if (lines.length) lines.push({ kind: 'blank' });
+      pushBlock(bankDetails, fontPt(src.bankDetailsFontSize, src.fontSize), src.bankDetailsLineSpacing, false);
+    }
+  }
+  await printEscPosLines(lines);
 }

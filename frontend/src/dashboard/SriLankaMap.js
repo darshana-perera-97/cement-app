@@ -102,6 +102,64 @@ function shopDivIcon(L, shop, selected, stale, lowStock) {
   });
 }
 
+function personInitials(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function fieldLastSeen(iso) {
+  const t = new Date(iso || '').getTime();
+  if (!Number.isFinite(t)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 1) return 'Just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  return hours === 1 ? '1 hr ago' : `${hours} hr ago`;
+}
+
+function fieldPersonIcon(L, person, selected) {
+  const driver = person.role === 'Driver';
+  const initials = escapeHtml(personInitials(person.name));
+  const caption = escapeHtml(driver ? person.lorryNumber || 'Lorry' : person.name || 'Collector');
+  const stale = Date.now() - new Date(person.updatedAt || '').getTime() > 3 * 60 * 1000;
+  const selectedClass = selected ? ' map-field-pin-selected' : '';
+  const staleClass = stale ? ' map-field-pin-stale' : '';
+  const truck = `<span class="map-field-lorry-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7h11v8H3z"></path>
+          <path d="M14 10h4l3 3v2h-7"></path>
+        </svg>
+      </span>`;
+  const body = driver
+    ? `<span class="map-field-face">${truck}<span class="map-field-avatar map-field-avatar-driver">${initials}</span></span>`
+    : `<span class="map-field-face"><span class="map-field-avatar">${initials}</span></span>`;
+  return L.divIcon({
+    className: 'map-field-icon',
+    iconSize: [132, 62],
+    iconAnchor: [66, 20],
+    html: `<div class="map-field-pin${selectedClass}${staleClass}">
+      ${body}
+      <span class="map-field-caption">${caption}</span>
+    </div>`,
+  });
+}
+
+function fieldPersonTooltip(person) {
+  const seen = fieldLastSeen(person.updatedAt);
+  const name = escapeHtml(person.name || (person.role === 'Driver' ? 'Driver' : 'Collector'));
+  if (person.role === 'Driver') {
+    const lorry = escapeHtml(person.lorryNumber || 'Lorry');
+    return `<div style="min-width:8rem"><strong>${lorry}</strong><div style="margin-top:2px">${name}</div><div style="margin-top:2px;color:#64748b">Lorry${seen ? ` · ${escapeHtml(seen)}` : ''}</div></div>`;
+  }
+  return `<div style="min-width:8rem"><strong>${name}</strong><div style="margin-top:2px;color:#64748b">Collector${seen ? ` · ${escapeHtml(seen)}` : ''}</div></div>`;
+}
+
 function userLocationIcon(L) {
   return L.divIcon({
     className: 'map-user-icon',
@@ -174,6 +232,9 @@ export default function SriLankaMap({
   showStockHover = false,
   staleDays = 7,
   lowStockAlerts = [],
+  fieldPeople = [],
+  selectedFieldId = '',
+  onSelectField,
 }) {
   const wrapRef = useRef(null);
   const containerRef = useRef(null);
@@ -181,12 +242,14 @@ export default function SriLankaMap({
   const markersRef = useRef(null);
   const clickRef = useRef(onMapClick);
   const selectRef = useRef(onSelect);
+  const selectFieldRef = useRef(onSelectField);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     clickRef.current = onMapClick;
     selectRef.current = onSelect;
-  }, [onMapClick, onSelect]);
+    selectFieldRef.current = onSelectField;
+  }, [onMapClick, onSelect, onSelectField]);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,7 +383,38 @@ export default function SriLankaMap({
         }).bindTooltip('You are here', { direction: 'right', offset: [10, 0] }),
       );
     }
-  }, [shops, selectedId, ready, userLocation, stockByShopId, showStockHover, staleDays, lowStockAlerts]);
+    (Array.isArray(fieldPeople) ? fieldPeople : []).forEach((person) => {
+      if (!isInSriLanka(person?.lat, person?.lng)) return;
+      const marker = window.L.marker([person.lat, person.lng], {
+        icon: fieldPersonIcon(window.L, person, person.id === selectedFieldId),
+        keyboard: true,
+        riseOnHover: true,
+        zIndexOffset: person.role === 'Driver' ? 920 : 880,
+      });
+      marker.on('click', (e) => {
+        window.L.DomEvent.stopPropagation(e);
+        window.L.DomEvent.preventDefault(e);
+        selectFieldRef.current?.(person);
+      });
+      marker.bindTooltip(fieldPersonTooltip(person), {
+        direction: 'top',
+        offset: [0, -28],
+        opacity: 0.96,
+        className: 'map-shop-stock-tooltip',
+      });
+      group.addLayer(marker);
+    });
+  }, [shops, selectedId, ready, userLocation, stockByShopId, showStockHover, staleDays, lowStockAlerts, fieldPeople, selectedFieldId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !selectedFieldId) return;
+    const person = (Array.isArray(fieldPeople) ? fieldPeople : []).find((p) => p.id === selectedFieldId);
+    const lat = Number(person?.lat);
+    const lng = Number(person?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    map.setView([lat, lng], Math.max(map.getZoom(), 13), { animate: true });
+  }, [selectedFieldId, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -386,6 +480,73 @@ export default function SriLankaMap({
           font: 12px/1.35 system-ui, sans-serif;
           padding: 8px 10px;
           pointer-events: none;
+        }
+        .map-field-icon {
+          background: transparent !important;
+          border: none !important;
+        }
+        .map-field-pin {
+          display: flex;
+          width: 132px;
+          flex-direction: column;
+          align-items: center;
+          gap: 3px;
+          cursor: pointer;
+          pointer-events: auto;
+        }
+        .map-field-pin-stale {
+          opacity: 0.55;
+        }
+        .map-field-face {
+          position: relative;
+          display: block;
+          height: 40px;
+          width: 40px;
+        }
+        .map-field-avatar {
+          display: flex;
+          height: 36px;
+          width: 36px;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 2px solid #fff;
+          box-shadow: 0 6px 14px rgba(15, 23, 42, 0.28);
+          background: #4f46e5;
+          color: #fff;
+          font: 700 12px/1 system-ui, sans-serif;
+          letter-spacing: 0.02em;
+        }
+        .map-field-avatar-driver {
+          background: #d97706;
+        }
+        .map-field-lorry-badge {
+          position: absolute;
+          right: -2px;
+          bottom: 2px;
+          z-index: 1;
+          display: flex;
+          height: 18px;
+          width: 18px;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 2px solid #fff;
+          background: #92400e;
+        }
+        .map-field-pin-selected .map-field-avatar {
+          box-shadow: 0 0 0 3px #fff, 0 0 0 5px #0f172a;
+        }
+        .map-field-caption {
+          max-width: 8.5rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          border-radius: 999px;
+          background: rgba(15, 23, 42, 0.88);
+          color: #fff;
+          padding: 2px 7px;
+          font: 600 10px/1.2 system-ui, sans-serif;
         }
       `}</style>
     </div>

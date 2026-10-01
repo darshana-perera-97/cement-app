@@ -72,13 +72,15 @@ function invoiceTitle(inv) {
   return 'Invoice';
 }
 
-function shopLines(shop) {
+function shopLines(shop, { includeAddress = true } = {}) {
   const lines = [];
   const name = display(shop?.shopName || 'Shop');
   lines.push({ kind: 'align', value: 'center' });
   lines.push({ text: name, bold: true, double: true });
-  const address = [shop?.addressLine1, shop?.addressLine2].map((x) => String(x ?? '').trim()).filter(Boolean);
-  for (const line of address) lines.push({ text: line });
+  if (includeAddress) {
+    const address = [shop?.addressLine1, shop?.addressLine2].map((x) => String(x ?? '').trim()).filter(Boolean);
+    for (const line of address) lines.push({ text: line });
+  }
   if (shop?.contactNumber) lines.push({ text: `Tel ${shop.contactNumber}` });
   if (shop?.registrationNo) lines.push({ text: `Reg ${shop.registrationNo}` });
   lines.push({ kind: 'rule', char: '=' });
@@ -332,6 +334,15 @@ function listIdentifier(value, fallback) {
   return s;
 }
 
+function invoiceListLabel(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '—') return '';
+  const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 1 && parts[0].toLowerCase() === 'opening') return 'Opening balance';
+  const formatted = parts.map((part) => (part.toLowerCase() === 'opening' ? 'Opening' : part));
+  return `Inv ${formatted.join(', ')}`;
+}
+
 function pushCollectionList(lines, rows, identifierForRow) {
   if (!Array.isArray(rows) || rows.length === 0) {
     lines.push({ text: 'None' });
@@ -340,16 +351,25 @@ function pushCollectionList(lines, rows, identifierForRow) {
   rows.forEach((row, index) => {
     if (index > 0) lines.push({ kind: 'blank' });
     lines.push({ text: display(row?.customerName), bold: true });
-    lines.push({
-      kind: 'cols',
-      left: identifierForRow(row),
-      right: money(row?.amount),
-    });
+    const invoice = invoiceListLabel(row?.invoiceNumber);
+    const left = identifierForRow ? identifierForRow(row) : '';
+    if (invoice && !left) {
+      lines.push({ kind: 'cols', left: invoice, right: money(row?.amount) });
+    } else {
+      if (invoice) lines.push({ text: invoice });
+      lines.push({
+        kind: 'cols',
+        left: left || 'Amount',
+        right: money(row?.amount),
+      });
+    }
   });
 }
 
 export function buildDailyCollectionsSummaryLines(report, shop) {
-  const cashTotal = Number(report?.cashTotal) || 0;
+  const cashRows = Array.isArray(report?.cashRows) ? report.cashRows : [];
+  const cashTotal =
+    report?.cashTotal != null ? Number(report.cashTotal) || 0 : cashRows.reduce((s, r) => s + (Number(r?.amount) || 0), 0);
   const cdmRows = Array.isArray(report?.cdmRows) ? report.cdmRows : [];
   const bankRows = Array.isArray(report?.bankTransferRows) ? report.bankTransferRows : [];
   const chequeRows = Array.isArray(report?.chequeRows) ? report.chequeRows : [];
@@ -368,7 +388,7 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
     collectorName = invoiceCollectorName(report);
   }
   const lines = [
-    ...shopLines(shop),
+    ...shopLines(shop, { includeAddress: false }),
     { kind: 'align', value: 'center' },
     { text: 'DAILY COLLECTIONS', bold: true, double: true },
     { text: formatDate(report?.reportDate), bold: true },
@@ -376,7 +396,20 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
   if (collectorName) lines.push({ text: `Collector: ${collectorName}` });
   lines.push({ kind: 'rule', char: '=' });
   lines.push({ kind: 'align', value: 'left' });
-  lines.push({ kind: 'cols', left: 'Cash', right: money(cashTotal), bold: true, invert: true });
+
+  lines.push({ kind: 'align', value: 'center' });
+  lines.push({ text: 'CASH LIST', bold: true });
+  lines.push({ kind: 'rule' });
+  lines.push({ kind: 'align', value: 'left' });
+  pushCollectionList(lines, cashRows, () => '');
+  lines.push({ kind: 'rule' });
+  lines.push({
+    kind: 'cols',
+    left: `Cash total (${cashRows.length})`,
+    right: money(cashTotal),
+    bold: true,
+    invert: true,
+  });
 
   lines.push({ kind: 'blank' });
   lines.push({ kind: 'align', value: 'center' });

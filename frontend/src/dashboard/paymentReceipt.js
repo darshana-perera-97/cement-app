@@ -1,3 +1,24 @@
+import { isCollector } from '../auth';
+import { todayYmdLocal } from './collectionDayClose';
+
+export const COLLECTOR_CASH_PRINT_TODAY_ONLY =
+  'Cash collection invoices can only be printed on the day they were issued.';
+
+/** Calendar day the receipt was issued (YYYY-MM-DD). */
+export function paymentIssuedYmd(payment) {
+  return String(payment?.date ?? '').slice(0, 10);
+}
+
+/**
+ * Collectors may print a cash collection receipt only when it was issued today.
+ * Other roles are unchanged.
+ */
+export function collectorMayPrintCashCollection(payment, today = todayYmdLocal()) {
+  if (!isCollector()) return true;
+  const issued = paymentIssuedYmd(payment);
+  return Boolean(issued) && issued === today;
+}
+
 /** Increment trailing digits; keeps prefix and zero-padding width (e.g. REC009 → REC010). */
 export function incrementPaymentReceiptNumber(last) {
   const s = String(last ?? '').trim();
@@ -90,4 +111,24 @@ export function getPaymentReceiptInvoices(payment) {
       remainingAfter: null,
     }),
   );
+}
+
+/** Comma-separated bill invoice numbers this payment was applied to. */
+export function paymentInvoiceNumberLabel(payment) {
+  const labels = [];
+  const seen = new Set();
+  for (const inv of getPaymentReceiptInvoices(payment)) {
+    let label = String(inv.invoiceNumber ?? '').trim();
+    if (!label) {
+      const details = String(inv.details ?? '').trim();
+      const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
+      if (invMatch) label = invMatch[1].trim();
+    }
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    labels.push(key === 'opening' ? 'Opening' : label);
+  }
+  return labels.join(', ');
 }

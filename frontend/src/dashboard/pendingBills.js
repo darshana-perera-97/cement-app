@@ -22,24 +22,34 @@ function toNonNegMoney(n) {
   return Math.round(v * 100) / 100;
 }
 
-/** System rule cashback applied to one invoice (`rule_cashback`). */
-function sumRuleCashbackForBill(promotions, billId) {
+function sumPromotionAmountForBill(promotions, billId, type) {
   const id = String(billId ?? '').trim();
   if (!id) return 0;
   let sum = 0;
   for (const row of Array.isArray(promotions) ? promotions : []) {
-    if (String(row?.type ?? '').trim() !== 'rule_cashback') continue;
+    if (String(row?.type ?? '').trim() !== type) continue;
     if (String(row.billId ?? '').trim() !== id) continue;
     sum += toNonNegMoney(row.discountAmount);
   }
   return Math.round(sum * 100) / 100;
 }
 
-/** Invoice total still to be paid after a system rule cashback on that invoice. */
+/** System rule cashback applied to one invoice (`rule_cashback`). */
+function sumRuleCashbackForBill(promotions, billId) {
+  return sumPromotionAmountForBill(promotions, billId, 'rule_cashback');
+}
+
+/** Invoice discounts applied to one selected invoice (`invoice_discount`). */
+export function sumInvoiceDiscountForBill(promotions, billId) {
+  return sumPromotionAmountForBill(promotions, billId, 'invoice_discount');
+}
+
+/** Invoice total still to be paid after invoice discounts and rule cashback on that invoice. */
 function payableBillTotal(bill, promotions = []) {
   const base = toNonNegMoney(bill?.totalAmount);
-  const cashback = sumRuleCashbackForBill(promotions, bill?.id);
-  return Math.max(0, Math.round((base - cashback) * 100) / 100);
+  const reductions =
+    sumRuleCashbackForBill(promotions, bill?.id) + sumInvoiceDiscountForBill(promotions, bill?.id);
+  return Math.max(0, Math.round((base - reductions) * 100) / 100);
 }
 
 /** Matches backend `paymentCreditToCustomer`. */

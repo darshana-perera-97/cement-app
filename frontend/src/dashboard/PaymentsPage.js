@@ -27,6 +27,7 @@ import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { usePrinter } from '../printer/PrinterProvider';
 import { todayYmdLocal, useCollectorCollectionClosed } from './collectionDayClose';
+import { COLLECTOR_CASH_PRINT_TODAY_ONLY, collectorMayPrintCashCollection } from './paymentReceipt';
 
 const apiBase = getApiBase();
 
@@ -419,16 +420,23 @@ export default function PaymentsPage() {
         actions={
           isCollector() || isManagerOrAdmin() ? (
             <div className="mt-4 flex flex-col gap-2">
-              {isCollector() || isManagerOrAdmin() ? (
+              {collectorMayPrintCashCollection(detailPayment) ? (
                 <button
                   type="button"
-                  onClick={() => requestPrint('cashCollection', detailPayment)}
+                  onClick={() => {
+                    if (!collectorMayPrintCashCollection(detailPayment)) return;
+                    requestPrint('cashCollection', detailPayment);
+                  }}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-800 ring-1 ring-sky-100 hover:bg-sky-100"
                 >
                   <PrinterGlyph className="h-4 w-4" />
                   Print bill
                 </button>
-              ) : null}
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-4 py-2.5 text-center text-xs text-slate-500 ring-1 ring-slate-100">
+                  {COLLECTOR_CASH_PRINT_TODAY_ONLY}
+                </p>
+              )}
               {isAdmin() ? <PaymentReceiptPdfButton payment={detailPayment} /> : null}
               {canEditDetails() ? (
                 <button

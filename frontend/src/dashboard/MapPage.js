@@ -29,6 +29,17 @@ function shopsSignature(list) {
   );
 }
 
+function fieldSeenLabel(iso) {
+  const t = new Date(iso || '').getTime();
+  if (!Number.isFinite(t)) return 'Location shared';
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 1) return 'Just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  return hours === 1 ? '1 hr ago' : `${hours} hr ago`;
+}
+
 function coordKey(lat, lng) {
   return `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
 }
@@ -565,6 +576,8 @@ export default function MapPage() {
   const [shopStocks, setShopStocks] = useState([]);
   const [allowedShopIds, setAllowedShopIds] = useState(null);
   const [adminStockOpen, setAdminStockOpen] = useState(false);
+  const [fieldPeople, setFieldPeople] = useState([]);
+  const [selectedFieldId, setSelectedFieldId] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -620,6 +633,27 @@ export default function MapPage() {
   }, [canViewMap, loadShopStocks]);
 
   useEffect(() => {
+    if (!canEditMap) return undefined;
+    let cancelled = false;
+    async function loadPeople() {
+      try {
+        const res = await authFetch(`${apiBase}/api/field-locations`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setFieldPeople(Array.isArray(data) ? data : []);
+      } catch {
+        if (!cancelled) setFieldPeople([]);
+      }
+    }
+    loadPeople();
+    const id = window.setInterval(loadPeople, 12000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [canEditMap]);
+
+  useEffect(() => {
     if (!canUpdateStores || typeof navigator === 'undefined' || !navigator.geolocation) {
       setLocationError(canUpdateStores ? 'Location is not available in this browser.' : '');
       return undefined;
@@ -665,6 +699,18 @@ export default function MapPage() {
   const selected = useMemo(
     () => shops.find((s) => s.id === selectedId) || null,
     [shops, selectedId],
+  );
+  const collectorsOnMap = useMemo(
+    () => fieldPeople.filter((person) => person.role === 'Collector'),
+    [fieldPeople],
+  );
+  const lorriesOnMap = useMemo(
+    () => fieldPeople.filter((person) => person.role === 'Driver'),
+    [fieldPeople],
+  );
+  const selectedPerson = useMemo(
+    () => fieldPeople.find((person) => person.id === selectedFieldId) || null,
+    [fieldPeople, selectedFieldId],
   );
 
   const handleRemoveShop = useCallback(
@@ -717,7 +763,7 @@ export default function MapPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-slate-500">
           {canEditMap
-            ? 'Sri Lanka map of your shops. Hover a pin to see the last stock update, or select a shop for details.'
+            ? 'Sri Lanka map of your shops. Collector avatars and lorries show here from their live location. Hover a shop pin for the last stock update.'
             : 'Sri Lanka map of your shops. Your location is shown on the map. Use Update Stores to record shop stock.'}
         </p>
         {canEditMap ? (
@@ -744,6 +790,7 @@ export default function MapPage() {
             selectedId={selectedId}
             onSelect={(shop) => {
               setSelectedId(shop.id);
+              setSelectedFieldId('');
               if (canEditMap) setAdminStockOpen(true);
             }}
             userLocation={canUpdateStores ? userLocation : null}
@@ -752,7 +799,38 @@ export default function MapPage() {
             showStockHover={canEditMap}
             staleDays={staleDays}
             lowStockAlerts={lowStockAlerts}
+            fieldPeople={canEditMap ? fieldPeople : []}
+            selectedFieldId={canEditMap ? selectedFieldId : ''}
+            onSelectField={
+              canEditMap
+                ? (person) => {
+                    setSelectedFieldId(person.id);
+                    setSelectedId('');
+                    setAdminStockOpen(false);
+                  }
+                : undefined
+            }
           />
+          {canEditMap ? (
+            <div className="pointer-events-none absolute left-3 top-3 z-[500] rounded-2xl bg-white/95 px-3 py-2.5 text-xs shadow-md ring-1 ring-slate-200">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">On the map</p>
+              <p className="mt-1.5 flex items-center gap-2 font-semibold text-slate-800">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[9px] font-bold text-white">
+                  A
+                </span>
+                Collectors
+              </p>
+              <p className="mt-1 flex items-center gap-2 font-semibold text-slate-800">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-600 text-white">
+                  <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M3 7h11v8H3z" />
+                    <path d="M14 10h4l3 3v2h-7" />
+                  </svg>
+                </span>
+                Lorries
+              </p>
+            </div>
+          ) : null}
           {loading ? (
             <div className="absolute right-3 top-3 z-[500] rounded-xl bg-white/90 px-3 py-2 shadow-sm ring-1 ring-slate-200">
               <LoadingSpinner size="sm" label="Loading shops…" />
@@ -803,6 +881,101 @@ export default function MapPage() {
             });
           }}
         />
+      ) : null}
+
+      {canEditMap && selectedPerson ? (
+        <p className="text-sm text-slate-600">
+          Selected:{' '}
+          <span className="font-semibold text-slate-900">
+            {selectedPerson.role === 'Driver'
+              ? selectedPerson.lorryNumber || 'Lorry'
+              : selectedPerson.name}
+          </span>
+          {selectedPerson.role === 'Driver' && selectedPerson.name ? ` · ${selectedPerson.name}` : ''}
+          {selectedPerson.role === 'Collector' ? ' · Collector' : ' · Lorry'}
+        </p>
+      ) : null}
+
+      {canEditMap ? (
+      <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+        <h2 className="text-sm font-bold text-slate-900">Collectors and lorries</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Locations come from collectors and drivers while they are signed in. Pins older than 45 minutes drop off.
+        </p>
+        {fieldPeople.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No collectors or lorries are sharing a location right now.</p>
+        ) : (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Collectors</h3>
+              {collectorsOnMap.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500">None on the map.</p>
+              ) : (
+                <ul className="mt-2 divide-y divide-slate-100">
+                  {collectorsOnMap.map((person) => (
+                    <li key={person.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedFieldId(person.id)}
+                        className={`flex w-full items-center gap-3 py-2.5 text-left ${
+                          person.id === selectedFieldId ? 'text-indigo-700' : 'text-slate-800'
+                        }`}
+                      >
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
+                          {String(person.name || '?')
+                            .trim()
+                            .split(/\s+/)
+                            .slice(0, 2)
+                            .map((part) => part[0])
+                            .join('')
+                            .toUpperCase() || '?'}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">{person.name || 'Collector'}</span>
+                          <span className="block text-xs text-slate-500">{fieldSeenLabel(person.updatedAt)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-700">Lorries</h3>
+              {lorriesOnMap.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500">None on the map.</p>
+              ) : (
+                <ul className="mt-2 divide-y divide-slate-100">
+                  {lorriesOnMap.map((person) => (
+                    <li key={person.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedFieldId(person.id)}
+                        className={`flex w-full items-center gap-3 py-2.5 text-left ${
+                          person.id === selectedFieldId ? 'text-amber-800' : 'text-slate-800'
+                        }`}
+                      >
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-600 text-white">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
+                            <path d="M3 7h11v8H3z" />
+                            <path d="M14 10h4l3 3v2h-7" />
+                          </svg>
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">{person.lorryNumber || 'Lorry'}</span>
+                          <span className="block truncate text-xs text-slate-500">
+                            {person.name || 'Driver'} · {fieldSeenLabel(person.updatedAt)}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
       ) : null}
 
       {canEditMap ? (
