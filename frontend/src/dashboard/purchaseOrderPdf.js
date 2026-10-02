@@ -134,9 +134,9 @@ function underlineText(doc, text, x, y, options = {}) {
  *   items?: object[],
  * }} [opts]
  */
-export function downloadPurchaseOrderPdf(po, opts = {}) {
+function buildPurchaseOrderPdf(po, opts = {}) {
   const bankAccounts = Array.isArray(opts.bankAccounts) ? opts.bankAccounts : [];
-  if (!po || typeof po !== 'object') return;
+  if (!po || typeof po !== 'object') return null;
 
   const shopName = String(opts.shopName || '').trim() || 'CS Store';
   const registrationNo = String(opts.registrationNo || '').trim();
@@ -413,5 +413,20 @@ export function downloadPurchaseOrderPdf(po, opts = {}) {
   }
 
   const safePo = String(po.poNumber || po.id || 'PO').replace(/[^\w.-]+/g, '_');
-  doc.save(`${safePo}.pdf`);
+  return { doc, filename: `${safePo}.pdf` };
+}
+
+/** Download a single-page A5 Purchase Order PDF. */
+export function downloadPurchaseOrderPdf(po, opts = {}) {
+  const built = buildPurchaseOrderPdf(po, opts);
+  if (!built) return;
+  built.doc.save(built.filename);
+}
+
+/** Create a blob URL for in-app preview. Caller must revoke with URL.revokeObjectURL. */
+export function purchaseOrderPdfBlobUrl(po, opts = {}) {
+  const built = buildPurchaseOrderPdf(po, opts);
+  if (!built) return null;
+  const blob = built.doc.output('blob');
+  return { url: URL.createObjectURL(blob), filename: built.filename };
 }

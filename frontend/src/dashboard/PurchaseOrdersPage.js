@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch, getUsername, isAdmin } from '../auth';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
@@ -24,7 +24,7 @@ import {
   ModalBackdrop,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
-import { downloadPurchaseOrderPdf } from './purchaseOrderPdf';
+import { purchaseOrderPdfBlobUrl } from './purchaseOrderPdf';
 import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
 import { formatProductNameWithCode } from './brandTheme';
 import {
@@ -518,6 +518,10 @@ export default function PurchaseOrdersPage() {
   const [bankForm, setBankForm] = useState(emptyBankAccountForm);
   const [bankSaving, setBankSaving] = useState(false);
   const [bankSaveError, setBankSaveError] = useState(null);
+  const [poPreviewUrl, setPoPreviewUrl] = useState(null);
+  const [poPreviewFilename, setPoPreviewFilename] = useState('');
+  const [poPreviewTitle, setPoPreviewTitle] = useState('');
+  const poPreviewUrlRef = useRef(null);
 
   const validBankAccountIds = useMemo(
     () => new Set(bankAccounts.map((a) => a.id).filter(Boolean)),
@@ -613,6 +617,15 @@ export default function PurchaseOrdersPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    return () => {
+      if (poPreviewUrlRef.current) {
+        URL.revokeObjectURL(poPreviewUrlRef.current);
+        poPreviewUrlRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     loadDistributors();
@@ -1150,7 +1163,17 @@ export default function PurchaseOrdersPage() {
     }
   };
 
-  const handleDownloadPdf = (po) => {
+  const closePoPdfPreview = () => {
+    if (poPreviewUrlRef.current) {
+      URL.revokeObjectURL(poPreviewUrlRef.current);
+      poPreviewUrlRef.current = null;
+    }
+    setPoPreviewUrl(null);
+    setPoPreviewFilename('');
+    setPoPreviewTitle('');
+  };
+
+  const openPoPdfPreview = (po) => {
     const distributor =
       distributors.find((d) => d.id === po.distributorId) ||
       distributors.find(
@@ -1175,7 +1198,7 @@ export default function PurchaseOrdersPage() {
       );
 
     const items = pdfProductLines(po, rows);
-    downloadPurchaseOrderPdf(po, {
+    const preview = purchaseOrderPdfBlobUrl(po, {
       ...shopDetails,
       shopName: shopDetails.shopName || DEFAULT_SHOP_NAME,
       distributorName: po.distributorName || distributor?.name || '',
@@ -1184,6 +1207,14 @@ export default function PurchaseOrdersPage() {
       bankAccounts,
       items,
     });
+    if (!preview) return;
+    if (poPreviewUrlRef.current) {
+      URL.revokeObjectURL(poPreviewUrlRef.current);
+    }
+    poPreviewUrlRef.current = preview.url;
+    setPoPreviewUrl(preview.url);
+    setPoPreviewFilename(preview.filename);
+    setPoPreviewTitle(String(po.poNumber || '').trim() || 'Purchase order');
   };
 
   const openCancelConfirm = (po, e) => {
@@ -1354,10 +1385,10 @@ export default function PurchaseOrdersPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDownloadPdf(r)}
+                      onClick={() => openPoPdfPreview(r)}
                       className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
                     >
-                      PDF
+                      View PDF
                     </button>
                     {adminCanCancel(r) ? (
                       <button
@@ -1449,11 +1480,11 @@ export default function PurchaseOrdersPage() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDownloadPdf(r);
+                            openPoPdfPreview(r);
                           }}
                           className="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
                         >
-                          PDF
+                          View PDF
                         </button>
                         {adminCanCancel(r) ? (
                           <button
@@ -1502,10 +1533,10 @@ export default function PurchaseOrdersPage() {
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <button
                 type="button"
-                onClick={() => handleDownloadPdf(detailRow)}
+                onClick={() => openPoPdfPreview(detailRow)}
                 className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500"
               >
-                Download PO PDF
+                View PO PDF
               </button>
               {adminCanCancel(detailRow) ? (
                 <button
@@ -2177,6 +2208,52 @@ export default function PurchaseOrdersPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {poPreviewUrl ? (
+        <div
+          className="fixed inset-0 z-[120] flex items-end justify-center p-0 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="po-preview-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={closePoPdfPreview}
+          />
+          <div
+            className={`${modalPanelClass4xl} flex max-h-[min(96dvh,calc(100dvh-env(safe-area-inset-bottom,0px)))] w-full max-w-none flex-col overflow-hidden !p-0 sm:max-w-3xl`}
+          >
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
+              <h2 id="po-preview-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+                {poPreviewTitle || 'Purchase order'}
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href={poPreviewUrl}
+                  download={poPreviewFilename || 'purchase-order.pdf'}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+                >
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={closePoPdfPreview}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <iframe
+              title="Purchase order PDF preview"
+              src={poPreviewUrl}
+              className="min-h-[70vh] w-full flex-1 border-0 bg-slate-100"
+            />
           </div>
         </div>
       ) : null}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, getUsername } from '../auth';
+import { authFetch, canEditDetails, getUsername, isAdmin } from '../auth';
 import { usePrinter } from '../printer/PrinterProvider';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import { useBagProducts } from './BagProductsContext';
@@ -46,6 +46,32 @@ function money(n) {
     currency: 'LKR',
     maximumFractionDigits: 2,
   }).format(Number(n) || 0);
+}
+
+function todayYmdLocal() {
+  const dt = new Date();
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function requestedBags(value) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function emptyUnloadForm(brands) {
+  const f = {
+    date: todayYmdLocal(),
+    customerId: '',
+    note: '',
+  };
+  for (const b of brands) {
+    f[`${b.key}Bags`] = '';
+  }
+  return f;
 }
 
 function emptyForm(brands) {
@@ -459,6 +485,14 @@ export default function BillsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [unloadOpen, setUnloadOpen] = useState(false);
+  const [unloadForm, setUnloadForm] = useState(() => emptyUnloadForm([]));
+  const [unloadSaving, setUnloadSaving] = useState(false);
+  const [unloadError, setUnloadError] = useState(null);
+  const [unloadNotice, setUnloadNotice] = useState(null);
+  const [unloadStockByBrand, setUnloadStockByBrand] = useState({});
+  const [unloadStockLoading, setUnloadStockLoading] = useState(false);
+  const [showAllUnloadItems, setShowAllUnloadItems] = useState(false);
   const [form, setForm] = useState(() => emptyForm([]));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -647,6 +681,17 @@ export default function BillsPage() {
     [brands, lastUnloadedKeys, form, showAllSaleItems],
   );
   const hiddenSaleItemCount = Math.max(0, brands.length - visibleAddBrands.length);
+  const visibleUnloadBrands = useMemo(() => {
+    if (showAllUnloadItems) return brands;
+    const inStock = brands.filter((b) => (unloadStockByBrand[b.key] ?? 0) > 0);
+    const extra = brands.filter((b) => {
+      if (inStock.some((row) => row.key === b.key)) return false;
+      return requestedBags(unloadForm[`${b.key}Bags`]) > 0;
+    });
+    const list = [...inStock, ...extra];
+    return list.length > 0 ? list : brands;
+  }, [brands, showAllUnloadItems, unloadStockByBrand, unloadForm]);
+  const hiddenUnloadItemCount = Math.max(0, brands.length - visibleUnloadBrands.length);
 
   const payableByBillId = useMemo(() => {
     const map = new Map();
@@ -799,6 +844,132 @@ export default function BillsPage() {
       return '';
     }
   }, []);
+
+  const reloadUnloads = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/unload-requests?status=all`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setUnloads(Array.isArray(data) ? data : []);
+    } catch {
+      /* keep the list already loaded */
+    }
+  }, []);
+
+  const loadUnloadStock = useCallback(async () => {
+    setUnloadStockLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/api/stocks/summary`);
+      if (!res.ok) throw new Error('Failed to load stock');
+      const data = await res.json();
+      const map = {};
+      for (const b of Array.isArray(data.brands) ? data.brands : []) {
+        const available = b.availableForRequest;
+        const bags = Math.max(0, Math.floor(Number(b.bags) || 0));
+        map[b.key] = Math.max(0, Math.floor(Number(available != null ? available : bags) || 0));
+      }
+      setUnloadStockByBrand(map);
+    } catch {
+      setUnloadStockByBrand({});
+    } finally {
+      setUnloadStockLoading(false);
+    }
+  }, []);
+
+  const openRecordUnload = () => {
+    setUnloadError(null);
+    setUnloadNotice(null);
+    setShowAllUnloadItems(false);
+    loadCustomers();
+    loadUnloadStock();
+    setUnloadForm(emptyUnloadForm(brands));
+    setUnloadOpen(true);
+  };
+
+  const closeRecordUnload = () => {
+    if (unloadSaving) return;
+    setUnloadOpen(false);
+    setUnloadError(null);
+  };
+
+  const handleUnloadChange = (field, value) => {
+    setUnloadForm((f) => ({ ...f, [field]: value }));
+  };
+
+  const handleUnloadSubmit = async (e) => {
+    e.preventDefault();
+    if (!isAdmin()) {
+      setUnloadError('Sign in as admin to record unloads.');
+      return;
+    }
+    const date = String(unloadForm.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setUnloadError('Choose a date.');
+      return;
+    }
+    if (!unloadForm.customerId) {
+      setUnloadError('Select a shop.');
+      return;
+    }
+    const issues = [];
+    let anyRequested = false;
+    for (const b of brands) {
+      const requested = requestedBags(unloadForm[`${b.key}Bags`]);
+      if (requested <= 0) continue;
+      anyRequested = true;
+      const available = unloadStockByBrand[b.key];
+      if (available == null) continue;
+      const label = formatBrandLabel(b) || b.label;
+      if (available <= 0) {
+        issues.push(`${label} is out of stock.`);
+      } else if (requested > available) {
+        issues.push(`${label}: only ${available.toLocaleString()} bag${available === 1 ? '' : 's'} in stock.`);
+      }
+    }
+    if (!anyRequested) {
+      setUnloadError('Enter at least one bag to unload.');
+      return;
+    }
+    if (issues.length > 0) {
+      setUnloadError(issues.join(' '));
+      return;
+    }
+
+    const payload = {
+      date,
+      customerId: unloadForm.customerId,
+      note: String(unloadForm.note ?? '').trim(),
+    };
+    for (const b of brands) {
+      payload[`${b.key}Bags`] = unloadForm[`${b.key}Bags`];
+    }
+
+    setUnloadSaving(true);
+    setUnloadError(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/unloads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUnloadError(data.error || 'Could not save unload');
+        return;
+      }
+      const shop = String(data.customerName || '').trim() || 'shop';
+      setUnloadNotice(
+        `Unload recorded for ${shop} on ${data.date || date}. Waiting for approval — the credit bill is created after approval.`,
+      );
+      setUnloadOpen(false);
+      setUnloadForm(emptyUnloadForm(brands));
+      await reloadUnloads();
+    } catch {
+      setUnloadError('Could not reach the server.');
+    } finally {
+      setUnloadSaving(false);
+    }
+  };
 
   const openAdd = () => {
     setSaveError(null);
@@ -1046,18 +1217,34 @@ export default function BillsPage() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-slate-500">Record credit bag sales to customers and update stock.</p>
-        <button
-          type="button"
-          onClick={openAdd}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
-        >
-          Record credit sale
-        </button>
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+          {isAdmin() ? (
+            <button
+              type="button"
+              onClick={openRecordUnload}
+              className="inline-flex w-full items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 shadow-sm ring-1 ring-emerald-100 transition hover:bg-emerald-100 sm:w-auto"
+            >
+              Record Unloads
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={openAdd}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+          >
+            Record credit sale
+          </button>
+        </div>
       </div>
 
       {error ? (
         <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
           {error}
+        </p>
+      ) : null}
+      {unloadNotice ? (
+        <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900 ring-1 ring-emerald-100" role="status">
+          {unloadNotice}
         </p>
       ) : null}
 
@@ -1459,6 +1646,160 @@ export default function BillsPage() {
                 )}
               </>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {unloadOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center p-0 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bills-unload-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            disabled={unloadSaving}
+            onClick={closeRecordUnload}
+          />
+          <div className={`${modalPanelClass3xl} flex max-h-[min(96dvh,calc(100dvh-env(safe-area-inset-bottom,0px)))] w-full max-w-none flex-col overflow-hidden !p-0 sm:max-w-3xl`}>
+            <div className="shrink-0 border-b border-slate-100 px-4 pb-3 pt-4 sm:px-6">
+              <h2 id="bills-unload-title" className="text-sm font-semibold text-slate-900 sm:text-base">
+                Record Unloads
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Choose the shop, date, and bags unloaded. You can change the date. The request waits for approval before stock and the credit bill update.
+              </p>
+            </div>
+            <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleUnloadSubmit}>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
+                {unloadError ? (
+                  <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-red-100">{unloadError}</p>
+                ) : null}
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  <label className="block text-xs font-medium text-slate-600">
+                    Date
+                    <input
+                      type="date"
+                      required
+                      value={unloadForm.date}
+                      onChange={(e) => handleUnloadChange('date', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/35"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-slate-600">
+                    Shop
+                    <select
+                      required
+                      value={unloadForm.customerId}
+                      onChange={(e) => handleUnloadChange('customerId', e.target.value)}
+                      className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={customers.length === 0}
+                    >
+                      <option value="">
+                        {customers.length === 0 ? 'No shops yet — add some on Customers' : 'Select shop…'}
+                      </option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="text-[11px] font-normal text-slate-500 sm:col-span-2">
+                    Admin can record this unload on any date.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">Bags unloaded</p>
+                      <p className="mt-0.5 text-[10px] font-normal text-slate-400">
+                        {unloadStockLoading
+                          ? 'Checking stock…'
+                          : showAllUnloadItems
+                            ? 'Full product list. Enter bags for the items on this unload.'
+                            : 'In-stock items. Enter the bags unloaded at the shop.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    className={
+                      showAllUnloadItems
+                        ? 'mt-2 max-h-[min(48vh,28rem)] space-y-2 overflow-y-auto overscroll-contain pr-0.5'
+                        : 'mt-2 space-y-2'
+                    }
+                  >
+                    {visibleUnloadBrands.map((b) => {
+                      const available = unloadStockByBrand[b.key];
+                      return (
+                        <div key={b.key} className="grid grid-cols-1 items-end gap-1.5 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                          <span className="min-w-0 truncate text-[11px] font-normal text-slate-700" title={formatBrandLabel(b) || b.label}>
+                            {formatBrandLabel(b) || b.label}
+                            {available != null ? (
+                              <span className="ml-1 font-normal text-slate-400">
+                                · {available.toLocaleString()} in stock
+                              </span>
+                            ) : null}
+                          </span>
+                          <label className="text-[10px] text-slate-500">
+                            Bags
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={unloadForm[`${b.key}Bags`] ?? ''}
+                              onChange={(e) => handleUnloadChange(`${b.key}Bags`, e.target.value)}
+                              className="mt-0.5 w-full rounded-lg border-0 bg-white px-2 py-1.5 text-xs tabular-nums ring-1 ring-slate-200"
+                            />
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {hiddenUnloadItemCount > 0 || showAllUnloadItems ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllUnloadItems((v) => !v)}
+                      className="mt-2.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      {showAllUnloadItems
+                        ? 'Show in-stock items'
+                        : `View all items${hiddenUnloadItemCount > 0 ? ` (${hiddenUnloadItemCount} more)` : ''}`}
+                    </button>
+                  ) : null}
+                </div>
+                <label className="block text-xs font-medium text-slate-600">
+                  Note (optional)
+                  <textarea
+                    rows={2}
+                    value={unloadForm.note ?? ''}
+                    onChange={(e) => handleUnloadChange('note', e.target.value)}
+                    className="mt-1 w-full resize-y rounded-xl border-0 bg-slate-100 px-2.5 py-2 text-xs ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/35"
+                    placeholder="Vehicle, lorry, etc."
+                  />
+                </label>
+              </div>
+              <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-100 px-4 py-3 sm:px-6">
+                <button
+                  type="button"
+                  onClick={closeRecordUnload}
+                  disabled={unloadSaving}
+                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={unloadSaving || customers.length === 0}
+                  className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-medium text-white shadow-md disabled:opacity-60"
+                >
+                  {unloadSaving ? 'Saving…' : 'Record unload'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : null}
