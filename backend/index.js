@@ -469,6 +469,7 @@ const {
   cancelIssuedCheque,
   cancelPurchaseOrder,
   isPoCashPayment,
+  poLineItems: storedPoLineItems,
 } = require('./models/purchaseOrdersStore');
 const { computeBankAccountBalances } = require('./models/bankAccountBalance');
 const {
@@ -6919,14 +6920,93 @@ app.post('/api/purchase-orders', async (req, res) => {
   }
 });
 
+function poCashBookDescription(po) {
+  const product =
+    (Array.isArray(po.items) ? po.items : [])
+      .map((item) => String(item?.product ?? '').trim())
+      .filter(Boolean)
+      .join(', ') || String(po.product ?? '').trim();
+  return [po.poNumber ? `PO ${po.poNumber}` : 'Purchase order', po.distributorName, product]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Keep cash-book rows for PO cash payments aligned with the saved order. */
+function applyCashBookForPurchaseOrders(cashBook, pos, recordedBy) {
+  const next = cashBook.map((entry) => ({ ...entry }));
+  const cancelledAt = new Date().toISOString();
+  for (const po of pos) {
+    const poId = String(po.id ?? '').trim();
+    const desired = (Array.isArray(po.cheques) ? po.cheques : [])
+      .filter((c) => c && isPoCashPayment(c) && !c.cancelled)
+      .map((c) => toNonNegMoney(c.amount))
+      .filter((n) => n > 0);
+    const description = poCashBookDescription(po);
+    const activeIdx = [];
+    next.forEach((entry, i) => {
+      if (String(entry.category ?? '').trim() !== 'purchase_order') return;
+      if (entry.cancelled) return;
+      if (String(entry.poId ?? '').trim() !== poId) return;
+      activeIdx.push(i);
+    });
+    if (activeIdx.length === desired.length) {
+      activeIdx.forEach((idx, n) => {
+        next[idx] = {
+          ...next[idx],
+          date: po.date,
+          amount: desired[n],
+          description,
+          poNumber: po.poNumber || next[idx].poNumber,
+          ...(po.batchId ? { batchId: po.batchId } : {}),
+        };
+      });
+      continue;
+    }
+    for (const idx of activeIdx) {
+      next[idx] = {
+        ...next[idx],
+        cancelled: true,
+        cancelledAt,
+        cancelledBy: recordedBy,
+      };
+    }
+    const bookedAt = new Date().toISOString();
+    desired.forEach((amount, n) => {
+      next.push(
+        normalizeEntry({
+          id: `cbe-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 10)}`,
+          date: po.date,
+          category: 'purchase_order',
+          amount,
+          description,
+          recordedBy,
+          poId,
+          poNumber: po.poNumber,
+          batchId: po.batchId,
+          createdAt: bookedAt,
+        }),
+      );
+    });
+  }
+  return next;
+}
+
+/** Admin: edit a purchase order. Keeps the same PO number. Extra per-product lines become new POs. */
 app.patch('/api/purchase-orders/:id', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to edit purchase orders' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can edit purchase orders' });
+  }
   try {
     const id = String(req.params.id ?? '').trim();
     if (!id) {
       return res.status(400).json({ error: 'Purchase order id is required' });
     }
     const body = req.body || {};
-    const updatedBy = String(body.updatedBy ?? body.createdBy ?? '').trim();
+    const updatedBy = String(body.updatedBy ?? body.createdBy ?? auth.username ?? '').trim();
     if (!updatedBy) {
       return res.status(400).json({ error: 'updatedBy (username) is required' });
     }
@@ -6941,95 +7021,243 @@ app.patch('/api/purchase-orders/:id', async (req, res) => {
     if (current.cancelled) {
       return res.status(400).json({ error: 'Cancelled purchase orders cannot be edited' });
     }
-    const date = body.date !== undefined ? String(body.date ?? '').trim() : current.date;
+
+    const date = String(body.date ?? current.date ?? '').trim();
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     }
 
-    let distributorId = current.distributorId;
-    let distributorName = current.distributorName;
-    if (body.distributorId !== undefined) {
-      distributorId = String(body.distributorId ?? '').trim();
-      const distributors = await readDistributors();
-      const distributor = distributors.map((d) => withNormalizedLists(d)).find((d) => d.id === distributorId);
-      if (!distributor) {
-        return res.status(400).json({ error: 'Distributor not found' });
+    const distributors = await readDistributors();
+    const distributorId = String(body.distributorId ?? current.distributorId ?? '').trim();
+    const distributor = distributors.map((d) => withNormalizedLists(d)).find((d) => d.id === distributorId);
+    if (!distributor) {
+      return res.status(400).json({ error: 'Distributor not found' });
+    }
+
+    const distLocations = normalizeLocations(distributor);
+    const distributionLocationRaw = String(
+      body.distributionLocation ?? body.distributorLocation ?? current.distributionLocation ?? '',
+    ).trim();
+    let distributionLocation = '';
+    if (distLocations.length > 0) {
+      const match = distLocations.find((l) => l.toLowerCase() === distributionLocationRaw.toLowerCase());
+      const previous = String(current.distributionLocation ?? '').trim();
+      if (match) distributionLocation = match;
+      else if (previous && previous.toLowerCase() === distributionLocationRaw.toLowerCase()) {
+        distributionLocation = previous;
+      } else if (!distributionLocationRaw) {
+        return res.status(400).json({ error: 'distributionLocation is required' });
+      } else {
+        return res.status(400).json({ error: 'Invalid distribution location for this distributor' });
       }
-      distributorId = distributor.id;
-      distributorName = distributor.name;
+    } else if (distributionLocationRaw) {
+      distributionLocation = distributionLocationRaw;
     }
 
-    const product =
-      body.product !== undefined ? String(body.product ?? '').trim() : String(current.product || '').trim();
-    if (!product) {
-      return res.status(400).json({ error: 'product is required' });
-    }
-
-    const quantity =
-      body.quantity !== undefined ? toNonNegNumber(body.quantity) : toNonNegNumber(current.quantity);
-    if (quantity <= 0) {
-      return res.status(400).json({ error: 'quantity must be greater than 0' });
-    }
-
-    const unitPrice =
-      body.unitPrice !== undefined ? toNonNegMoney(body.unitPrice) : toNonNegMoney(current.unitPrice);
-    if (unitPrice <= 0) {
-      return res.status(400).json({ error: 'unit price must be greater than 0' });
-    }
-
-    const vehicleNumber =
-      body.vehicleNumber !== undefined || body.lorry !== undefined
-        ? String(body.vehicleNumber ?? body.lorry ?? '').trim()
-        : String(current.vehicleNumber || '').trim();
+    const vehicleNumber = String(body.vehicleNumber ?? body.lorry ?? current.vehicleNumber ?? '').trim();
     if (!vehicleNumber) {
       return res.status(400).json({ error: 'lorry / vehicleNumber is required' });
     }
 
-    const driverName =
-      body.driverName !== undefined
-        ? String(body.driverName ?? '').trim()
-        : String(current.driverName || '').trim();
+    const driverName = String(body.driverName ?? current.driverName ?? '').trim();
     if (!driverName) {
       return res.status(400).json({ error: 'driverName is required' });
     }
+    const driverId = String(
+      body.driverId !== undefined ? body.driverId : current.driverId ?? '',
+    ).trim();
 
-    const driverId =
-      body.driverId !== undefined ? String(body.driverId ?? '').trim() : String(current.driverId || '').trim();
+    const shop = await readShopData();
+    const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
 
-    let cheques = current.cheques || [];
-    if (body.cheques !== undefined) {
-      const shop = await readShopData();
-      const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
-      const validated = validatePoCheques(body.cheques, bankAccountById, 'Payment');
-      if (!validated.ok) {
-        return res.status(400).json({ error: validated.error });
-      }
-      cheques = validated.cheques;
+    const chequePerProduct =
+      body.chequePerProduct !== undefined
+        ? Boolean(body.chequePerProduct)
+        : String(current.chequeMode ?? '').trim() === 'perProduct';
+    const doorStock =
+      body.doorStock !== undefined
+        ? Boolean(body.doorStock)
+        : Boolean(current.doorStock) || String(current.notes ?? '').trim().toLowerCase() === 'door step';
+
+    const allowedProducts = new Set(
+      (distributor.products || []).map((p) => String(p).trim().toLowerCase()).filter(Boolean),
+    );
+    const previousProducts = new Set(
+      storedPoLineItems(current).map((item) => item.product.toLowerCase()).filter(Boolean),
+    );
+
+    let rawItems = Array.isArray(body.items) ? body.items : null;
+    if (!rawItems) {
+      rawItems = [
+        {
+          product: body.product !== undefined ? body.product : current.product,
+          quantity: body.quantity !== undefined ? body.quantity : current.quantity,
+          unitPrice: body.unitPrice !== undefined ? body.unitPrice : current.unitPrice,
+          cheques: body.cheques !== undefined ? body.cheques : current.cheques,
+        },
+      ];
     }
-    const total = poLineTotal(quantity, unitPrice);
 
-    const next = {
-      ...current,
-      date,
-      distributorId,
-      distributorName,
-      product,
-      quantity,
-      unitPrice,
-      lineTotal: total,
-      totalAmount: total,
-      cheques,
-      vehicleNumber,
-      driverName,
-      updatedBy,
-      updatedAt: new Date().toISOString(),
+    let sharedCheques = [];
+    if (!chequePerProduct) {
+      const validatedShared = validatePoCheques(
+        body.cheques !== undefined ? body.cheques : current.cheques,
+        bankAccountById,
+        'Payment',
+      );
+      if (!validatedShared.ok) {
+        return res.status(400).json({ error: validatedShared.error });
+      }
+      sharedCheques = validatedShared.cheques;
+    }
+
+    const items = [];
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i] || {};
+      const product = String(item.product ?? '').trim();
+      if (!product) {
+        return res.status(400).json({ error: `Item ${i + 1}: product is required` });
+      }
+      const productKey = product.toLowerCase();
+      if (
+        allowedProducts.size > 0 &&
+        !allowedProducts.has(productKey) &&
+        !previousProducts.has(productKey)
+      ) {
+        return res.status(400).json({
+          error: `Item ${i + 1}: "${product}" is not a product of ${distributor.name}`,
+        });
+      }
+      const quantity = toNonNegNumber(item.quantity);
+      if (quantity <= 0) {
+        return res.status(400).json({ error: `Item ${i + 1}: quantity must be greater than 0` });
+      }
+      const unitPrice = toNonNegMoney(item.unitPrice);
+      if (unitPrice <= 0) {
+        return res.status(400).json({ error: `Item ${i + 1}: unit price must be greater than 0` });
+      }
+
+      let itemCheques = sharedCheques;
+      if (chequePerProduct) {
+        const validatedItem = validatePoCheques(
+          item.cheques,
+          bankAccountById,
+          `Item ${i + 1} payment`,
+        );
+        if (!validatedItem.ok) {
+          return res.status(400).json({ error: validatedItem.error });
+        }
+        itemCheques = validatedItem.cheques;
+      }
+
+      items.push({
+        product,
+        quantity,
+        unitPrice,
+        lineTotal: poLineTotal(quantity, unitPrice),
+        cheques: itemCheques,
+      });
+    }
+
+    if (items.length === 0) {
+      return res.status(400).json({ error: 'Add at least one product line' });
+    }
+
+    const updatedAt = new Date().toISOString();
+    const chequeMode = chequePerProduct ? 'perProduct' : 'shared';
+    const applySharedFields = (po) => {
+      const next = {
+        ...po,
+        date,
+        distributorId: distributor.id,
+        distributorName: distributor.name,
+        chequeMode,
+        vehicleNumber,
+        driverName,
+        updatedBy,
+        updatedAt,
+      };
+      if (distributionLocation) next.distributionLocation = distributionLocation;
+      else delete next.distributionLocation;
+      if (driverId) next.driverId = driverId;
+      else delete next.driverId;
+      if (doorStock) {
+        next.doorStock = true;
+        next.notes = 'Door step';
+      } else {
+        delete next.doorStock;
+        if (String(next.notes ?? '').trim().toLowerCase() === 'door step') delete next.notes;
+      }
+      return next;
     };
-    if (driverId) next.driverId = driverId;
-    else delete next.driverId;
 
-    rows[idx] = next;
+    const stampLine = (po, item) => {
+      const next = applySharedFields(po);
+      next.product = item.product;
+      next.quantity = item.quantity;
+      next.unitPrice = item.unitPrice;
+      next.lineTotal = item.lineTotal;
+      next.totalAmount = item.lineTotal;
+      next.cheques = item.cheques;
+      delete next.items;
+      return next;
+    };
+
+    const touched = [];
+    if (chequePerProduct) {
+      rows[idx] = stampLine(current, items[0]);
+      touched.push(rows[idx]);
+      if (items.length > 1) {
+        let nextPo = nextSuggestedPoNumber(rows);
+        const batchId = String(current.batchId ?? '').trim() || `pobatch-${Date.now()}`;
+        items.slice(1).forEach((item, extraIndex) => {
+          const poNumber = nextPo;
+          const m = /^PO-(\d+)$/i.exec(nextPo);
+          const n = m ? parseInt(m[1], 10) + 1 : rows.length + 2;
+          nextPo = `PO-${String(n).padStart(4, '0')}`;
+          const created = stampLine(
+            {
+              id: `po-${Date.now()}-${extraIndex}-${Math.random().toString(36).slice(2, 10)}`,
+              poNumber,
+              batchId,
+              createdBy: updatedBy,
+              createdAt: updatedAt,
+            },
+            item,
+          );
+          rows.push(created);
+          touched.push(created);
+        });
+      }
+    } else {
+      const lineItems = items.map((item) => ({
+        product: item.product,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        lineTotal: item.lineTotal,
+      }));
+      const totalAmount = lineItems.reduce((sum, item) => sum + (Number(item.lineTotal) || 0), 0);
+      const totalQty = lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+      const first = lineItems[0];
+      const next = applySharedFields(current);
+      next.items = lineItems;
+      next.product = first.product;
+      next.quantity = totalQty;
+      next.unitPrice = first.unitPrice;
+      next.lineTotal = totalAmount;
+      next.totalAmount = totalAmount;
+      next.cheques = sharedCheques;
+      rows[idx] = next;
+      touched.push(next);
+    }
+
     await writePurchaseOrders(rows);
-    res.json(next);
+    const cashBook = await readCashBookEntries();
+    await writeCashBookEntries(applyCashBookForPurchaseOrders(cashBook, touched, updatedBy));
+
+    const updated = rows[idx];
+    const created = touched.filter((po) => po.id !== updated.id);
+    res.json({ po: updated, created, count: created.length });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to update purchase order' });

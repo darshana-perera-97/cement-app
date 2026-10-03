@@ -17,6 +17,10 @@ import {
   downloadDoorStockTransportExcel,
   downloadDoorStockTransportPdf,
 } from './doorStockTransportExport';
+import {
+  downloadInvoiceDiscountExcel,
+  downloadInvoiceDiscountPdf,
+} from './invoiceDiscountExport';
 import DoorStockTransportSettingsModal, {
   EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
 } from './DoorStockTransportSettingsModal';
@@ -66,6 +70,19 @@ const EMPTY_DOOR_STOCK_FILTERS = {
   dateTo: '',
   brand: '',
 };
+
+const EMPTY_INVOICE_DISCOUNT_FILTERS = {
+  dateFrom: '',
+  dateTo: '',
+  discountMode: '',
+  customer: '',
+};
+
+function invoiceDiscountTypeLabel(mode) {
+  if (mode === 'per_bag') return 'Per bag';
+  if (mode === 'whole_invoice') return 'Whole invoice';
+  return 'All types';
+}
 
 function countActiveIncentiveFilters(filters, { includeShop = true } = {}) {
   let count = 0;
@@ -704,6 +721,7 @@ export default function IncentivePage() {
     [doorStockTransportSettings, brands],
   );
   const [doorStockFilters, setDoorStockFilters] = useState(EMPTY_DOOR_STOCK_FILTERS);
+  const [invoiceDiscountFilters, setInvoiceDiscountFilters] = useState(EMPTY_INVOICE_DISCOUNT_FILTERS);
   const [doorStockSettingsOpen, setDoorStockSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -882,6 +900,7 @@ export default function IncentivePage() {
         date: p.date,
         customerName: p.customerName || '—',
         invoiceNumber: p.invoiceNumber || '—',
+        discountModeKey: p.discountMode === 'per_bag' ? 'per_bag' : 'whole_invoice',
         discountMode: p.discountMode === 'per_bag' ? 'Per bag' : 'Whole invoice',
         discountValue: Number(p.discountValue) || 0,
         discountAmount: Number(p.discountAmount) || 0,
@@ -891,26 +910,27 @@ export default function IncentivePage() {
       .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
   }, [promotions]);
 
+  const invoiceDiscountCustomerOptions = useMemo(() => {
+    const names = new Set();
+    for (const r of invoiceDiscountRows) {
+      const name = String(r.customerName ?? '').trim();
+      if (name && name !== '—') names.add(name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [invoiceDiscountRows]);
+
   const filteredInvoiceDiscountRows = useMemo(() => {
+    const { dateFrom: from, dateTo: to, discountMode, customer } = invoiceDiscountFilters;
     return invoiceDiscountRows.filter((r) => {
-      if (!inDateRange(r.date, dateFrom, dateTo)) return false;
-      return rowMatchesQuery(search, [
-        r.date,
-        r.customerName,
-        r.invoiceNumber,
-        r.discountMode,
-        String(r.discountValue),
-        String(r.discountAmount),
-        r.reason,
-        r.enteredBy,
-      ]);
+      if (!inDateRange(r.date, from, to)) return false;
+      if (discountMode && r.discountModeKey !== discountMode) return false;
+      if (customer && r.customerName !== customer) return false;
+      return true;
     });
-  }, [invoiceDiscountRows, dateFrom, dateTo, search]);
+  }, [invoiceDiscountRows, invoiceDiscountFilters]);
 
   const invoiceDiscountPagination = useTablePagination(filteredInvoiceDiscountRows.length, [
-    search,
-    dateFrom,
-    dateTo,
+    invoiceDiscountFilters,
   ]);
   const pagedInvoiceDiscountRows = useMemo(
     () =>
@@ -1054,6 +1074,24 @@ export default function IncentivePage() {
     }),
     [doorStockFilters, brandByKey],
   );
+
+  const invoiceDiscountExportOptions = useMemo(
+    () => ({
+      dateFrom: invoiceDiscountFilters.dateFrom,
+      dateTo: invoiceDiscountFilters.dateTo,
+      discountTypeLabel: invoiceDiscountTypeLabel(invoiceDiscountFilters.discountMode),
+      customer: invoiceDiscountFilters.customer,
+    }),
+    [invoiceDiscountFilters],
+  );
+
+  const handleDownloadInvoiceDiscountPdf = useCallback(() => {
+    downloadInvoiceDiscountPdf(filteredInvoiceDiscountRows, invoiceDiscountExportOptions);
+  }, [filteredInvoiceDiscountRows, invoiceDiscountExportOptions]);
+
+  const handleDownloadInvoiceDiscountExcel = useCallback(() => {
+    downloadInvoiceDiscountExcel(filteredInvoiceDiscountRows, invoiceDiscountExportOptions);
+  }, [filteredInvoiceDiscountRows, invoiceDiscountExportOptions]);
 
   const handleDownloadDoorStockPdf = useCallback(() => {
     downloadDoorStockTransportPdf(filteredDoorStockRows, normalizedDoorStockSettings, doorStockExportOptions);
@@ -1890,7 +1928,73 @@ export default function IncentivePage() {
             </p>
           ) : null}
         </div>
+        <div className="flex shrink-0 flex-nowrap gap-2">
+          <button
+            type="button"
+            disabled={loading || filteredInvoiceDiscountRows.length === 0}
+            onClick={handleDownloadInvoiceDiscountPdf}
+            className={`${downloadPdfButtonClass} whitespace-nowrap`}
+          >
+            Download PDF
+          </button>
+          <button
+            type="button"
+            disabled={loading || filteredInvoiceDiscountRows.length === 0}
+            onClick={handleDownloadInvoiceDiscountExcel}
+            className={`${downloadPdfButtonClass} whitespace-nowrap`}
+          >
+            Download Excel
+          </button>
+        </div>
       </div>
+
+      <TableFiltersBar>
+        <label className={filterLabelNarrow}>
+          From date
+          <input
+            type="date"
+            value={invoiceDiscountFilters.dateFrom}
+            onChange={(e) => setInvoiceDiscountFilters((f) => ({ ...f, dateFrom: e.target.value }))}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabelNarrow}>
+          To date
+          <input
+            type="date"
+            value={invoiceDiscountFilters.dateTo}
+            onChange={(e) => setInvoiceDiscountFilters((f) => ({ ...f, dateTo: e.target.value }))}
+            className={filterControl}
+          />
+        </label>
+        <label className={filterLabel}>
+          Discount type
+          <select
+            value={invoiceDiscountFilters.discountMode}
+            onChange={(e) => setInvoiceDiscountFilters((f) => ({ ...f, discountMode: e.target.value }))}
+            className={filterControl}
+          >
+            <option value="">All types</option>
+            <option value="whole_invoice">Whole invoice</option>
+            <option value="per_bag">Per bag</option>
+          </select>
+        </label>
+        <label className={filterLabel}>
+          Customer
+          <select
+            value={invoiceDiscountFilters.customer}
+            onChange={(e) => setInvoiceDiscountFilters((f) => ({ ...f, customer: e.target.value }))}
+            className={filterControl}
+          >
+            <option value="">All customers</option>
+            {invoiceDiscountCustomerOptions.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </TableFiltersBar>
 
       <div className={mobileCardList}>
         {loading ? (
@@ -1899,7 +2003,9 @@ export default function IncentivePage() {
           </p>
         ) : filteredInvoiceDiscountRows.length === 0 ? (
           <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-            No invoice discount promotions yet. Record them on the Promotions page.
+            {invoiceDiscountRows.length === 0
+              ? 'No invoice discount promotions yet. Record them on the Promotions page.'
+              : 'No invoice discounts match these filters.'}
           </p>
         ) : (
           pagedInvoiceDiscountRows.map((r) => (
@@ -1941,7 +2047,9 @@ export default function IncentivePage() {
             ) : filteredInvoiceDiscountRows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
-                  No invoice discount promotions yet. Record them on the Promotions page.
+                  {invoiceDiscountRows.length === 0
+                    ? 'No invoice discount promotions yet. Record them on the Promotions page.'
+                    : 'No invoice discounts match these filters.'}
                 </td>
               </tr>
             ) : (

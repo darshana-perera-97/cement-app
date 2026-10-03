@@ -491,6 +491,51 @@ const emptyForm = () => ({
   driverName: '',
 });
 
+function chequeLineFromPayment(payment) {
+  const paymentType = String(payment?.paymentType ?? 'cheque').trim().toLowerCase();
+  return newChequeLine({
+    paymentType:
+      paymentType === 'cash' || paymentType === 'bank_transfer' ? paymentType : 'cheque',
+    chequeNumber: payment?.chequeNumber || '',
+    chequeDate: payment?.chequeDate || todayYmdLocal(),
+    amount: payment?.amount != null && payment.amount !== '' ? String(payment.amount) : '',
+    amountManual: true,
+    bankAccountId: payment?.bankAccountId || '',
+  });
+}
+
+function activePoPayments(cheques) {
+  const list = (Array.isArray(cheques) ? cheques : []).filter((c) => c && !c.cancelled);
+  return list.length > 0 ? list.map(chequeLineFromPayment) : [newChequeLine()];
+}
+
+function formFromPurchaseOrder(po) {
+  const lines = poLineItems(po);
+  const chequePerProduct = String(po?.chequeMode ?? '').trim() !== 'shared';
+  const sourceLines = lines.length > 0 ? lines : [{ product: '', quantity: '', unitPrice: '' }];
+  const sharedCheques = activePoPayments(po?.cheques);
+  return {
+    date: po?.date || todayYmdLocal(),
+    distributorId: po?.distributorId || '',
+    distributionLocation: po?.distributionLocation || '',
+    chequePerProduct,
+    doorStock: !!po?.doorStock || String(po?.notes ?? '').trim().toLowerCase() === 'door step',
+    items: sourceLines.map((item) =>
+      newItemLine({
+        product: item.product || '',
+        quantity: item.quantity != null && item.quantity !== '' ? String(item.quantity) : '',
+        unitPrice: item.unitPrice != null && item.unitPrice !== '' ? String(item.unitPrice) : '',
+        priceFromLast: false,
+        cheques: chequePerProduct ? activePoPayments(item.cheques || po?.cheques) : [newChequeLine()],
+      }),
+    ),
+    cheques: chequePerProduct ? [newChequeLine()] : sharedCheques,
+    vehicleNumber: po?.vehicleNumber || '',
+    driverId: po?.driverId || '',
+    driverName: po?.driverName || '',
+  };
+}
+
 export default function PurchaseOrdersPage() {
   const [rows, setRows] = useState([]);
   const [distributors, setDistributors] = useState([]);
@@ -498,6 +543,7 @@ export default function PurchaseOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingPo, setEditingPo] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [lastPrices, setLastPrices] = useState({});
   const [loadingPrices, setLoadingPrices] = useState(false);
@@ -661,6 +707,15 @@ export default function PurchaseOrdersPage() {
     return lorryNumbers;
   }, [lorryNumbers, form.vehicleNumber]);
 
+  const driverSelectOptions = useMemo(() => {
+    const id = String(form.driverId ?? '').trim();
+    const name = String(form.driverName ?? '').trim();
+    if (id && name && !drivers.some((d) => d.id === id)) {
+      return [{ id, name, driverLicense: '' }, ...drivers];
+    }
+    return drivers;
+  }, [drivers, form.driverId, form.driverName]);
+
   const selectedDistributor = useMemo(
     () => distributors.find((d) => d.id === form.distributorId) || null,
     [distributors, form.distributorId],
@@ -675,6 +730,28 @@ export default function PurchaseOrdersPage() {
     () => distributorLocations(selectedDistributor),
     [selectedDistributor],
   );
+
+  const locationSelectOptions = useMemo(() => {
+    const current = String(form.distributionLocation ?? '').trim();
+    if (
+      current &&
+      !selectedDistributorLocations.some((l) => l.toLowerCase() === current.toLowerCase())
+    ) {
+      return [current, ...selectedDistributorLocations];
+    }
+    return selectedDistributorLocations;
+  }, [selectedDistributorLocations, form.distributionLocation]);
+
+  const productsForLine = (item) => {
+    const current = String(item?.product ?? '').trim();
+    if (
+      current &&
+      !distributorProducts.some((p) => p.toLowerCase() === current.toLowerCase())
+    ) {
+      return [current, ...distributorProducts];
+    }
+    return distributorProducts;
+  };
 
   const loadLastPrices = useCallback(async (distributorId) => {
     if (!distributorId) {
@@ -737,6 +814,7 @@ export default function PurchaseOrdersPage() {
   );
 
   const openModal = () => {
+    setEditingPo(null);
     setForm(emptyForm());
     setLastPrices({});
     setSaveError(null);
@@ -747,9 +825,26 @@ export default function PurchaseOrdersPage() {
     setModalOpen(true);
   };
 
+  const openEditModal = (po, e) => {
+    e?.stopPropagation?.();
+    if (!isAdmin() || !po?.id || po.cancelled) return;
+    setEditingPo(po);
+    setForm(formFromPurchaseOrder(po));
+    setLastPrices({});
+    setSaveError(null);
+    loadDistributors();
+    loadDrivers();
+    loadLorries();
+    loadBankAccounts();
+    if (po.distributorId) loadLastPrices(po.distributorId);
+    setDetailRow(null);
+    setModalOpen(true);
+  };
+
   const closeModal = () => {
     if (bankSaving) return;
     setModalOpen(false);
+    setEditingPo(null);
     setSaveError(null);
     setBankAccountModal(null);
     setBankSaveError(null);
@@ -1030,13 +1125,13 @@ export default function PurchaseOrdersPage() {
       return;
     }
     const distributionLocation = String(form.distributionLocation || '').trim();
-    if (selectedDistributorLocations.length > 0 && !distributionLocation) {
+    if (locationSelectOptions.length > 0 && !distributionLocation) {
       setSaveError('Select a distribution location.');
       return;
     }
     if (
       distributionLocation &&
-      !selectedDistributorLocations.some(
+      !locationSelectOptions.some(
         (l) => l.toLowerCase() === distributionLocation.toLowerCase(),
       )
     ) {
@@ -1125,36 +1220,50 @@ export default function PurchaseOrdersPage() {
       cheques = parsed.cheques;
     }
 
+    const payload = {
+      date: form.date,
+      distributorId: form.distributorId,
+      ...(distributionLocation ? { distributionLocation } : {}),
+      vehicleNumber: resolvedVehicle,
+      driverName,
+      ...(driverId ? { driverId } : {}),
+      chequePerProduct: !!form.chequePerProduct,
+      doorStock: !!form.doorStock,
+      cheques,
+      items,
+    };
+
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch(`${apiBase}/api/purchase-orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: form.date,
-          distributorId: form.distributorId,
-          ...(distributionLocation ? { distributionLocation } : {}),
-          vehicleNumber: resolvedVehicle,
-          driverName,
-          ...(driverId ? { driverId } : {}),
-          chequePerProduct: !!form.chequePerProduct,
-          doorStock: !!form.doorStock,
-          cheques,
-          items,
-          createdBy: username,
-        }),
-      });
+      const isEdit = !!editingPo?.id;
+      const res = await (isEdit ? authFetch : fetch)(
+        isEdit
+          ? `${apiBase}/api/purchase-orders/${encodeURIComponent(editingPo.id)}`
+          : `${apiBase}/api/purchase-orders`,
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isEdit ? { ...payload, updatedBy: username } : { ...payload, createdBy: username },
+          ),
+        },
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setSaveError(data.error || 'Save failed');
         return;
       }
       await load();
+      const saved = isEdit ? data.po : null;
       closeModal();
-      const created = Array.isArray(data.created) ? data.created : [];
-      if (created.length === 1) {
-        setDetailRow(created[0]);
+      if (saved?.id) {
+        setDetailRow(saved);
+      } else {
+        const created = Array.isArray(data.created) ? data.created : [];
+        if (created.length === 1) {
+          setDetailRow(created[0]);
+        }
       }
     } catch {
       setSaveError('Could not reach the server.');
@@ -1266,6 +1375,7 @@ export default function PurchaseOrdersPage() {
   };
 
   const adminCanCancel = (po) => isAdmin() && po && !po.cancelled;
+  const adminCanEdit = (po) => isAdmin() && po?.id && !po.cancelled;
 
   return (
     <div className="space-y-5">
@@ -1383,6 +1493,15 @@ export default function PurchaseOrdersPage() {
                     >
                       Details
                     </button>
+                    {adminCanEdit(r) ? (
+                      <button
+                        type="button"
+                        onClick={(e) => openEditModal(r, e)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                      >
+                        Edit
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => openPoPdfPreview(r)}
@@ -1476,6 +1595,15 @@ export default function PurchaseOrdersPage() {
                         >
                           Details
                         </button>
+                        {adminCanEdit(r) ? (
+                          <button
+                            type="button"
+                            onClick={(e) => openEditModal(r, e)}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1531,6 +1659,15 @@ export default function PurchaseOrdersPage() {
         actions={
           detailRow ? (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              {adminCanEdit(detailRow) ? (
+                <button
+                  type="button"
+                  onClick={(e) => openEditModal(detailRow, e)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50"
+                >
+                  Edit purchase order
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => openPoPdfPreview(detailRow)}
@@ -1614,11 +1751,18 @@ export default function PurchaseOrdersPage() {
           >
             <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
               <h2 id="po-modal-title" className="text-lg font-semibold text-slate-900">
-                New purchase order sheet
+                {editingPo
+                  ? `Edit ${editingPo.poNumber || 'purchase order'}`
+                  : 'New purchase order sheet'}
               </h2>
               <p className="mt-1 text-sm text-slate-500">
+                {editingPo
+                  ? 'The PO number stays the same. '
+                  : ''}
                 {form.chequePerProduct
-                  ? 'Each product line becomes a separate PO with its own payment(s).'
+                  ? editingPo
+                    ? 'Extra product lines are saved as new purchase orders.'
+                    : 'Each product line becomes a separate PO with its own payment(s).'
                   : 'All products are listed in one table, then payment details for the whole order.'}{' '}
                 Logged in as {getUsername() || '—'}.
                 {loadingPrices ? ' Loading last invoice prices…' : ''}
@@ -1656,25 +1800,25 @@ export default function PurchaseOrdersPage() {
                 <label className="block text-sm">
                   <span className="font-medium text-slate-700">Distribution location</span>
                   <select
-                    required={form.distributorId && selectedDistributorLocations.length > 0}
+                    required={form.distributorId && locationSelectOptions.length > 0}
                     value={form.distributionLocation}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, distributionLocation: e.target.value }))
                     }
                     className={`${filterControl} mt-1.5`}
-                    disabled={!form.distributorId || selectedDistributorLocations.length === 0}
+                    disabled={!form.distributorId || locationSelectOptions.length === 0}
                     title="Locations are managed under Shop → Distributors."
                   >
                     {!form.distributorId ? (
                       <option value="">Select distributor first…</option>
-                    ) : selectedDistributorLocations.length === 0 ? (
+                    ) : locationSelectOptions.length === 0 ? (
                       <option value="">No locations — add under Shop</option>
                     ) : (
                       <>
-                        {selectedDistributorLocations.length > 1 ? (
+                        {locationSelectOptions.length > 1 ? (
                           <option value="">Select location…</option>
                         ) : null}
-                        {selectedDistributorLocations.map((loc) => (
+                        {locationSelectOptions.map((loc) => (
                           <option key={loc} value={loc}>
                             {loc}
                           </option>
@@ -1758,7 +1902,7 @@ export default function PurchaseOrdersPage() {
                                   aria-label={`Product ${idx + 1}`}
                                 >
                                   <option value="">Select…</option>
-                                  {distributorProducts.map((p) => (
+                                  {productsForLine(item).map((p) => (
                                     <option key={p} value={p}>
                                       {formatProductNameWithCode(p) || p}
                                     </option>
@@ -1846,7 +1990,7 @@ export default function PurchaseOrdersPage() {
                                 className={`${filterControl} mt-1`}
                               >
                                 <option value="">Select…</option>
-                                {distributorProducts.map((p) => (
+                                {productsForLine(item).map((p) => (
                                   <option key={p} value={p}>
                                     {formatProductNameWithCode(p) || p}
                                   </option>
@@ -2058,12 +2202,12 @@ export default function PurchaseOrdersPage() {
                       value={form.driverId}
                       onChange={(e) => handleDriverSelect(e.target.value)}
                       className={`${filterControl} mt-1.5`}
-                      disabled={drivers.length === 0}
+                      disabled={driverSelectOptions.length === 0}
                     >
                       <option value="">
-                        {drivers.length === 0 ? 'No drivers in Users yet' : 'Select driver…'}
+                        {driverSelectOptions.length === 0 ? 'No drivers in Users yet' : 'Select driver…'}
                       </option>
-                      {drivers.map((d) => (
+                      {driverSelectOptions.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.name}
                           {d.driverLicense ? ` · ${d.driverLicense}` : ''}
@@ -2071,7 +2215,7 @@ export default function PurchaseOrdersPage() {
                       ))}
                     </select>
                     <span className="mt-1 block text-xs font-normal text-slate-400">
-                      {drivers.length === 0
+                      {driverSelectOptions.length === 0
                         ? 'Add staff with role Driver under Users to select them here.'
                         : 'Drivers come from Users with role Driver.'}
                     </span>
@@ -2099,7 +2243,13 @@ export default function PurchaseOrdersPage() {
                   disabled={saving}
                   className="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60"
                 >
-                  {saving ? <LoadingSpinner label="Generating POs…" size="sm" /> : 'Generate purchase order(s)'}
+                  {saving ? (
+                    <LoadingSpinner label={editingPo ? 'Saving…' : 'Generating POs…'} size="sm" />
+                  ) : editingPo ? (
+                    'Save changes'
+                  ) : (
+                    'Generate purchase order(s)'
+                  )}
                 </button>
               </div>
             </form>
