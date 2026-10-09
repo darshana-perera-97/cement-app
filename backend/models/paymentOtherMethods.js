@@ -550,6 +550,7 @@ function isPaymentApprovalPending(p) {
 }
 
 function isPaymentCreditActive(p) {
+  if (p?.cancelled) return false;
   if (!p?.requiresApproval) return true;
   return normalizeApprovalStatus(p.approvalStatus) === 'approved';
 }

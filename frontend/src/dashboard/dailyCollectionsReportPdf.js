@@ -265,7 +265,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   y = addSectionTitle(
     doc,
     'Cheque list',
-    `Cheques on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
+    `Cheques collected on ${reportDate || '—'}, with returned cheques deducted on the day they bounce${userLabel ? ` · ${userLabel}` : ''}.`,
   );
 
   const chequeHeadRow = ['Shop', 'Cheque date', 'Amount', 'Cheque #', 'Bill #', 'Deposited'];
@@ -284,7 +284,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             moneyCell(r.amount),
             r.chequeNumber || '—',
             r.billNumber || '—',
-            r.chequeDeposited ? 'Yes' : 'Pending',
+            r.isReturnDeduction ? 'Returned' : r.chequeDeposited ? 'Yes' : 'Pending',
           ];
           if (showInvoiceNumber) row.splice(4, 0, r.invoiceNumber || '—');
           if (showRecordedBy) row.push(r.recordedBy || '—');

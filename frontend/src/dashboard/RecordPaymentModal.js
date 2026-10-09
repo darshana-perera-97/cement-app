@@ -778,8 +778,8 @@ export default function RecordPaymentModal({
                       Credit bills this payment is for
                     </legend>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      Optional. Select opening balance (shown as an invoice) and/or outstanding bills. Customer balances still follow
-                      opening balance first, then oldest bills, unless you allocate amounts per invoice.
+                      Optional. Return cheques are settled first, then the opening balance, then the oldest invoices. Selecting
+                      bills here does not change that order.
                     </p>
                     {customerBillOptions.length === 0 ? (
                       <p className="mt-3 text-sm text-slate-500">No outstanding credit bills for this customer.</p>
@@ -801,9 +801,16 @@ export default function RecordPaymentModal({
                                 <span className="min-w-0 flex-1">
                                   <span className="flex flex-col gap-0.5 sm:block">
                                     <span className="font-medium tabular-nums text-slate-900">
-                                      {b.isOpeningBalance
-                                        ? 'Opening balance'
-                                        : b.billDate || '—'}
+                                      {b.isReturnCheque
+                                        ? `Return cheque ${b.invoiceNumber || ''}`.trim()
+                                        : b.isOpeningBalance
+                                          ? 'Opening balance'
+                                          : b.billDate || '—'}
+                                      {b.isReturnCheque ? (
+                                        <span className="ml-2 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-900">
+                                          Return
+                                        </span>
+                                      ) : null}
                                       {b.isOpeningBalance ? (
                                         <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
                                           Invoice

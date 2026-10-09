@@ -151,6 +151,7 @@ function accountLabelFromSnap(snap, bankAccountId, bankAccounts) {
 }
 
 function isPaymentApprovedForBank(p) {
+  if (p?.cancelled) return false;
   if (!p?.requiresApproval) return true;
   return String(p.approvalStatus ?? 'pending').trim().toLowerCase() === 'approved';
 }

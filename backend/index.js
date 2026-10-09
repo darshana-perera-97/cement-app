@@ -31,6 +31,9 @@ const {
   computeRemainingAmount,
   paymentCreditToCustomer,
   paymentGrossCredit,
+  paymentSettlementCredit,
+  isReturnChequeBillId,
+  listCustomerReturnedCheques,
   computeBillPaymentAllocation,
   effectiveBillTotal,
   openingBalanceBillId,
@@ -1487,6 +1490,7 @@ function validateAppliedBillIdsForCustomer(bills, cust, ids) {
   if (!ids.length) return null;
   const nk = normalizeCustomerName(cust.name);
   for (const id of ids) {
+    if (isReturnChequeBillId(id)) continue;
     if (isOpeningBalanceBillId(id, cust.id)) {
       if (toNonNegMoney(cust.pastBill) <= 0) {
         return 'This customer has no opening balance to select';
@@ -1556,8 +1560,27 @@ function parseBillCashAllocationsFromBody(body) {
 function validateBillCashAllocationsForCustomer(bills, cust, allocations, payments = [], promotions = []) {
   if (!allocations.length) return null;
   const nk = normalizeCustomerName(cust.name);
-  const { pastPaid } = computeBillPaymentAllocation(cust, bills, payments, promotions);
+  const { pastPaid, paidByReturnChequeId, returnCheques } = computeBillPaymentAllocation(
+    cust,
+    bills,
+    payments,
+    promotions,
+  );
+  const returnOutstanding = new Map();
+  for (const rc of returnCheques || []) {
+    const paid = paidByReturnChequeId?.get(rc.id) || 0;
+    returnOutstanding.set(rc.id, Math.max(0, Math.round((rc.amount - paid) * 100) / 100));
+  }
   for (const { billId, cashAmount } of allocations) {
+    if (isReturnChequeBillId(billId)) {
+      if (!returnOutstanding.has(billId)) return 'Return cheque was not found for this customer';
+      if (cashAmount <= 0) return 'Each bill allocation must have an amount greater than 0';
+      const left = returnOutstanding.get(billId) || 0;
+      if (cashAmount > left + 0.009) {
+        return 'Amount for a return cheque cannot exceed what is still unpaid';
+      }
+      continue;
+    }
     if (isOpeningBalanceBillId(billId, cust.id)) {
       const pastTotal = toNonNegMoney(cust.pastBill);
       if (pastTotal <= 0) return 'This customer has no opening balance to allocate';
@@ -1582,12 +1605,25 @@ function validateBillCashAllocationsForCustomer(bills, cust, allocations, paymen
   return null;
 }
 
-function attachBillCashAllocationsToPaymentRow(row, bills, allocations, cust) {
+function attachBillCashAllocationsToPaymentRow(row, bills, allocations, cust, payments = []) {
   if (!allocations.length) {
     delete row.billCashAllocations;
     return;
   }
   row.billCashAllocations = allocations.map(({ billId, cashAmount }) => {
+    if (isReturnChequeBillId(billId)) {
+      const rc = (cust ? listCustomerReturnedCheques(cust, payments) : []).find((item) => item.id === billId);
+      const label = rc?.chequeNumber ? `#${rc.chequeNumber}` : 'Return cheque';
+      return {
+        billId,
+        cashAmount: toNonNegMoney(cashAmount),
+        billDate: rc?.returnDate,
+        billTotal: rc?.amount,
+        invoiceNumber: label,
+        details: 'Return cheque',
+        isReturnCheque: true,
+      };
+    }
     if (cust && isOpeningBalanceBillId(billId, cust.id)) {
       return {
         billId,
@@ -2085,13 +2121,8 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
 
   for (const cust of customers) {
     const settlementDays = getOverdueDaysForCustomer(overdueDates, cust.id);
-    const { paidByBillId, pastPaid, custBills } = computeBillPaymentAllocation(
-      cust,
-      bills,
-      payments,
-      promotions,
-      returnsRows,
-    );
+    const { paidByBillId, pastPaid, custBills, paidByReturnChequeId, returnCheques } =
+      computeBillPaymentAllocation(cust, bills, payments, promotions, returnsRows);
 
     const pastOwed = toNonNegMoney(cust.pastBill);
     const openingCredit = sumItemReturnForBill(returnsRows, openingBalanceBillId(cust.id));
@@ -2135,6 +2166,29 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
           settlementDays,
         });
       }
+    }
+
+    for (const rc of returnCheques || []) {
+      const paid = paidByReturnChequeId?.get(rc.id) || 0;
+      const remaining = Math.round((rc.amount - paid) * 100) / 100;
+      if (remaining <= 0) continue;
+      const label = rc.chequeNumber ? `#${rc.chequeNumber}` : 'Return cheque';
+      const detailParts = ['Return cheque', rc.chequeBank || null, rc.receiptNumber ? `receipt ${rc.receiptNumber}` : null]
+        .filter(Boolean)
+        .join(' · ');
+      pushIfMatch({
+        id: rc.id,
+        customerName: cust.name,
+        billDate: rc.returnDate,
+        dueDate: rc.returnDate,
+        daysFromBillDate: daysFromDueToToday(rc.returnDate, todayYmd),
+        outstandingAmount: remaining,
+        billTotal: rc.amount,
+        invoiceNumber: label,
+        details: detailParts,
+        settlementDays,
+        isReturnCheque: true,
+      });
     }
   }
 
@@ -2183,6 +2237,9 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
   rows.sort((a, b) => {
     const shopCmp = String(a.customerName ?? '').localeCompare(String(b.customerName ?? ''));
     if (shopCmp !== 0) return shopCmp;
+    if (Boolean(a.isReturnCheque) !== Boolean(b.isReturnCheque)) {
+      return a.isReturnCheque ? -1 : 1;
+    }
     if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
       return a.isOpeningBalance ? -1 : 1;
     }
@@ -3960,6 +4017,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
 
     for (const p of payments) {
       if (p.customerId !== cust.id) continue;
+      if (p.cancelled) continue;
       const paymentId = String(p.id ?? '').trim();
       const hits = paymentId ? affectedByPaymentId.get(paymentId) || [] : [];
       transactions.push({
@@ -3976,13 +4034,13 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
         ]
           .filter(Boolean)
           .join(' · ') || '—',
-        amount: paymentGrossCredit(p),
+        amount: paymentSettlementCredit(p),
         direction: 'credit',
-        netCredit: paymentCreditToCustomer(p),
+        netCredit: paymentSettlementCredit(p),
         paymentMethods: paymentMethodLabels(p),
         entryNote: [p.note, invoiceActorPhrase(users, p.recordedBy)].filter(Boolean).join(' · '),
-        returnedChequeAmount: returnedChequeLedgerAmount(p),
-        returnedChequeDetails: returnedChequeLedgerNote(p),
+        returnedChequeAmount: 0,
+        returnedChequeDetails: '',
         applications: hits.map((hit) => ({
           billId: hit.billId,
           invoiceNumber: hit.invoiceNumber,
@@ -4001,13 +4059,17 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
           date: returnDate,
           sortAt: c.chequeReturnedAt || p.createdAt || `${returnDate}T12:00:00`,
           type: 'Returned cheque',
+          invoiceNumber: c.chequeNumber ? `#${c.chequeNumber}` : 'Return cheque',
           details: [
-            c.chequeNumber ? `#${c.chequeNumber}` : null,
-            c.chequeDate ? `converting ${c.chequeDate}` : null,
+            c.chequeNumber ? `Cheque #${c.chequeNumber} returned` : 'Cheque returned',
+            c.chequeBank || null,
+            c.chequeDate ? `dated ${c.chequeDate}` : null,
+            p.billNumber ? `receipt ${p.billNumber}` : null,
             c.chequeReturnedBy ? `by ${c.chequeReturnedBy}` : null,
+            'Still to pay until a later collection settles it',
           ]
             .filter(Boolean)
-            .join(' · ') || 'Cheque returned',
+            .join(' · '),
           amount: Number(c.amount) || 0,
           direction: 'charge',
         });
@@ -4732,7 +4794,7 @@ app.post('/api/payments', async (req, res) => {
     attachOtherPaymentMethodsToRow(row, parsedOther);
     attachApprovalMetaToRow(row, parsedOther);
     if (parsedBillCash.allocations.length > 0) {
-      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust);
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust, payments);
     } else {
       attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids, cust);
     }
@@ -4881,6 +4943,9 @@ app.patch('/api/payments/:id', async (req, res) => {
     }
 
     const existing = payments[idx];
+    if (existing.cancelled) {
+      return res.status(400).json({ error: 'This payment receipt is cancelled and cannot be edited.' });
+    }
     const auth = getAuthFromRequest(req);
     const staffUser = await resolveStaffUser(auth);
     if (staffMustUseTodayRecordDate(staffUser)) {
@@ -4913,7 +4978,7 @@ app.patch('/api/payments/:id', async (req, res) => {
     attachOtherPaymentMethodsToRow(row, parsedOther);
     attachApprovalMetaToRow(row, parsedOther, existing);
     if (parsedBillCash.allocations.length > 0) {
-      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust);
+      attachBillCashAllocationsToPaymentRow(row, billsList, parsedBillCash.allocations, cust, payments);
     } else {
       attachAppliedBillsToPaymentRow(row, billsList, parsedApplied.ids, cust);
     }
@@ -4937,6 +5002,55 @@ app.patch('/api/payments/:id', async (req, res) => {
   }
 });
 
+/** Admin: void a payment receipt. It stays on the payments list, marked cancelled, and no longer credits the customer. */
+app.post('/api/payments/:id/cancel', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to cancel payment receipts' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can cancel payment receipts' });
+  }
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Payment id is required' });
+    }
+    const body = req.body || {};
+    const cancelledBy = String(body.cancelledBy ?? auth.username ?? '').trim();
+    if (!cancelledBy) {
+      return res.status(400).json({ error: 'cancelledBy (username) is required' });
+    }
+
+    const payments = await readPayments();
+    const idx = payments.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+    if (payments[idx].cancelled) {
+      return res.status(400).json({ error: 'This payment receipt is already cancelled' });
+    }
+
+    const cancelledAt = new Date().toISOString();
+    const row = {
+      ...payments[idx],
+      cancelled: true,
+      cancelledAt,
+      cancelledBy,
+    };
+    payments[idx] = row;
+    await writePayments(payments);
+
+    const billsList = await readBills();
+    await refreshCustomerBalancesForCustomerIds(billsList, payments, row.customerId);
+
+    res.json(await attachCollectorName(row, 'recordedBy'));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to cancel payment receipt' });
+  }
+});
+
 /** Cheques (by cheque date) not yet marked as deposited to the bank — default `date` is today (server local). */
 app.get('/api/cheque-deposit-queue', async (req, res) => {
   try {
@@ -4954,6 +5068,7 @@ app.get('/api/cheque-deposit-queue', async (req, res) => {
     const payments = await readPayments();
     const items = [];
     for (const p of payments) {
+      if (p.cancelled) continue;
       for (const cheque of getPaymentCheques(p)) {
         if (cheque.chequeDeposited || cheque.chequeReturned) continue;
         const cd = String(cheque.chequeDate ?? '').slice(0, 10);
@@ -4993,6 +5108,9 @@ app.patch('/api/payments/:id/cheque-deposited', async (req, res) => {
     const idx = payments.findIndex((p) => p.id === id);
     if (idx < 0) {
       return res.status(404).json({ error: 'Payment not found' });
+    }
+    if (payments[idx].cancelled) {
+      return res.status(400).json({ error: 'This payment receipt is cancelled' });
     }
     const chequeId = String(body.chequeId ?? '').trim();
     let bankAccountId = String(body.bankAccountId ?? '').trim();
@@ -5043,6 +5161,9 @@ app.patch('/api/payments/:id/cheque-returned', async (req, res) => {
     const idx = payments.findIndex((p) => p.id === id);
     if (idx < 0) {
       return res.status(404).json({ error: 'Payment not found' });
+    }
+    if (payments[idx].cancelled) {
+      return res.status(400).json({ error: 'This payment receipt is cancelled' });
     }
     const chequeId = String(body.chequeId ?? '').trim();
     let returnedAt = String(body.returnedAt ?? body.date ?? '').trim();
@@ -5174,6 +5295,9 @@ app.post('/api/cheque-deposits', async (req, res) => {
         return res.status(404).json({ error: `Payment not found for cheque ${i + 1}` });
       }
       const current = payments[idx];
+      if (current.cancelled) {
+        return res.status(400).json({ error: `This payment receipt is cancelled (cheque ${i + 1})` });
+      }
       const result = markChequeDepositedOnPayment(current, {
         chequeId,
         recordedBy,
@@ -5696,6 +5820,7 @@ app.get('/api/activity', async (req, res) => {
       });
     }
     for (const r of payments) {
+      if (r.cancelled) continue;
       items.push({
         kind: 'payment',
         id: r.id,

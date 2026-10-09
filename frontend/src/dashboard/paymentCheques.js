@@ -46,7 +46,12 @@ export function getPaymentCheques(p) {
   ];
 }
 
+export function isPaymentCancelled(p) {
+  return Boolean(p?.cancelled);
+}
+
 export function chequePortion(p) {
+  if (isPaymentCancelled(p)) return 0;
   const fromArray = getPaymentCheques(p).reduce((s, c) => s + c.amount, 0);
   if (fromArray > 0) return fromArray;
   return Math.max(0, Number(p.chequeAmount) || 0);
@@ -54,6 +59,7 @@ export function chequePortion(p) {
 
 /** Cash credited on a payment (physical cash from customer). */
 export function cashPortion(p) {
+  if (isPaymentCancelled(p)) return 0;
   if (p.cashAmount !== undefined || p.chequeAmount !== undefined) {
     return Math.max(0, Number(p.cashAmount) || 0);
   }
@@ -126,12 +132,14 @@ export function getPaymentOnlineTransfers(p) {
 }
 
 export function cdmPortion(p) {
+  if (isPaymentCancelled(p)) return 0;
   const fromArray = getPaymentCdmDeposits(p).reduce((s, d) => s + d.amount, 0);
   if (fromArray > 0) return fromArray;
   return Math.max(0, Number(p?.cdmAmount) || 0);
 }
 
 export function onlineTransferPortion(p) {
+  if (isPaymentCancelled(p)) return 0;
   const fromArray = getPaymentOnlineTransfers(p).reduce((s, t) => s + t.amount, 0);
   if (fromArray > 0) return fromArray;
   return Math.max(0, Number(p?.onlineTransferAmount) || 0);
@@ -141,6 +149,7 @@ export function onlineTransferPortion(p) {
 export function buildChequeTableRows(payments, mapRow) {
   const rows = [];
   for (const p of payments) {
+    if (isPaymentCancelled(p)) continue;
     const cheques = getPaymentCheques(p);
     if (cheques.length === 0) continue;
     for (const c of cheques) {

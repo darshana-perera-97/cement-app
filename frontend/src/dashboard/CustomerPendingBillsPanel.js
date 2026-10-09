@@ -173,8 +173,8 @@ export default function CustomerPendingBillsPanel({
       <div>
         <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
         <p className="mt-0.5 text-sm text-slate-500">
-          Unpaid opening balance and credit bills for this customer — remaining balance after payments,
-          including overdue bills past the {settlementDays}-day window.
+          Unpaid return cheques, opening balance, and credit bills. Return cheques stay ahead of invoices
+          when a collection is not split by bill. Invoices are due within {settlementDays} days.
         </p>
       </div>
 
@@ -246,8 +246,18 @@ export default function CustomerPendingBillsPanel({
               return (
                 <MobileRowCard
                   key={row.id}
-                  title={formatDisplayDate(row.billDate)}
-                  subtitle={row.isOpeningBalance ? 'Opening balance' : row.details || undefined}
+                  title={
+                    row.isReturnCheque
+                      ? `Return cheque ${row.invoiceNumber || ''}`.trim()
+                      : formatDisplayDate(row.billDate)
+                  }
+                  subtitle={
+                    row.isReturnCheque
+                      ? row.details || 'Returned cheque still to pay'
+                      : row.isOpeningBalance
+                        ? 'Opening balance'
+                        : row.details || undefined
+                  }
                   badge={
                     overdue ? (
                       <span className="inline-flex items-center rounded-lg bg-rose-50 px-2 py-1 text-xs font-semibold tabular-nums text-rose-700 ring-1 ring-rose-100">
@@ -316,7 +326,14 @@ export default function CustomerPendingBillsPanel({
                             : stickyFirstTd
                         }`}
                       >
-                        {formatDisplayDate(row.billDate)}
+                        {row.isReturnCheque
+                          ? `Return ${row.invoiceNumber || ''}`.trim()
+                          : formatDisplayDate(row.billDate)}
+                        {row.isReturnCheque ? (
+                          <span className="ml-2 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-900">
+                            Return
+                          </span>
+                        ) : null}
                         {row.isOpeningBalance ? (
                           <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
                             Opening

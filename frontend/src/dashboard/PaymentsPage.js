@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, isAdmin, isCollector, isManagerOrAdmin } from '../auth';
+import { authFetch, canEditDetails, getUsername, isAdmin, isCollector, isManagerOrAdmin } from '../auth';
 import PaymentReceiptPdfButton from './PaymentReceiptPdfButton';
 import {
   LoadingSpinner,
@@ -19,6 +19,8 @@ import {
   stickyFirstTh,
   stickyThead,
   useTablePagination,
+  modalPanelClass,
+  ModalBackdrop,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import RecordPaymentModal from './RecordPaymentModal';
@@ -55,6 +57,9 @@ export default function PaymentsPage() {
   const [dateTo, setDateTo] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
   const [detailPayment, setDetailPayment] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelError, setCancelError] = useState(null);
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
   const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
   const today = useMemo(() => todayYmdLocal(), []);
@@ -132,6 +137,7 @@ export default function PaymentsPage() {
           r.customerName,
           r.note,
           r.recordedBy,
+          r.cancelled ? 'cancelled' : '',
           String(r.amount),
           ...getPaymentCheques(r).flatMap((c) => [c.chequeDate, c.chequeNumber]),
           ...getPaymentCdmDeposits(r).flatMap((d) => [d.cdmNumber, d.cdmDate, d.bankAccountId]),
@@ -172,7 +178,7 @@ export default function PaymentsPage() {
   };
 
   const openPaymentEdit = (payment) => {
-    if (!payment?.id) return;
+    if (!payment?.id || payment.cancelled) return;
     setEditPayment(payment);
     setModalCustomerId(payment.customerId || '');
     setDetailPayment(null);
@@ -183,6 +189,50 @@ export default function PaymentsPage() {
     setModalOpen(false);
     setEditPayment(null);
     setModalCustomerId('');
+  };
+
+  const openCancelConfirm = (payment) => {
+    if (!isAdmin() || !payment?.id || payment.cancelled) return;
+    setCancelError(null);
+    setCancelTarget(payment);
+  };
+
+  const closeCancelConfirm = () => {
+    if (cancelBusy) return;
+    setCancelTarget(null);
+    setCancelError(null);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!cancelTarget?.id) return;
+    const username = getUsername();
+    if (!username) {
+      setCancelError('Sign in as admin to cancel payment receipts.');
+      return;
+    }
+    setCancelBusy(true);
+    setCancelError(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/payments/${encodeURIComponent(cancelTarget.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancelledBy: username }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCancelError(data.error || 'Could not cancel payment receipt');
+        return;
+      }
+      if (detailPayment?.id === cancelTarget.id) {
+        setDetailPayment({ ...detailPayment, ...data, cancelled: true });
+      }
+      setCancelTarget(null);
+      await load();
+    } catch {
+      setCancelError('Could not reach the server.');
+    } finally {
+      setCancelBusy(false);
+    }
   };
 
   return (
@@ -287,7 +337,15 @@ export default function PaymentsPage() {
             <MobileRowCard
               key={r.id}
               title={r.customerName || '—'}
-              subtitle={`${r.date || '—'} · Bill #${r.billNumber || '—'}`}
+              className={r.cancelled ? 'opacity-75' : ''}
+              subtitle={
+                <span className="inline-flex flex-wrap items-center gap-1">
+                  <span>{r.date || '—'}</span>
+                  <span>·</span>
+                  {r.cancelled ? <CancelledReceiptMark /> : null}
+                  <span className={r.cancelled ? 'line-through' : ''}>Bill #{r.billNumber || '—'}</span>
+                </span>
+              }
               fields={[
                 { label: 'Amount', value: `−${money(r.amount)}` },
                 { label: 'Recorded by', value: r.recordedBy || '—' },
@@ -350,17 +408,27 @@ export default function PaymentsPage() {
               pagedRows.map((r) => (
                 <tr
                   key={r.id}
-                  {...detailRowAttrs(() => setDetailPayment(r), 'hover:bg-slate-50/80')}
-                  aria-label={`Payment ${r.billNumber || r.id || ''}`}
+                  {...detailRowAttrs(
+                    () => setDetailPayment(r),
+                    `hover:bg-slate-50/80 ${r.cancelled ? 'opacity-75' : ''}`,
+                  )}
+                  aria-label={`Payment ${r.cancelled ? 'cancelled ' : ''}${r.billNumber || r.id || ''}`}
                 >
                   <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{r.date}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-sm font-semibold tabular-nums text-slate-800">
-                    {r.billNumber || '—'}
+                    <span className="inline-flex items-center gap-1.5">
+                      {r.cancelled ? <CancelledReceiptMark /> : null}
+                      <span className={r.cancelled ? 'text-slate-400 line-through' : ''}>{r.billNumber || '—'}</span>
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-900">{r.customerName || '—'}</p>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                  <td
+                    className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${
+                      r.cancelled ? 'text-slate-400 line-through' : 'text-emerald-700'
+                    }`}
+                  >
                     −{money(r.amount)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.recordedBy || '—'}</td>
@@ -420,7 +488,12 @@ export default function PaymentsPage() {
         actions={
           isCollector() || isManagerOrAdmin() ? (
             <div className="mt-4 flex flex-col gap-2">
-              {collectorMayPrintCashCollection(detailPayment) ? (
+              {detailPayment?.cancelled ? (
+                <p className="rounded-xl bg-rose-50 px-4 py-2.5 text-center text-xs font-medium text-rose-800 ring-1 ring-rose-100">
+                  This receipt is cancelled
+                  {detailPayment.cancelledBy ? ` by ${detailPayment.cancelledBy}` : ''}.
+                </p>
+              ) : collectorMayPrintCashCollection(detailPayment) ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -437,8 +510,10 @@ export default function PaymentsPage() {
                   {COLLECTOR_CASH_PRINT_TODAY_ONLY}
                 </p>
               )}
-              {isAdmin() ? <PaymentReceiptPdfButton payment={detailPayment} /> : null}
-              {canEditDetails() ? (
+              {isAdmin() && detailPayment && !detailPayment.cancelled ? (
+                <PaymentReceiptPdfButton payment={detailPayment} />
+              ) : null}
+              {canEditDetails() && detailPayment && !detailPayment.cancelled ? (
                 <button
                   type="button"
                   onClick={() => openPaymentEdit(detailPayment)}
@@ -447,11 +522,79 @@ export default function PaymentsPage() {
                   Edit payment
                 </button>
               ) : null}
+              {isAdmin() && detailPayment && !detailPayment.cancelled ? (
+                <button
+                  type="button"
+                  onClick={() => openCancelConfirm(detailPayment)}
+                  className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 ring-1 ring-rose-100 hover:bg-rose-100"
+                >
+                  Cancel receipt
+                </button>
+              ) : null}
             </div>
           ) : null
         }
       />
+
+      {cancelTarget ? (
+        <div className="fixed inset-0 z-[110] flex items-end justify-center p-4 sm:items-center">
+          <ModalBackdrop onClose={closeCancelConfirm} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-cancel-title"
+            className={`${modalPanelClass} w-full max-w-md`}
+          >
+            <h2 id="payment-cancel-title" className="text-lg font-bold text-slate-900">
+              Cancel payment receipt?
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              This will cancel receipt{' '}
+              <span className="font-semibold text-slate-900">#{cancelTarget.billNumber || '—'}</span>
+              {cancelTarget.customerName ? (
+                <>
+                  {' '}
+                  for <span className="font-semibold text-slate-900">{cancelTarget.customerName}</span>
+                </>
+              ) : null}
+              . The receipt stays on this page with a Cancelled mark in front of the bill number, and it no longer
+              reduces the customer balance. This cannot be undone.
+            </p>
+            {cancelError ? (
+              <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+                {cancelError}
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeCancelConfirm}
+                disabled={cancelBusy}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Keep receipt
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancel}
+                disabled={cancelBusy}
+                className="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-rose-500 disabled:opacity-60"
+              >
+                {cancelBusy ? 'Cancelling…' : 'Cancel receipt'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function CancelledReceiptMark() {
+  return (
+    <span className="inline-flex shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700 ring-1 ring-rose-100">
+      Cancelled
+    </span>
   );
 }
 

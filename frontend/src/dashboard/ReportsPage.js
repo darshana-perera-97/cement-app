@@ -16,7 +16,7 @@ import {
   stickyFirstTh,
   stickyThead,
 } from './tableToolbar';
-import { buildChequeTableRows, cdmPortion, chequePortion, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from './paymentCheques';
+import { buildChequeTableRows, cdmPortion, chequePortion, getPaymentCdmDeposits, getPaymentCheques, getPaymentOnlineTransfers, onlineTransferPortion } from './paymentCheques';
 import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import {
@@ -184,6 +184,7 @@ function buildShopRowsForRange(bills, payments, customerLocationMap, from, to, b
   }
 
   for (const p of payments) {
+    if (p?.cancelled) continue;
     if (!inDateRange(p.date, from, to)) continue;
     const row = ensure(p.customerName);
     row.cashIn += paymentTotal(p);
@@ -487,6 +488,7 @@ function groupDistributionByStock(rows, purchaseDateByStock = null) {
 
 /** Matches backend `paymentCreditToCustomer`: cash + cheque credited to the customer. */
 function paymentTotal(p) {
+  if (p?.cancelled) return 0;
   const total = Number(p.amount) || 0;
   if (total > 0) return total;
   return (Number(p.cashAmount) || 0) + (Number(p.chequeAmount) || 0);
@@ -494,6 +496,7 @@ function paymentTotal(p) {
 
 /** Physical cash in — treated as bank deposit on the payment date (same as Bank page). */
 function cashPortion(p) {
+  if (p?.cancelled) return 0;
   if (p.cashAmount !== undefined || p.chequeAmount !== undefined) {
     return Math.max(0, Number(p.cashAmount) || 0);
   }
@@ -503,6 +506,7 @@ function cashPortion(p) {
 function buildDailyBankRows(payments) {
   const map = new Map();
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const d = String(p.date ?? '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     const cash = cashPortion(p);
@@ -652,9 +656,63 @@ function dailyReportUserOptions(users) {
     });
 }
 
+function returnedChequesOnDate(payments, ymd) {
+  const rows = [];
+  for (const p of payments || []) {
+    if (p?.cancelled) continue;
+    for (const c of getPaymentCheques(p)) {
+      if (!c.chequeReturned) continue;
+      const returnDate = String(c.chequeReturnedAt || '').slice(0, 10);
+      if (returnDate !== ymd) continue;
+      const amount = Math.max(0, Number(c.amount) || 0);
+      if (amount <= 0) continue;
+      rows.push({ payment: p, cheque: c, amount });
+    }
+  }
+  return rows;
+}
+
+function emptyDailyShopRow(shop, customerLocationMap) {
+  const bagFields = Object.fromEntries(getCachedBrands().map((b) => [b.bagsField, 0]));
+  return {
+    shop,
+    location: customerLocationMap?.get(String(shop).toLowerCase()) || '',
+    ...bagFields,
+    totalBags: 0,
+    creditSales: 0,
+    billCount: 0,
+    cashIn: 0,
+    paymentCount: 0,
+    cashCollected: 0,
+    chequeCollected: 0,
+    cdmCollected: 0,
+    bankTransferCollected: 0,
+    cashInvoiceNumbers: '',
+  };
+}
+
+/** Subtract cheques returned on this day from shop collections and cheque totals. */
+function applyReturnedChequesToShopRows(rows, payments, ymd, customerLocationMap) {
+  const list = (rows || []).map((r) => ({ ...r }));
+  const byShop = new Map(list.map((r) => [r.shop, r]));
+  for (const item of returnedChequesOnDate(payments, ymd)) {
+    const shop = String(item.payment.customerName ?? '').trim() || '—';
+    let row = byShop.get(shop);
+    if (!row) {
+      row = emptyDailyShopRow(shop, customerLocationMap);
+      list.push(row);
+      byShop.set(shop, row);
+    }
+    row.chequeCollected = round2((Number(row.chequeCollected) || 0) - item.amount);
+    row.cashIn = round2((Number(row.cashIn) || 0) - item.amount);
+  }
+  return list;
+}
+
 function buildDailyCollectionUserRows(payments, users, ymd) {
   const map = new Map();
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const d = String(p.date ?? '').slice(0, 10);
     if (d !== ymd) continue;
     const matched = (users || []).find((u) => paymentMatchesStaffUser(p, u));
@@ -679,7 +737,37 @@ function buildDailyCollectionUserRows(payments, users, ymd) {
     cur.paymentCount += 1;
     map.set(id, cur);
   }
-  return [...map.values()].sort((a, b) => a.userLabel.localeCompare(b.userLabel));
+  for (const item of returnedChequesOnDate(payments, ymd)) {
+    const p = item.payment;
+    const matched = (users || []).find((u) => paymentMatchesStaffUser(p, u));
+    const id = matched?.id || `by:${normalizeUserKey(p.recordedBy) || 'unknown'}`;
+    const userLabel = matched ? staffUserLabel(matched) : String(p.recordedBy ?? '').trim() || 'Unknown';
+    const cur = map.get(id) || {
+      id,
+      userId: matched?.id || '',
+      userLabel,
+      cash: 0,
+      cheque: 0,
+      cdm: 0,
+      bankTransfer: 0,
+      collections: 0,
+      paymentCount: 0,
+    };
+    cur.cheque = round2(cur.cheque - item.amount);
+    cur.collections = round2(cur.collections - item.amount);
+    map.set(id, cur);
+  }
+  return [...map.values()]
+    .filter(
+      (r) =>
+        r.paymentCount > 0 ||
+        r.collections !== 0 ||
+        r.cash !== 0 ||
+        r.cheque !== 0 ||
+        r.cdm !== 0 ||
+        r.bankTransfer !== 0,
+    )
+    .sort((a, b) => a.userLabel.localeCompare(b.userLabel));
 }
 
 function sortDailyCollectionDetailRows(rows) {
@@ -708,6 +796,22 @@ function buildDailyCollectionChequeRows(payments, ymd, users = []) {
       recordedBy: recordedByDisplay(p, users),
     };
   });
+  for (const item of returnedChequesOnDate(payments, ymd)) {
+    const p = item.payment;
+    const c = item.cheque;
+    rows.push({
+      id: `return-${p.id || ymd}-${c.id || rows.length}`,
+      customerName: String(p.customerName ?? '').trim() || '—',
+      chequeDate: String(c.chequeReturnedAt || '').slice(0, 10) || ymd,
+      chequeNumber: c.chequeNumber || '—',
+      amount: round2(-item.amount),
+      chequeDeposited: false,
+      isReturnDeduction: true,
+      billNumber: p.billNumber != null ? String(p.billNumber) : '—',
+      invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
+      recordedBy: recordedByDisplay(p, users),
+    });
+  }
   rows.sort((a, b) => {
     const byShop = a.customerName.localeCompare(b.customerName);
     if (byShop !== 0) return byShop;
@@ -720,6 +824,7 @@ function buildDailyCollectionChequeRows(payments, ymd, users = []) {
 function buildDailyCollectionCdmRows(payments, ymd, users = []) {
   const rows = [];
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) continue;
     const deposits = getPaymentCdmDeposits(p);
@@ -746,6 +851,7 @@ function buildDailyCollectionCdmRows(payments, ymd, users = []) {
 function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
   const rows = [];
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) continue;
     const transfers = getPaymentOnlineTransfers(p);
@@ -805,6 +911,7 @@ function enrichDailyShopRows(baseRows, payments, ymd) {
   const bankTransferByShop = new Map();
   const cashInvoicesByShop = new Map();
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const d = String(p.date ?? '').slice(0, 10);
     if (d !== ymd) continue;
     const shop = String(p.customerName ?? '').trim() || '—';
@@ -1663,13 +1770,19 @@ export default function ReportsPage() {
       dailyReportDate,
       '',
     );
-    return enrichDailyShopRows(base, dailyReportPayments, dailyReportDate).filter(
+    return applyReturnedChequesToShopRows(
+      enrichDailyShopRows(base, dailyReportPayments, dailyReportDate),
+      dailyReportPayments,
+      dailyReportDate,
+      customerLocationMap,
+    ).filter(
       (r) =>
-        r.cashIn > 0 ||
-        r.cashCollected > 0 ||
-        r.chequeCollected > 0 ||
-        r.cdmCollected > 0 ||
-        r.bankTransferCollected > 0,
+        r.paymentCount > 0 ||
+        r.cashIn !== 0 ||
+        r.cashCollected !== 0 ||
+        r.chequeCollected !== 0 ||
+        r.cdmCollected !== 0 ||
+        r.bankTransferCollected !== 0,
     );
   }, [showDailyCollectionsReport, bills, dailyReportPayments, customerLocationMap, dailyReportDate]);
 
@@ -2292,20 +2405,20 @@ export default function ReportsPage() {
                               <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
                                 {r.paymentCount}
                               </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
-                                {r.cash > 0 ? money(r.cash) : '—'}
+                              <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cash < 0 ? 'font-semibold text-rose-800' : 'text-sky-800'}`}>
+                                {r.cash !== 0 ? money(r.cash) : '—'}
                               </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
-                                {r.cheque > 0 ? money(r.cheque) : '—'}
+                              <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cheque < 0 ? 'font-semibold text-rose-800' : 'text-violet-800'}`}>
+                                {r.cheque !== 0 ? money(r.cheque) : '—'}
                               </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
-                                {r.cdm > 0 ? money(r.cdm) : '—'}
+                              <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cdm < 0 ? 'font-semibold text-rose-800' : 'text-amber-800'}`}>
+                                {r.cdm !== 0 ? money(r.cdm) : '—'}
                               </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
-                                {r.bankTransfer > 0 ? money(r.bankTransfer) : '—'}
+                              <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.bankTransfer < 0 ? 'font-semibold text-rose-800' : 'text-teal-800'}`}>
+                                {r.bankTransfer !== 0 ? money(r.bankTransfer) : '—'}
                               </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
-                                {r.collections > 0 ? money(r.collections) : '—'}
+                              <td className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${r.collections < 0 ? 'text-rose-800' : 'text-emerald-700'}`}>
+                                {r.collections !== 0 ? money(r.collections) : '—'}
                               </td>
                             </tr>
                           ))
@@ -2400,20 +2513,20 @@ export default function ReportsPage() {
                             {r.shop}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
-                            {r.cashCollected > 0 ? money(r.cashCollected) : '—'}
+                          <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cashCollected < 0 ? 'font-semibold text-rose-800' : 'text-sky-800'}`}>
+                            {r.cashCollected !== 0 ? money(r.cashCollected) : '—'}
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
-                            {r.chequeCollected > 0 ? money(r.chequeCollected) : '—'}
+                          <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.chequeCollected < 0 ? 'font-semibold text-rose-800' : 'text-violet-800'}`}>
+                            {r.chequeCollected !== 0 ? money(r.chequeCollected) : '—'}
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
-                            {r.cdmCollected > 0 ? money(r.cdmCollected) : '—'}
+                          <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cdmCollected < 0 ? 'font-semibold text-rose-800' : 'text-amber-800'}`}>
+                            {r.cdmCollected !== 0 ? money(r.cdmCollected) : '—'}
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
-                            {r.bankTransferCollected > 0 ? money(r.bankTransferCollected) : '—'}
+                          <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.bankTransferCollected < 0 ? 'font-semibold text-rose-800' : 'text-teal-800'}`}>
+                            {r.bankTransferCollected !== 0 ? money(r.bankTransferCollected) : '—'}
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
-                            {r.cashIn > 0 ? money(r.cashIn) : '—'}
+                          <td className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${r.cashIn < 0 ? 'text-rose-800' : 'text-emerald-700'}`}>
+                            {r.cashIn !== 0 ? money(r.cashIn) : '—'}
                           </td>
                         </tr>
                       ))
@@ -2449,7 +2562,7 @@ export default function ReportsPage() {
 
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cheque list</h3>
               <p className="mt-1 text-xs text-slate-500">
-                Cheques recorded on payments dated {dailyReportDate}
+                Cheques collected on {dailyReportDate}, with returned cheques deducted on the day they bounce
                 {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
@@ -2469,7 +2582,7 @@ export default function ReportsPage() {
                         { label: 'Bill #', value: r.billNumber },
                         {
                           label: 'Deposited',
-                          value: r.chequeDeposited ? 'Yes' : 'Pending',
+                          value: r.isReturnDeduction ? 'Returned' : r.chequeDeposited ? 'Yes' : 'Pending',
                         },
                         ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
                       ]}
@@ -2504,16 +2617,29 @@ export default function ReportsPage() {
                       </tr>
                     ) : (
                       dailyReportChequeRows.map((r) => (
-                        <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                        <tr
+                          key={r.id}
+                          className={
+                            r.isReturnDeduction
+                              ? 'border-t border-slate-100 bg-rose-50/70 hover:bg-rose-50'
+                              : 'border-t border-slate-100 hover:bg-slate-50/80'
+                          }
+                        >
                           <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.chequeDate}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-violet-800">
+                          <td
+                            className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${
+                              r.isReturnDeduction ? 'text-rose-800' : 'text-violet-800'
+                            }`}
+                          >
                             {money(r.amount)}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.chequeNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-sm">
-                            {r.chequeDeposited ? (
+                            {r.isReturnDeduction ? (
+                              <span className="font-semibold text-rose-800">Returned</span>
+                            ) : r.chequeDeposited ? (
                               <span className="font-semibold text-emerald-700">Deposited</span>
                             ) : (
                               <span className="font-semibold text-amber-700">Pending</span>

@@ -49,7 +49,7 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'payment':
       return {
-        title: 'Payment details',
+        title: row.cancelled ? 'Payment (cancelled)' : 'Payment details',
         subtitle: [row.date, row.customerName, row.billNumber ? `#${row.billNumber}` : null]
           .filter(Boolean)
           .join(' · ') || null,
@@ -119,13 +119,15 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'pendingBill':
       return {
-        title: row.isOpeningBalance
-          ? Number(row.daysOverdue) > 0
-            ? 'Overdue opening balance'
-            : 'Opening balance'
-          : Number(row.daysOverdue) > 0
-            ? 'Overdue bill'
-            : 'Pending bill',
+        title: row.isReturnCheque
+          ? 'Return cheque'
+          : row.isOpeningBalance
+            ? Number(row.daysOverdue) > 0
+              ? 'Overdue opening balance'
+              : 'Opening balance'
+            : Number(row.daysOverdue) > 0
+              ? 'Overdue bill'
+              : 'Pending bill',
         subtitle: row.customerName || null,
       };
     case 'bankDaily':
@@ -610,9 +612,19 @@ function PaymentDetailContent({ row }) {
 
   return (
     <>
+      {row.cancelled ? (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-800 ring-1 ring-rose-100">
+          Cancelled{row.cancelledBy ? ` by ${row.cancelledBy}` : ''}
+          {row.cancelledAt ? ` · ${formatDateTime(row.cancelledAt)}` : ''}
+        </p>
+      ) : null}
       <SummaryGrid>
         <SummaryField label="Date" value={displayText(row.date)} />
-        <SummaryField label="Receipt #" value={displayText(row.billNumber)} valueClassName="font-mono" />
+        <SummaryField
+          label="Receipt #"
+          value={displayText(row.billNumber)}
+          valueClassName={row.cancelled ? 'font-mono line-through text-slate-400' : 'font-mono'}
+        />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
         <SummaryField label="Recorded by" value={displayText(row.recordedBy)} />
         {row.requiresApproval ? (

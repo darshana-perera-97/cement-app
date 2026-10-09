@@ -377,7 +377,10 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                   commissionRows.map((r) => {
                     const brand = brands.find((b) => b.key === r.brandKey);
                     return (
-                      <tr key={r.rowKey} className="bg-white hover:bg-slate-50/80">
+                      <tr
+                        key={r.rowKey}
+                        className={r.isReturnDeduction ? 'bg-rose-50/70 hover:bg-rose-50' : 'bg-white hover:bg-slate-50/80'}
+                      >
                         <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{r.date}</td>
                         <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">{r.invoiceNumber}</td>
                         <td className="whitespace-nowrap px-4 py-3 font-medium">{r.shopName}</td>
@@ -394,7 +397,13 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                             '—'
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.amount)}</td>
+                        <td
+                          className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
+                            r.isReturnDeduction ? 'font-semibold text-rose-800' : ''
+                          }`}
+                        >
+                          {money(r.amount)}
+                        </td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate}</td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
                           {r.settledDate || 'Partial'}
@@ -404,7 +413,11 @@ export default function CollectorCommissionSection({ shop, onShopUpdate }) {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                           {Number(r.commissionPercent).toFixed(2)}%
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold text-indigo-800">
+                        <td
+                          className={`whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold ${
+                            r.isReturnDeduction ? 'text-rose-800' : 'text-indigo-800'
+                          }`}
+                        >
                           {money(r.commissionAmount)}
                         </td>
                       </tr>

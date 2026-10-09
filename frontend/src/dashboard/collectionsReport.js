@@ -4,6 +4,7 @@ import {
   buildBillSettledDateLookup,
   listCustomerBillPaymentAllocations,
   paymentCreditToCustomer,
+  paymentSettlementCredit,
 } from './pendingBills';
 import { inDateRange } from './tableToolbar';
 
@@ -202,12 +203,13 @@ export function buildSettledCollectionsRows(
   }
 
   const rows = [];
+  const commissionBase = [];
   let rowSeq = 0;
 
   const pushShareRows = ({ payment, alloc, shopName, collectorName }) => {
     const paymentDate = String(alloc.paymentDate || payment?.date || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) return;
-    if (from && to && !inDateRange(paymentDate, from, to)) return;
+    const inRange = !from || !to || inDateRange(paymentDate, from, to);
 
     const bill = alloc.bill;
     const billId = String(bill?.id ?? '').trim();
@@ -230,16 +232,16 @@ export function buildSettledCollectionsRows(
       for (const share of brandShares) {
         if (share.amount <= 0) continue;
         rowSeq += 1;
-        rows.push({
+        const row = {
           rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${settleDateForDays}-${rowSeq}`,
           paymentId: alloc.paymentId,
           billId,
           date: paymentDate,
-          invoiceNumber,
+          invoiceNumber: bill?.isReturnCheque ? `Return cheque ${invoiceNumber}` : invoiceNumber,
           shopName,
-          bagType: share.bagType,
-          brandKey: share.brandKey,
-          bagCount: share.bagCount,
+          bagType: bill?.isReturnCheque ? 'Return cheque' : share.bagType,
+          brandKey: bill?.isReturnCheque ? '' : share.brandKey,
+          bagCount: bill?.isReturnCheque ? 0 : share.bagCount,
           amount: share.amount,
           billDate,
           settledDate,
@@ -250,18 +252,21 @@ export function buildSettledCollectionsRows(
           recordedBy: String(payment?.recordedBy ?? '').trim(),
           commissionBucket,
           isPartial: !settledDate,
-        });
+          isReturnCheque: !!bill?.isReturnCheque,
+        };
+        commissionBase.push(row);
+        if (inRange) rows.push(row);
       }
     }
   };
 
   for (const p of payments || []) {
     if (keys && !paymentMatchesRecordedByKeys(p, keys)) continue;
-    const credit = paymentCreditToCustomer(p);
+    const credit = paymentSettlementCredit(p);
     if (credit <= 0) continue;
     const paymentDate = String(p.date ?? '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) continue;
-    if (from && to && !inDateRange(paymentDate, from, to)) continue;
+    const inRange = !from || !to || inDateRange(paymentDate, from, to);
 
     const pid = String(p.id ?? '').trim();
     const allocs = (pid && allocsByPaymentId.get(pid)) || [];
@@ -283,7 +288,7 @@ export function buildSettledCollectionsRows(
     const leftover = round2(credit - allocated);
     if (leftover > 0) {
       rowSeq += 1;
-      rows.push({
+      const row = {
         rowKey: `${pid || paymentDate}-unallocated-${rowSeq}`,
         paymentId: pid,
         billId: '',
@@ -303,9 +308,13 @@ export function buildSettledCollectionsRows(
         recordedBy: String(p.recordedBy ?? '').trim(),
         commissionBucket: null,
         isPartial: true,
-      });
+      };
+      commissionBase.push(row);
+      if (inRange) rows.push(row);
     }
   }
+
+  appendReturnedChequeCommissionReversals(rows, commissionBase, payments, { from, to });
 
   rows.sort((a, b) => {
     const byDate = a.date.localeCompare(b.date);
@@ -365,6 +374,62 @@ function prorateCollectionAcrossBrands(bill, collectedAmount) {
 }
 
 /**
+ * Reverse commission earned on a cheque once that cheque is returned.
+ * The clawback is dated on the return, and uses the same day-bucket as the original collection.
+ */
+function appendReturnedChequeCommissionReversals(rows, baseRows, payments, { from, to } = {}) {
+  const byPayment = new Map();
+  for (const row of baseRows || []) {
+    const pid = String(row.paymentId ?? '').trim();
+    if (!pid || row.isReturnDeduction) continue;
+    if (!byPayment.has(pid)) byPayment.set(pid, []);
+    byPayment.get(pid).push(row);
+  }
+  let seq = 0;
+  for (const p of payments || []) {
+    const pid = String(p.id ?? '').trim();
+    const slices = byPayment.get(pid);
+    if (!slices || slices.length === 0) continue;
+    const baseTotal = round2(slices.reduce((sum, row) => sum + (Number(row.amount) || 0), 0));
+    if (baseTotal <= 0) continue;
+    let reversible = baseTotal;
+    for (const c of getPaymentCheques(p)) {
+      if (!c.chequeReturned) continue;
+      const chequeAmount = round2(c.amount);
+      if (chequeAmount <= 0 || reversible <= 0) continue;
+      const returnDate = String(c.chequeReturnedAt || p.date || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) continue;
+      const deduct = round2(Math.min(chequeAmount, reversible));
+      reversible = round2(reversible - deduct);
+      if (from && to && !inDateRange(returnDate, from, to)) continue;
+      let left = deduct;
+      for (let index = 0; index < slices.length; index += 1) {
+        const row = slices[index];
+        const isLast = index === slices.length - 1;
+        const raw = isLast ? left : round2((deduct * (Number(row.amount) || 0)) / baseTotal);
+        const amt = round2(Math.max(0, Math.min(left, raw)));
+        left = round2(left - amt);
+        if (amt <= 0.009) continue;
+        seq += 1;
+        rows.push({
+          ...row,
+          rowKey: `${row.rowKey}-returned-${c.id || seq}-${seq}`,
+          date: returnDate,
+          invoiceNumber: c.chequeNumber ? `Return #${c.chequeNumber}` : 'Return cheque',
+          bagType: 'Return cheque',
+          brandKey: '',
+          bagCount: 0,
+          amount: round2(-amt),
+          settledDate: returnDate,
+          isPartial: false,
+          isReturnDeduction: true,
+        });
+      }
+    }
+  }
+}
+
+/**
  * Collection lines for collector commission.
  * Includes every approved payment allocated to an invoice (full or partial).
  * Amount is the collected portion; days are from bill date to payment or cheque realize date.
@@ -384,6 +449,7 @@ export function buildCollectorCollectionRows(
     if (id) paymentById.set(id, p);
   }
   const rows = [];
+  const commissionBase = [];
   let rowSeq = 0;
 
   for (const cust of customers || []) {
@@ -395,7 +461,6 @@ export function buildCollectorCollectionRows(
     for (const alloc of allocations) {
       const paymentDate = String(alloc.paymentDate ?? '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) continue;
-      if (from && to && !inDateRange(paymentDate, from, to)) continue;
 
       const bill = alloc.bill;
       const billId = String(bill?.id ?? '').trim();
@@ -419,16 +484,16 @@ export function buildCollectorCollectionRows(
         for (const share of brandShares) {
           if (share.amount <= 0) continue;
           rowSeq += 1;
-          rows.push({
+          const row = {
             rowKey: `${alloc.paymentId || paymentDate}-${billId}-${share.brandKey || 'total'}-${settleDateForDays}-${rowSeq}`,
             paymentId: alloc.paymentId,
             billId,
             date: paymentDate,
             invoiceNumber,
             shopName,
-            bagType: share.bagType,
-            brandKey: share.brandKey,
-            bagCount: share.bagCount,
+            bagType: bill?.isReturnCheque ? 'Return cheque' : share.bagType,
+            brandKey: bill?.isReturnCheque ? '' : share.brandKey,
+            bagCount: bill?.isReturnCheque ? 0 : share.bagCount,
             amount: share.amount,
             billDate,
             settledDate,
@@ -438,11 +503,16 @@ export function buildCollectorCollectionRows(
             collectorName,
             commissionBucket,
             isPartial: !settledDate,
-          });
+            isReturnCheque: !!bill?.isReturnCheque,
+          };
+          commissionBase.push(row);
+          if (!from || !to || inDateRange(paymentDate, from, to)) rows.push(row);
         }
       }
     }
   }
+
+  appendReturnedChequeCommissionReversals(rows, commissionBase, payments, { from, to });
 
   rows.sort((a, b) => {
     const byDate = a.date.localeCompare(b.date);

@@ -29,7 +29,9 @@ function joinDetails(parts) {
 function applicationDetail(app, tx) {
   const invoiceNumber = String(app?.invoiceNumber || '').trim();
   let label = 'Applied to invoice';
-  if (invoiceNumber === 'Opening') label = 'Applied to opening balance';
+  if (app?.isReturnCheque) {
+    label = invoiceNumber ? `Applied to return cheque ${invoiceNumber}` : 'Applied to return cheque';
+  } else if (invoiceNumber === 'Opening') label = 'Applied to opening balance';
   else if (invoiceNumber) label = `Applied to invoice ${invoiceNumber}`;
   else if (/^\d{4}-\d{2}-\d{2}$/.test(String(app?.date || ''))) {
     label = `Applied to invoice dated ${app.date}`;

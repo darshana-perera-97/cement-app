@@ -33,6 +33,7 @@ function paymentCreditToCustomer(p) {
 
 /** Full payment amount recorded (before any returned cheques). */
 function paymentGrossCredit(p) {
+  if (p?.cancelled) return 0;
   const total = toNonNegMoney(p?.amount);
   if (total > 0) return total;
   const cheques = getPaymentCheques(p);
@@ -48,6 +49,233 @@ function paymentGrossCredit(p) {
 
 function roundMoney(n) {
   return Math.round(n * 100) / 100;
+}
+
+/** Credit that settled invoices when it was collected, including cheques that later bounced. */
+function paymentSettlementCredit(p) {
+  if (!isPaymentCreditActive(p)) return 0;
+  return paymentGrossCredit(p);
+}
+
+const RETURN_CHEQUE_PREFIX = 'return-cheque:';
+
+function returnChequeBillId(paymentId, chequeId) {
+  return `${RETURN_CHEQUE_PREFIX}${String(paymentId ?? '').trim()}:${String(chequeId ?? '').trim()}`;
+}
+
+function isReturnChequeBillId(billId) {
+  return String(billId ?? '').startsWith(RETURN_CHEQUE_PREFIX);
+}
+
+function parseReturnChequeBillId(billId) {
+  const raw = String(billId ?? '');
+  if (!raw.startsWith(RETURN_CHEQUE_PREFIX)) return null;
+  const rest = raw.slice(RETURN_CHEQUE_PREFIX.length);
+  const sep = rest.indexOf(':');
+  if (sep <= 0) return null;
+  const paymentId = rest.slice(0, sep);
+  const chequeId = rest.slice(sep + 1);
+  if (!paymentId || !chequeId) return null;
+  return { paymentId, chequeId };
+}
+
+function paymentEventTime(p) {
+  const created = String(p?.createdAt ?? '').trim();
+  if (created) return created;
+  const date = String(p?.date ?? '').slice(0, 10);
+  return date ? `${date}T12:00:00` : '';
+}
+
+/** Returned cheques still owed as their own balances until a later payment settles them. */
+function listCustomerReturnedCheques(customer, payments) {
+  if (!customer) return [];
+  const rows = [];
+  for (const p of Array.isArray(payments) ? payments : []) {
+    if (p.customerId !== customer.id) continue;
+    if (!isPaymentCreditActive(p)) continue;
+    for (const c of getPaymentCheques(p)) {
+      if (!c.chequeReturned) continue;
+      const amount = toNonNegMoney(c.amount);
+      if (amount <= 0) continue;
+      const returnAt = String(
+        c.chequeReturnedAt || p.createdAt || `${String(p.date || '').slice(0, 10)}T12:00:00`,
+      );
+      rows.push({
+        id: returnChequeBillId(p.id, c.id),
+        paymentId: String(p.id ?? '').trim(),
+        chequeId: String(c.id ?? '').trim(),
+        amount,
+        returnAt,
+        returnDate: returnAt.slice(0, 10),
+        chequeNumber: String(c.chequeNumber ?? '').trim(),
+        chequeBank: String(c.chequeBank ?? '').trim(),
+        chequeDate: String(c.chequeDate ?? '').slice(0, 10),
+        receiptNumber: String(p.billNumber ?? '').trim(),
+      });
+    }
+  }
+  rows.sort((a, b) => a.returnAt.localeCompare(b.returnAt) || a.id.localeCompare(b.id));
+  return rows;
+}
+
+function returnChequePayableByPayment(rc, payment) {
+  if (!rc || !payment) return false;
+  if (rc.paymentId && rc.paymentId === String(payment.id ?? '').trim()) return false;
+  const payAt = paymentEventTime(payment);
+  if (!rc.returnAt || !payAt) return false;
+  return rc.returnAt <= payAt;
+}
+
+/**
+ * Apply each payment in order.
+ * Settlement credit includes cheques that later bounce, so those invoices stay paid.
+ * The bounce is a separate return-cheque balance. With no per-bill split, that balance
+ * is paid before the opening balance and before invoices.
+ */
+function forEachCustomerSettlementApplication(
+  customer,
+  bills,
+  payments,
+  promotions = [],
+  returnsRows = [],
+  onApply,
+) {
+  const nameKey = normalizeCustomerName(customer.name);
+  const custBills = sortBillsChronological(
+    (Array.isArray(bills) ? bills : []).filter(
+      (b) => normalizeCustomerName(b.customerName) === nameKey,
+    ),
+  );
+  const paidByBillId = new Map();
+  for (const b of custBills) {
+    const id = String(b.id ?? '').trim();
+    if (id) paidByBillId.set(id, 0);
+  }
+
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  let pastPaid = 0;
+  const openingId = openingBalanceBillId(customer.id);
+  const openingCredit = openingId ? sumItemReturnForBill(returnsRows, openingId) : 0;
+  const pastRoom = Math.max(0, roundMoney(pastOwed - openingCredit));
+  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
+
+  const returnCheques = listCustomerReturnedCheques(customer, payments);
+  const paidByReturnChequeId = new Map();
+  const returnById = new Map();
+  for (const rc of returnCheques) {
+    paidByReturnChequeId.set(rc.id, 0);
+    returnById.set(rc.id, rc);
+  }
+  const billById = new Map(custBills.map((b) => [String(b.id ?? '').trim(), b]));
+
+  const custPayments = (Array.isArray(payments) ? payments : [])
+    .filter((p) => p.customerId === customer.id)
+    .sort(comparePaymentsChronological);
+
+  const billTotalOf = (bill) => effectiveBillTotal(bill, promotions, returnsRows);
+  const note = (info) => {
+    if (typeof onApply === 'function') onApply(info);
+  };
+
+  const applyReturn = (payment, rc, want) => {
+    const current = paidByReturnChequeId.get(rc.id) || 0;
+    const room = Math.max(0, roundMoney(rc.amount - current));
+    const toward = Math.min(room, toNonNegMoney(want));
+    if (toward <= 0) return 0;
+    const next = roundMoney(current + toward);
+    paidByReturnChequeId.set(rc.id, next);
+    note({
+      payment,
+      kind: 'return',
+      billId: rc.id,
+      toward,
+      remainingAfter: roundMoney(Math.max(0, rc.amount - next)),
+      settled: rc.amount - next <= 0.009,
+      returnCheque: rc,
+    });
+    return toward;
+  };
+
+  const applyOpening = (payment, want) => {
+    if (!openingId || pastRoom <= 0) return 0;
+    const room = Math.max(0, roundMoney(pastRoom - pastPaid));
+    const toward = Math.min(room, toNonNegMoney(want));
+    if (toward <= 0) return 0;
+    pastPaid = roundMoney(pastPaid + toward);
+    paidByBillId.set(openingId, pastPaid);
+    const remaining = roundMoney(Math.max(0, pastRoom - pastPaid));
+    note({
+      payment,
+      kind: 'opening',
+      billId: openingId,
+      toward,
+      remainingAfter: remaining,
+      settled: remaining <= 0.009,
+    });
+    return toward;
+  };
+
+  const applyBill = (payment, billId, want) => {
+    if (!paidByBillId.has(billId)) return 0;
+    const bill = billById.get(billId);
+    const total = billTotalOf(bill);
+    const current = paidByBillId.get(billId) || 0;
+    const room = Math.max(0, roundMoney(total - current));
+    const toward = Math.min(room, toNonNegMoney(want));
+    if (toward <= 0) return 0;
+    const next = roundMoney(current + toward);
+    paidByBillId.set(billId, next);
+    const remaining = roundMoney(Math.max(0, total - next));
+    note({
+      payment,
+      kind: 'bill',
+      billId,
+      bill,
+      toward,
+      remainingAfter: remaining,
+      settled: remaining <= 0.009,
+      billTotal: total,
+    });
+    return toward;
+  };
+
+  for (const p of custPayments) {
+    const credit = paymentSettlementCredit(p);
+    if (credit <= 0) continue;
+    const explicit = getPaymentBillCashAllocations(p);
+    if (explicit.length > 0) {
+      for (const { billId, cashAmount } of explicit) {
+        if (isReturnChequeBillId(billId)) {
+          const rc = returnById.get(billId);
+          if (!rc || !returnChequePayableByPayment(rc, p)) continue;
+          applyReturn(p, rc, cashAmount);
+          continue;
+        }
+        if (openingId && billId === openingId) {
+          applyOpening(p, cashAmount);
+          continue;
+        }
+        applyBill(p, billId, cashAmount);
+      }
+      continue;
+    }
+
+    let remaining = credit;
+    for (const rc of returnCheques) {
+      if (remaining <= 0.009) break;
+      if (!returnChequePayableByPayment(rc, p)) continue;
+      remaining = roundMoney(remaining - applyReturn(p, rc, remaining));
+    }
+    remaining = roundMoney(remaining - applyOpening(p, remaining));
+    for (const bill of custBills) {
+      if (remaining <= 0.009) break;
+      const id = String(bill.id ?? '').trim();
+      if (!id) continue;
+      remaining = roundMoney(remaining - applyBill(p, id, remaining));
+    }
+  }
+
+  return { paidByBillId, pastPaid, paidByReturnChequeId, custBills, returnCheques };
 }
 
 function comparePaymentsChronological(a, b) {
@@ -104,154 +332,25 @@ function effectiveBillTotal(bill, promotions = [], returnsRows = []) {
 
 /**
  * Per-bill paid amounts after processing payments in order.
- * Payments with billCashAllocations apply only to those bills (skip FIFO).
- * Other payments apply pastBill first, then oldest bills.
+ * Explicit bill splits apply only to those invoices and return cheques.
+ * Other payments pay outstanding return cheques first, then pastBill, then oldest bills.
+ * A cheque that later bounces still counts as having paid the invoices; the bounce is a
+ * separate return-cheque balance.
  */
 function computeBillPaymentAllocation(customer, bills, payments, promotions = [], returnsRows = []) {
-  const nameKey = normalizeCustomerName(customer.name);
-  const custBills = sortBillsChronological(
-    (Array.isArray(bills) ? bills : []).filter(
-      (b) => normalizeCustomerName(b.customerName) === nameKey,
-    ),
-  );
-  const paidByBillId = new Map();
-  for (const b of custBills) {
-    const id = String(b.id ?? '').trim();
-    if (id) paidByBillId.set(id, 0);
-  }
-
-  const pastOwed = toNonNegMoney(customer.pastBill);
-  let pastPaid = 0;
-  const openingId = openingBalanceBillId(customer.id);
-  const openingCredit = openingId ? sumItemReturnForBill(returnsRows, openingId) : 0;
-  const pastRoom = Math.max(0, roundMoney(pastOwed - openingCredit));
-  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
-
-  const custPayments = (Array.isArray(payments) ? payments : [])
-    .filter((p) => p.customerId === customer.id)
-    .sort(comparePaymentsChronological);
-
-  for (const p of custPayments) {
-    const credit = paymentCreditToCustomer(p);
-    if (credit <= 0) continue;
-
-    const explicit = getPaymentBillCashAllocations(p);
-    if (explicit.length > 0) {
-      for (const { billId, cashAmount } of explicit) {
-        if (openingId && billId === openingId) {
-          const room = Math.max(0, roundMoney(pastRoom - pastPaid));
-          const toward = Math.min(room, cashAmount);
-          pastPaid = roundMoney(pastPaid + toward);
-          paidByBillId.set(openingId, pastPaid);
-          continue;
-        }
-        if (!paidByBillId.has(billId)) continue;
-        const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = effectiveBillTotal(bill, promotions, returnsRows);
-        const current = paidByBillId.get(billId) || 0;
-        const room = Math.max(0, roundMoney(total - current));
-        const toward = Math.min(room, cashAmount);
-        paidByBillId.set(billId, roundMoney(current + toward));
-      }
-      continue;
-    }
-
-    let remaining = credit;
-    const towardPast = Math.min(Math.max(0, pastRoom - pastPaid), remaining);
-    pastPaid = roundMoney(pastPaid + towardPast);
-    if (openingId) paidByBillId.set(openingId, pastPaid);
-    remaining = roundMoney(remaining - towardPast);
-
-    for (const bill of custBills) {
-      if (remaining <= 0) break;
-      const id = String(bill.id ?? '').trim();
-      if (!id) continue;
-      const total = effectiveBillTotal(bill, promotions, returnsRows);
-      const current = paidByBillId.get(id) || 0;
-      const room = Math.max(0, roundMoney(total - current));
-      const toward = Math.min(room, remaining);
-      paidByBillId.set(id, roundMoney(current + toward));
-      remaining = roundMoney(remaining - toward);
-    }
-  }
-
-  return { paidByBillId, pastPaid, custBills };
+  return forEachCustomerSettlementApplication(customer, bills, payments, promotions, returnsRows);
 }
 
 /** Bill id → payment date when each bill was fully cleared. */
 function buildSettledDateByBillIdForCustomer(customer, bills, payments, promotions = []) {
   const settledByBillId = new Map();
   if (!customer) return settledByBillId;
-
-  const { paidByBillId, custBills } = computeBillPaymentAllocation(customer, bills, payments, promotions);
-  const custPayments = (Array.isArray(payments) ? payments : [])
-    .filter((p) => p.customerId === customer.id)
-    .sort(comparePaymentsChronological);
-
-  const runningPaid = new Map();
-  for (const b of custBills) {
-    const id = String(b.id ?? '').trim();
-    if (id) runningPaid.set(id, 0);
-  }
-
-  const pastOwed = toNonNegMoney(customer.pastBill);
-  let pastPaid = 0;
-  const openingId = openingBalanceBillId(customer.id);
-  if (pastOwed > 0 && openingId) runningPaid.set(openingId, 0);
-
-  for (const p of custPayments) {
-    const credit = paymentCreditToCustomer(p);
-    if (credit <= 0) continue;
-    const payDate = String(p.date ?? '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) continue;
-
-    const explicit = getPaymentBillCashAllocations(p);
-    if (explicit.length > 0) {
-      for (const { billId, cashAmount } of explicit) {
-        if (openingId && billId === openingId) {
-          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
-          const toward = Math.min(room, cashAmount);
-          pastPaid = roundMoney(pastPaid + toward);
-          runningPaid.set(openingId, pastPaid);
-          if (pastOwed > 0 && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
-          continue;
-        }
-        if (!runningPaid.has(billId)) continue;
-        const bill = custBills.find((b) => String(b.id ?? '').trim() === billId);
-        const total = effectiveBillTotal(bill, promotions);
-        const current = runningPaid.get(billId) || 0;
-        const room = Math.max(0, roundMoney(total - current));
-        const toward = Math.min(room, cashAmount);
-        const next = roundMoney(current + toward);
-        runningPaid.set(billId, next);
-        if (next >= total - 0.009 && billId) settledByBillId.set(billId, payDate);
-      }
-      continue;
-    }
-
-    let remaining = credit;
-    const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
-    pastPaid = roundMoney(pastPaid + towardPast);
-    remaining = roundMoney(remaining - towardPast);
-    if (openingId && pastOwed > 0 && pastPaid >= pastOwed - 0.009) {
-      settledByBillId.set(openingId, payDate);
-    }
-
-    for (const bill of custBills) {
-      if (remaining <= 0) break;
-      const id = String(bill.id ?? '').trim();
-      if (!id) continue;
-      const total = effectiveBillTotal(bill, promotions);
-      const current = runningPaid.get(id) || 0;
-      const room = Math.max(0, roundMoney(total - current));
-      const toward = Math.min(room, remaining);
-      const next = roundMoney(current + toward);
-      runningPaid.set(id, next);
-      remaining = roundMoney(remaining - toward);
-      if (next >= total - 0.009) settledByBillId.set(id, payDate);
-    }
-  }
-
+  forEachCustomerSettlementApplication(customer, bills, payments, promotions, [], (info) => {
+    if (!info.settled || !info.billId) return;
+    const payDate = String(info.payment?.date ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) return;
+    if (!settledByBillId.has(info.billId)) settledByBillId.set(info.billId, payDate);
+  });
   return settledByBillId;
 }
 
@@ -262,108 +361,51 @@ function mapPaymentAffectedInvoices(customer, bills, payments, promotions = []) 
   const byPaymentId = new Map();
   if (!customer) return byPaymentId;
 
-  const nameKey = normalizeCustomerName(customer.name);
-  const custBills = sortBillsChronological(
-    (Array.isArray(bills) ? bills : []).filter(
-      (b) => normalizeCustomerName(b.customerName) === nameKey,
-    ),
-  );
-  const billById = new Map(custBills.map((b) => [String(b.id ?? '').trim(), b]));
-  const paidByBillId = new Map();
-  for (const b of custBills) {
-    const id = String(b.id ?? '').trim();
-    if (id) paidByBillId.set(id, 0);
-  }
-
-  const pastOwed = toNonNegMoney(customer.pastBill);
-  let pastPaid = 0;
-  const openingId = openingBalanceBillId(customer.id);
-  if (pastOwed > 0 && openingId) paidByBillId.set(openingId, 0);
-
-  const custPayments = (Array.isArray(payments) ? payments : [])
-    .filter((p) => p.customerId === customer.id)
-    .sort(comparePaymentsChronological);
-
-  const snapshotOpening = (toward) => {
-    const remaining = roundMoney(Math.max(0, pastOwed - pastPaid));
-    return {
-      billId: openingId,
-      invoiceNumber: 'Opening',
-      date: openingBalanceBillDate(customer),
-      details: 'Opening balance',
-      billTotal: pastOwed,
-      appliedAmount: roundMoney(toward),
-      remainingAfter: remaining,
-      settled: remaining <= 0.009,
-    };
-  };
-
-  const snapshotBill = (billId, toward) => {
-    const bill = billById.get(billId);
-    const total = effectiveBillTotal(bill, promotions);
-    const paid = paidByBillId.get(billId) || 0;
-    const remaining = roundMoney(Math.max(0, total - paid));
-    return {
-      billId,
-      invoiceNumber: String(bill?.invoiceNumber ?? '').trim(),
-      date: String(bill?.date ?? '').trim(),
-      billTotal: total,
-      appliedAmount: roundMoney(toward),
-      remainingAfter: remaining,
-      settled: remaining <= 0.009,
-    };
-  };
-
-  for (const p of custPayments) {
-    const credit = paymentCreditToCustomer(p);
-    if (credit <= 0) continue;
-    const hits = [];
-
-    const explicit = getPaymentBillCashAllocations(p);
-    if (explicit.length > 0) {
-      for (const { billId, cashAmount } of explicit) {
-        if (openingId && billId === openingId) {
-          const room = Math.max(0, roundMoney(pastOwed - pastPaid));
-          const toward = Math.min(room, cashAmount);
-          pastPaid = roundMoney(pastPaid + toward);
-          paidByBillId.set(openingId, pastPaid);
-          if (toward > 0) hits.push(snapshotOpening(toward));
-          continue;
-        }
-        if (!paidByBillId.has(billId)) continue;
-        const bill = billById.get(billId);
-        const total = effectiveBillTotal(bill, promotions);
-        const current = paidByBillId.get(billId) || 0;
-        const room = Math.max(0, roundMoney(total - current));
-        const toward = Math.min(room, cashAmount);
-        paidByBillId.set(billId, roundMoney(current + toward));
-        if (toward > 0) hits.push(snapshotBill(billId, toward));
-      }
+  forEachCustomerSettlementApplication(customer, bills, payments, promotions, [], (info) => {
+    if (!info.toward || info.toward <= 0) return;
+    const pid = String(info.payment?.id ?? '').trim();
+    if (!pid) return;
+    let hit;
+    if (info.kind === 'return') {
+      const rc = info.returnCheque;
+      const label = rc?.chequeNumber ? `#${rc.chequeNumber}` : 'Return cheque';
+      hit = {
+        billId: info.billId,
+        invoiceNumber: label,
+        date: rc?.returnDate || '',
+        details: 'Return cheque',
+        isReturnCheque: true,
+        billTotal: rc?.amount,
+        appliedAmount: roundMoney(info.toward),
+        remainingAfter: info.remainingAfter,
+        settled: info.settled,
+      };
+    } else if (info.kind === 'opening') {
+      hit = {
+        billId: info.billId,
+        invoiceNumber: 'Opening',
+        date: openingBalanceBillDate(customer),
+        details: 'Opening balance',
+        billTotal: toNonNegMoney(customer.pastBill),
+        appliedAmount: roundMoney(info.toward),
+        remainingAfter: info.remainingAfter,
+        settled: info.settled,
+      };
     } else {
-      let remaining = credit;
-      const towardPast = Math.min(Math.max(0, pastOwed - pastPaid), remaining);
-      pastPaid = roundMoney(pastPaid + towardPast);
-      if (openingId) paidByBillId.set(openingId, pastPaid);
-      remaining = roundMoney(remaining - towardPast);
-      if (towardPast > 0) hits.push(snapshotOpening(towardPast));
-
-      for (const bill of custBills) {
-        if (remaining <= 0) break;
-        const id = String(bill.id ?? '').trim();
-        if (!id) continue;
-        const total = effectiveBillTotal(bill, promotions);
-        const current = paidByBillId.get(id) || 0;
-        const room = Math.max(0, roundMoney(total - current));
-        const toward = Math.min(room, remaining);
-        paidByBillId.set(id, roundMoney(current + toward));
-        remaining = roundMoney(remaining - toward);
-        if (toward > 0) hits.push(snapshotBill(id, toward));
-      }
+      const bill = info.bill;
+      hit = {
+        billId: info.billId,
+        invoiceNumber: String(bill?.invoiceNumber ?? '').trim(),
+        date: String(bill?.date ?? '').trim(),
+        billTotal: info.billTotal,
+        appliedAmount: roundMoney(info.toward),
+        remainingAfter: info.remainingAfter,
+        settled: info.settled,
+      };
     }
-
-    const pid = String(p.id ?? '').trim();
-    if (pid && hits.length) byPaymentId.set(pid, hits);
-  }
+    if (!byPaymentId.has(pid)) byPaymentId.set(pid, []);
+    byPaymentId.get(pid).push(hit);
+  });
 
   return byPaymentId;
 }
@@ -418,6 +460,11 @@ module.exports = {
   computeRemainingAmount,
   paymentCreditToCustomer,
   paymentGrossCredit,
+  paymentSettlementCredit,
+  returnChequeBillId,
+  isReturnChequeBillId,
+  parseReturnChequeBillId,
+  listCustomerReturnedCheques,
   comparePaymentsChronological,
   sortBillsChronological,
   getPaymentBillCashAllocations,

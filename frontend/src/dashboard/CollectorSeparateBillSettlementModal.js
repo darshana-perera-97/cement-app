@@ -277,6 +277,9 @@ export default function CollectorSeparateBillSettlementModal({
   const pendingBills = useMemo(() => {
     if (!form.customerId) return [];
     return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId, { promotions })].sort((a, b) => {
+      if (Boolean(a.isReturnCheque) !== Boolean(b.isReturnCheque)) {
+        return a.isReturnCheque ? -1 : 1;
+      }
       if (Boolean(a.isOpeningBalance) !== Boolean(b.isOpeningBalance)) {
         return a.isOpeningBalance ? -1 : 1;
       }
@@ -557,16 +560,18 @@ export default function CollectorSeparateBillSettlementModal({
       if (amount <= 0) continue;
       if (amount > bill.outstandingAmount + 0.009) {
         setSaveError(
-          bill.isOpeningBalance
-            ? `Amount for opening balance cannot exceed ${money(bill.outstandingAmount)} outstanding.`
-            : `Amount for bill ${bill.invoiceNumber || bill.billDate || bill.id} cannot exceed ${money(bill.outstandingAmount)} outstanding.`,
+          bill.isReturnCheque
+            ? `Amount for return cheque ${bill.invoiceNumber || ''} cannot exceed ${money(bill.outstandingAmount)} outstanding.`
+            : bill.isOpeningBalance
+              ? `Amount for opening balance cannot exceed ${money(bill.outstandingAmount)} outstanding.`
+              : `Amount for bill ${bill.invoiceNumber || bill.billDate || bill.id} cannot exceed ${money(bill.outstandingAmount)} outstanding.`,
         );
         return;
       }
       billCashAllocations.push({ billId: bill.id, cashAmount: amount });
     }
     if (billCashAllocations.length === 0) {
-      setSaveError('Enter an amount for at least one opening balance or pending invoice.');
+      setSaveError('Enter an amount for at least one return cheque, opening balance, or pending invoice.');
       return;
     }
     if (Math.abs(allocatedTotal - paymentTotal) > 0.009) {
@@ -1145,7 +1150,7 @@ export default function CollectorSeparateBillSettlementModal({
 
                   <div className="rounded-xl bg-slate-50/90 p-3 ring-1 ring-slate-100 sm:p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <p className="text-sm font-semibold text-slate-800">Opening balance & invoices</p>
+                      <p className="text-sm font-semibold text-slate-800">Return cheques, opening balance & invoices</p>
                       <p className="text-xs tabular-nums text-slate-600">
                         Allocated {money(allocatedTotal)} of {money(paymentTotal)}
                         {Math.abs(unallocatedTotal) > 0.009 ? (
@@ -1159,11 +1164,11 @@ export default function CollectorSeparateBillSettlementModal({
                       </p>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
-                      Enter how much of this payment applies to the opening balance and each invoice. Settle any of them in any order — partial amounts are allowed.
+                      Enter how much of this payment applies to each return cheque, the opening balance, and each invoice. Partial amounts are allowed.
                     </p>
                     {pendingBills.length === 0 ? (
                       <p className="mt-3 text-sm text-slate-500">
-                        No outstanding opening balance or credit invoices for this shop.
+                        No outstanding return cheques, opening balance, or credit invoices for this shop.
                       </p>
                     ) : (
                       <ul className="mt-3 space-y-2">
@@ -1171,18 +1176,27 @@ export default function CollectorSeparateBillSettlementModal({
                           <li
                             key={b.id}
                             className={`rounded-lg px-3 py-3 sm:flex sm:items-center sm:gap-4 ${
-                              b.isOpeningBalance
-                                ? 'bg-amber-50/80 ring-1 ring-amber-200'
-                                : 'bg-white ring-1 ring-slate-200'
+                              b.isReturnCheque
+                                ? 'bg-rose-50/80 ring-1 ring-rose-200'
+                                : b.isOpeningBalance
+                                  ? 'bg-amber-50/80 ring-1 ring-amber-200'
+                                  : 'bg-white ring-1 ring-slate-200'
                             }`}
                           >
                             <div className="min-w-0 flex-1">
                               <p className="font-medium text-slate-900">
-                                {b.isOpeningBalance
-                                  ? 'Opening balance'
-                                  : b.invoiceNumber
-                                    ? `Inv ${b.invoiceNumber}`
-                                    : b.billDate || '—'}
+                                {b.isReturnCheque
+                                  ? `Return cheque ${b.invoiceNumber || ''}`.trim()
+                                  : b.isOpeningBalance
+                                    ? 'Opening balance'
+                                    : b.invoiceNumber
+                                      ? `Inv ${b.invoiceNumber}`
+                                      : b.billDate || '—'}
+                                {b.isReturnCheque ? (
+                                  <span className="ml-2 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-900">
+                                    Return
+                                  </span>
+                                ) : null}
                                 {b.isOpeningBalance ? (
                                   <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
                                     Invoice
@@ -1219,9 +1233,11 @@ export default function CollectorSeparateBillSettlementModal({
                                 value={form.billAllocations[b.id] ?? ''}
                                 onChange={(e) => handleBillAllocationChange(b.id, e.target.value)}
                                 className={`mt-1 w-full rounded-xl border-0 px-3 py-2.5 text-sm tabular-nums ring-1 focus:outline-none focus:ring-2 focus:ring-indigo-500/35 ${
-                                  b.isOpeningBalance
-                                    ? 'bg-white ring-amber-200'
-                                    : 'bg-slate-100 ring-slate-200'
+                                  b.isReturnCheque
+                                    ? 'bg-white ring-rose-200'
+                                    : b.isOpeningBalance
+                                      ? 'bg-white ring-amber-200'
+                                      : 'bg-slate-100 ring-slate-200'
                                 }`}
                                 placeholder="0"
                               />

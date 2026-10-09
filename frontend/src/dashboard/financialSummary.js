@@ -3,6 +3,7 @@ import { chequePortion, getPaymentCheques } from './paymentCheques';
 import { inDateRange } from './tableToolbar';
 
 function cashPortion(p) {
+  if (p?.cancelled) return 0;
   if (p.cashAmount !== undefined || p.chequeAmount !== undefined) {
     return Math.max(0, Number(p.cashAmount) || 0);
   }
@@ -71,6 +72,7 @@ export function buildFinancialLoadPurchaseRows(loads, from, to) {
 export function buildFinancialCashInRows(payments, from, to) {
   const rows = [];
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const date = String(p.date ?? '').slice(0, 10);
     if (!inDateRange(date, from, to)) continue;
 
@@ -107,6 +109,7 @@ export function buildFinancialCashInRows(payments, from, to) {
 export function buildFinancialConvertingChequeRows(payments, from, to) {
   const rows = [];
   for (const p of payments) {
+    if (p?.cancelled) continue;
     const paymentDate = String(p.date ?? '').slice(0, 10);
     const cheques = getPaymentCheques(p);
     for (const c of cheques) {

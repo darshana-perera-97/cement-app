@@ -140,6 +140,7 @@ function sumDepositsByAccount(cashBookEntries) {
 function sumDepositedPaymentChequesByAccount(payments) {
   const totals = {};
   for (const p of Array.isArray(payments) ? payments : []) {
+    if (p?.cancelled) continue;
     const lines = getPaymentCheques(p);
     for (const c of lines) {
       if (!c.chequeDeposited || c.chequeReturned) continue;
