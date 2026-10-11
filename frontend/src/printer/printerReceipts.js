@@ -455,10 +455,14 @@ export function buildDailyCollectionsSummaryLines(report, shop) {
   lines.push({ kind: 'rule' });
   lines.push({ kind: 'align', value: 'left' });
   pushCollectionList(lines, chequeRows, (row) => {
+    const bank = listIdentifier(row?.chequeBank, '');
     const num = listIdentifier(row?.chequeNumber, '');
     const date = formatDate(row?.chequeDate);
     const bits = [];
-    if (num) bits.push(`#${num.replace(/^#/, '')}`);
+    const chequeNo = num ? num.replace(/^#/, '') : '';
+    if (bank && chequeNo) bits.push(`${bank} ${chequeNo}`);
+    else if (chequeNo) bits.push(`#${chequeNo}`);
+    else if (bank) bits.push(bank);
     if (date && date !== '—') bits.push(date);
     return bits.join('  ') || 'Cheque';
   });

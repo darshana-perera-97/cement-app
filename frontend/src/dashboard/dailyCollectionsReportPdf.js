@@ -14,6 +14,16 @@ function moneyCell(n) {
   return `LKR ${formatLkr(n)}`;
 }
 
+function chequeNumberWithBank(row) {
+  const bank = String(row?.chequeBank ?? '').trim();
+  const num = String(row?.chequeNumber ?? '').trim();
+  const chequeNo = !num || num === '—' ? '' : num.replace(/^#/, '');
+  if (bank && chequeNo) return `${bank} ${chequeNo}`;
+  if (chequeNo) return chequeNo;
+  if (bank) return bank;
+  return '—';
+}
+
 const TABLE_OPTS = {
   styles: { fontSize: 8, cellPadding: 1.8, overflow: 'linebreak', valign: 'middle' },
   headStyles: {
@@ -282,7 +292,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             r.customerName || '—',
             r.chequeDate || '—',
             moneyCell(r.amount),
-            r.chequeNumber || '—',
+            chequeNumberWithBank(r),
             r.billNumber || '—',
             r.isReturnDeduction ? 'Returned' : r.chequeDeposited ? 'Yes' : 'Pending',
           ];

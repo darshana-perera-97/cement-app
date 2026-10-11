@@ -733,19 +733,22 @@ export default function RecordPaymentModal({
           </p>
         </div>
         <form className="flex min-h-0 flex-1 flex-col" onSubmit={handleSubmit}>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
-            <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8 lg:gap-y-4 lg:space-y-0">
+          {newPaymentsLocked || saveError ? (
+            <div className="shrink-0 space-y-2 px-4 pt-4 sm:px-6">
               {newPaymentsLocked ? (
-                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-amber-100 lg:col-span-2" role="status">
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-amber-100" role="status">
                   Collection for today is over. You cannot add more payments.
                 </p>
               ) : null}
               {saveError ? (
-                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100 lg:col-span-2">
+                <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-100">
                   {saveError}
                 </p>
               ) : null}
-              <div className="min-w-0 space-y-4">
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 lg:flex lg:items-stretch lg:space-y-0 lg:overflow-hidden">
+              <div className="min-w-0 space-y-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-6">
                 {lockCustomer ? (
                   <div className="block text-sm font-medium text-slate-600">
                     Customer
@@ -784,7 +787,7 @@ export default function RecordPaymentModal({
                     {customerBillOptions.length === 0 ? (
                       <p className="mt-3 text-sm text-slate-500">No outstanding credit bills for this customer.</p>
                     ) : (
-                      <ul className="mt-3 max-h-[min(36vh,14rem)] space-y-2 overflow-y-auto overscroll-contain sm:max-h-48 lg:max-h-[min(52vh,22rem)]">
+                      <ul className="mt-3 max-h-[min(36vh,14rem)] space-y-2 overflow-y-auto overscroll-contain sm:max-h-48 lg:max-h-none lg:overflow-visible">
                         {customerBillOptions.map((b) => {
                           const checked = form.appliedBillIds.includes(b.id);
                           return (
@@ -844,7 +847,7 @@ export default function RecordPaymentModal({
                   </fieldset>
                 ) : null}
               </div>
-              <div className="min-w-0 space-y-4">
+              <div className="min-w-0 space-y-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:border-l lg:border-slate-100 lg:pl-6">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-medium text-slate-600">
                     Payment receipt #
@@ -1256,7 +1259,6 @@ export default function RecordPaymentModal({
                   />
                 </label>
               </div>
-            </div>
           </div>
           <div className="shrink-0 border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-6 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">

@@ -781,7 +781,7 @@ function sortDailyCollectionDetailRows(rows) {
 
 /** Cheques on payments recorded on a single calendar day (collections day). */
 function buildDailyCollectionChequeRows(payments, ymd, users = []) {
-  const rows = buildChequeTableRows(payments, (p, _c, flat) => {
+  const rows = buildChequeTableRows(payments, (p, c, flat) => {
     const payDate = String(p.date ?? '').slice(0, 10);
     if (payDate !== ymd) return null;
     return {
@@ -789,6 +789,7 @@ function buildDailyCollectionChequeRows(payments, ymd, users = []) {
       customerName: String(p.customerName ?? '').trim() || '—',
       chequeDate: flat.chequeDate || '—',
       chequeNumber: flat.chequeNumber,
+      chequeBank: String(c?.chequeBank ?? '').trim(),
       amount: flat.amount,
       chequeDeposited: flat.chequeDeposited,
       billNumber: p.billNumber != null ? String(p.billNumber) : '—',
@@ -804,6 +805,7 @@ function buildDailyCollectionChequeRows(payments, ymd, users = []) {
       customerName: String(p.customerName ?? '').trim() || '—',
       chequeDate: String(c.chequeReturnedAt || '').slice(0, 10) || ymd,
       chequeNumber: c.chequeNumber || '—',
+      chequeBank: String(c?.chequeBank ?? '').trim(),
       amount: round2(-item.amount),
       chequeDeposited: false,
       isReturnDeduction: true,

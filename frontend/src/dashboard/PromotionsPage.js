@@ -23,6 +23,7 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { formatBrandLabel } from './brandTheme';
 import { buildCustomerInvoiceRows } from './pendingBills';
+import { downloadPromotionRules, downloadSpecialPromotions } from './promotionsExport';
 
 const apiBase = getApiBase();
 
@@ -36,6 +37,13 @@ const PAGE_TABS = [
   { id: 'special', label: 'Special Promotions' },
   { id: 'rules', label: 'Promotion Rules' },
 ];
+
+function downloadContentSlug(scopeId) {
+  if (scopeId === 'free_bags') return 'free-bag-issue';
+  if (scopeId === 'invoice_discount') return 'invoice-discount';
+  if (scopeId === 'target_promotion') return 'target-promotion';
+  return 'all-types';
+}
 
 function emptyRuleForm(brands) {
   const cashbacks = {};
@@ -279,6 +287,8 @@ function SpecialPromotionsPanel() {
   const [payments, setPayments] = useState([]);
   const [billsLoading, setBillsLoading] = useState(false);
   const [promoTab, setPromoTab] = useState('free_bags');
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadTypes, setDownloadTypes] = useState(() => PROMO_TYPES.map((type) => type.id));
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -590,6 +600,55 @@ function SpecialPromotionsPanel() {
     }
   };
 
+  const openDownload = () => {
+    const available = PROMO_TYPES.filter((type) => filteredRows.some((row) => promoType(row) === type.id)).map(
+      (type) => type.id,
+    );
+    setDownloadTypes(available.length > 0 ? available : PROMO_TYPES.map((type) => type.id));
+    setDownloadOpen(true);
+  };
+
+  const availableDownloadTypes = PROMO_TYPES.filter((type) =>
+    filteredRows.some((row) => promoType(row) === type.id),
+  );
+  const allDownloadTypesSelected =
+    availableDownloadTypes.length > 0 &&
+    availableDownloadTypes.every((type) => downloadTypes.includes(type.id));
+  const downloadRows = allDownloadTypesSelected
+    ? filteredRows
+    : filteredRows.filter((row) => downloadTypes.includes(promoType(row)));
+
+  const toggleDownloadType = (typeId) => {
+    setDownloadTypes((current) =>
+      current.includes(typeId) ? current.filter((id) => id !== typeId) : [...current, typeId],
+    );
+  };
+
+  const toggleAllDownloadTypes = () => {
+    setDownloadTypes(allDownloadTypesSelected ? [] : availableDownloadTypes.map((type) => type.id));
+  };
+
+  const confirmDownload = () => {
+    if (downloadRows.length === 0) return;
+    const selected = availableDownloadTypes.filter((type) => downloadTypes.includes(type.id));
+    const contentLabel = allDownloadTypesSelected
+      ? 'All types'
+      : selected.map((type) => type.label).join(', ');
+    const contentSlug = allDownloadTypesSelected
+      ? 'all-types'
+      : selected.map((type) => downloadContentSlug(type.id)).join('-');
+    const customer = customers.find((c) => c.id === customerFilter)?.name || '';
+    downloadSpecialPromotions(downloadRows, brands, {
+      dateFrom,
+      dateTo,
+      customer,
+      search,
+      contentLabel,
+      contentSlug,
+    });
+    setDownloadOpen(false);
+  };
+
   const handleDelete = async (promo) => {
     if (!promo?.id) return;
     const label = promo.customerName ? ` for ${promo.customerName}` : '';
@@ -620,13 +679,23 @@ function SpecialPromotionsPanel() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-slate-500">Record promotions: free bags, invoice discounts, or target rewards.</p>
-        <button
-          type="button"
-          onClick={openModal}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
-        >
-          Add promotion
-        </button>
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+          <button
+            type="button"
+            onClick={openDownload}
+            disabled={loading || filteredRows.length === 0}
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            Download (PDF + Excel)
+          </button>
+          <button
+            type="button"
+            onClick={openModal}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+          >
+            Add promotion
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -1060,6 +1129,103 @@ function SpecialPromotionsPanel() {
         </div>
       ) : null}
 
+      {downloadOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="promo-download-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={() => setDownloadOpen(false)}
+          />
+          <div className={modalPanelClass}>
+            <h2 id="promo-download-title" className="text-lg font-bold text-slate-900">
+              Download promotions
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Include all three types, or pick them separately. Search, dates, and the customer filter still apply.
+              PDF and Excel download together.
+            </p>
+            <div className="mt-4 space-y-2">
+              <label
+                className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm ring-1 ${
+                  filteredRows.length === 0
+                    ? 'cursor-not-allowed bg-slate-50 text-slate-400 ring-slate-100'
+                    : allDownloadTypesSelected
+                      ? 'cursor-pointer bg-indigo-50 text-indigo-900 ring-indigo-200'
+                      : 'cursor-pointer bg-white text-slate-800 ring-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={allDownloadTypesSelected}
+                    disabled={filteredRows.length === 0}
+                    onChange={toggleAllDownloadTypes}
+                    className="rounded text-indigo-600 focus:ring-indigo-500/40"
+                  />
+                  <span className="font-medium">All types</span>
+                </span>
+                <span className="shrink-0 tabular-nums text-xs text-slate-500">
+                  {filteredRows.length} row{filteredRows.length === 1 ? '' : 's'}
+                </span>
+              </label>
+              {PROMO_TYPES.map((type) => {
+                const count = filteredRows.filter((row) => promoType(row) === type.id).length;
+                const selected = downloadTypes.includes(type.id);
+                return (
+                  <label
+                    key={type.id}
+                    className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm ring-1 ${
+                      count === 0
+                        ? 'cursor-not-allowed bg-slate-50 text-slate-400 ring-slate-100'
+                        : selected
+                          ? 'cursor-pointer bg-indigo-50 text-indigo-900 ring-indigo-200'
+                          : 'cursor-pointer bg-white text-slate-800 ring-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selected && count > 0}
+                        disabled={count === 0}
+                        onChange={() => toggleDownloadType(type.id)}
+                        className="rounded text-indigo-600 focus:ring-indigo-500/40"
+                      />
+                      <span className="font-medium">{type.label}</span>
+                    </span>
+                    <span className="shrink-0 tabular-nums text-xs text-slate-500">
+                      {count} row{count === 1 ? '' : 's'}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={confirmDownload}
+                disabled={downloadRows.length === 0}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download PDF + Excel
+              </button>
+              <button
+                type="button"
+                onClick={() => setDownloadOpen(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <RowDetailModal
         open={!!detailRow}
         row={detailRow}
@@ -1292,6 +1458,16 @@ function PromotionRulesPanel() {
     }
   };
 
+  const handleDownload = () => {
+    const customer = customers.find((c) => c.id === customerFilter)?.name || '';
+    downloadPromotionRules(filteredRows, {
+      dateFrom,
+      dateTo,
+      customer,
+      search,
+    });
+  };
+
   const handleDelete = async (rule) => {
     if (!rule?.id) return;
     const username = getUsername();
@@ -1326,13 +1502,23 @@ function PromotionRulesPanel() {
         <p className="text-sm text-slate-500">
           Set per-product cashback amounts for a customer over a date range.
         </p>
-        <button
-          type="button"
-          onClick={openModal}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
-        >
-          Add a rule
-        </button>
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={loading || filteredRows.length === 0}
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            Download (PDF + Excel)
+          </button>
+          <button
+            type="button"
+            onClick={openModal}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+          >
+            Add a rule
+          </button>
+        </div>
       </div>
 
       {error ? (

@@ -6,6 +6,7 @@ import { clearShopNameCache } from '../shopConfig';
 import { LoadingSpinner, modalPanelClass, modalPanelClassMd, scrollTableWrap, stickyThead } from './tableToolbar';
 import RowDetailModal from './RowDetailModal';
 import CollectorCommissionSection from './CollectorCommissionSection';
+import CompanyProfitSection from './CompanyProfitSection';
 import { useBagProducts } from './BagProductsContext';
 
 const apiBase = getApiBase();
@@ -1891,6 +1892,8 @@ export default function ShopPage() {
         shop={shop}
         onShopUpdate={(data) => setShop((s) => ({ ...s, ...data }))}
       />
+
+      <CompanyProfitSection />
     </div>
   );
 }
