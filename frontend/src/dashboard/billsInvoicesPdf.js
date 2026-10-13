@@ -293,6 +293,12 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
   y += 5;
   doc.text(customerName.toUpperCase(), MARGIN, y);
   y += 5;
+  const customerId = display(customer?.id || bill.customerId);
+  if (customerId !== '—') {
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Customer ID : ${customerId}`, MARGIN, y);
+    y += 5;
+  }
   if (customerLocation !== '—') {
     doc.setFont('helvetica', 'normal');
     doc.text(customerLocation, MARGIN, y);

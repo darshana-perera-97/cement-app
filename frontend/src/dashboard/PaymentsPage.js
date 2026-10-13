@@ -135,6 +135,7 @@ export default function PaymentsPage() {
           r.date,
           r.billNumber,
           r.customerName,
+          r.customerId,
           r.note,
           r.recordedBy,
           r.cancelled ? 'cancelled' : '',
@@ -340,6 +341,10 @@ export default function PaymentsPage() {
               className={r.cancelled ? 'opacity-75' : ''}
               subtitle={
                 <span className="inline-flex flex-wrap items-center gap-1">
+                  {r.customerId ? (
+                    <span className="font-mono font-semibold text-slate-600">ID {r.customerId}</span>
+                  ) : null}
+                  {r.customerId ? <span>·</span> : null}
                   <span>{r.date || '—'}</span>
                   <span>·</span>
                   {r.cancelled ? <CancelledReceiptMark /> : null}
@@ -423,6 +428,9 @@ export default function PaymentsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-900">{r.customerName || '—'}</p>
+                    {r.customerId ? (
+                      <p className="mt-0.5 font-mono text-xs text-slate-500">ID {r.customerId}</p>
+                    ) : null}
                   </td>
                   <td
                     className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${

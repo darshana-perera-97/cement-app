@@ -280,7 +280,7 @@ function renderTaxInvoicePage(doc, bill, opts) {
   drawLabeledField(doc, 'Tax Invoice No.:', invoiceNo, MARGIN + halfW, y, halfW, 10);
   y += 10;
 
-  const partyH = 28;
+  const partyH = 34;
   drawPartyBox(
     doc,
     "Supplier's",
@@ -301,6 +301,7 @@ function renderTaxInvoicePage(doc, bill, opts) {
     [
       { label: 'TIN', value: customer.purchaserTin },
       { label: 'Name', value: purchaserTaxName(customer) },
+      { label: 'Customer ID', value: customer.id },
       { label: 'Address', value: purchaserTaxAddress(customer) },
       { label: 'Telephone No', value: purchaserTaxPhone(customer) },
     ],

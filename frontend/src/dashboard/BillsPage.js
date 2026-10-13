@@ -113,6 +113,22 @@ function normalizeCustomerNameKey(s) {
     .replace(/\s+/g, ' ');
 }
 
+function customerIdByNameMap(customers) {
+  const map = new Map();
+  for (const c of Array.isArray(customers) ? customers : []) {
+    const nk = normalizeCustomerNameKey(c?.name);
+    const id = String(c?.id ?? '').trim();
+    if (nk && id && !map.has(nk)) map.set(nk, id);
+  }
+  return map;
+}
+
+function resolveCustomerId(map, name, storedId) {
+  const stored = String(storedId ?? '').trim();
+  if (stored) return stored;
+  return map.get(normalizeCustomerNameKey(name)) || '';
+}
+
 function formatUnitPrice(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return '';
@@ -620,6 +636,8 @@ export default function BillsPage() {
     return [...u].sort();
   }, [rows]);
 
+  const customerIdsByName = useMemo(() => customerIdByNameMap(customers), [customers]);
+
   const filterBillRows = useCallback(
     (list) =>
       list.filter((r) => {
@@ -630,6 +648,7 @@ export default function BillsPage() {
           r.date,
           r.stockId,
           r.customerName,
+          resolveCustomerId(customerIdsByName, r.customerName, r.customerId),
           r.invoiceNumber,
           r.enteredBy,
           r.note,
@@ -637,7 +656,7 @@ export default function BillsPage() {
           ...bagParts,
         ]);
       }),
-    [search, stockFilter, dateFrom, dateTo, brands],
+    [search, stockFilter, dateFrom, dateTo, brands, customerIdsByName],
   );
 
   const filteredRows = useMemo(() => filterBillRows(rows), [rows, filterBillRows]);
@@ -719,10 +738,11 @@ export default function BillsPage() {
     const invoiceDiscount = sumInvoiceDiscountForBill(promotions, detailBill.id);
     return {
       ...detailBill,
+      customerId: resolveCustomerId(customerIdsByName, detailBill.customerName, detailBill.customerId),
       invoiceDiscount,
       amountToPay: amountToPayForBill(detailBill),
     };
-  }, [detailBill, promotions, amountToPayForBill]);
+  }, [detailBill, promotions, amountToPayForBill, customerIdsByName]);
 
   const pagination = useTablePagination(filteredRows.length, [search, stockFilter, dateFrom, dateTo]);
   const pagedRows = useMemo(
@@ -1333,11 +1353,13 @@ export default function BillsPage() {
             No bills match your search or filters.
           </p>
         ) : (
-          pagedRows.map((r) => (
+          pagedRows.map((r) => {
+            const customerId = resolveCustomerId(customerIdsByName, r.customerName, r.customerId);
+            return (
             <MobileRowCard
               key={r.id}
               title={r.customerName || '—'}
-              subtitle={r.date}
+              subtitle={[customerId ? `ID ${customerId}` : '', r.date].filter(Boolean).join(' · ')}
               badge={
                 r.stockId ? (
                   <span className="rounded-lg bg-slate-100 px-2 py-1 font-mono text-[10px] font-semibold text-slate-700">
@@ -1359,7 +1381,8 @@ export default function BillsPage() {
               ]}
               onClick={() => setDetailBill(r)}
             />
-          ))
+            );
+          })
         )}
       </div>
       <div className={`hidden sm:block ${scrollTableWrap}`}>
@@ -1427,6 +1450,7 @@ export default function BillsPage() {
               pagedRows.map((r) => {
                 const rowLine = 'border-b border-slate-100/90';
                 const note = billNoteText(r);
+                const customerId = resolveCustomerId(customerIdsByName, r.customerName, r.customerId);
                 const showNote = (e) => setHoverNote({ text: note, x: e.clientX, y: e.clientY });
                 return (
                   <tr
@@ -1462,6 +1486,11 @@ export default function BillsPage() {
                           />
                         ) : null}
                       </span>
+                      {customerId ? (
+                        <span className="mt-0.5 block font-mono text-[11px] font-semibold text-slate-500">
+                          ID {customerId}
+                        </span>
+                      ) : null}
                     </td>
                     <td
                       className={`whitespace-nowrap px-3 py-3 font-mono text-sm text-slate-800 ${rowLine} bg-white`}

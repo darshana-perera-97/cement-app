@@ -436,6 +436,9 @@ function BillDetailContent({ row }) {
         <SummaryField label="Date" value={displayText(row.date)} />
         <SummaryField label="Stock ID" value={displayText(row.stockId)} />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
+        {String(row.customerId ?? '').trim() ? (
+          <SummaryField label="Customer ID" value={String(row.customerId).trim()} valueClassName="font-mono" />
+        ) : null}
         <SummaryField label="Entered by" value={displayText(row.enteredBy)} />
         <SummaryField
           label="Total bill"
@@ -626,6 +629,9 @@ function PaymentDetailContent({ row }) {
           valueClassName={row.cancelled ? 'font-mono line-through text-slate-400' : 'font-mono'}
         />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
+        {String(row.customerId ?? '').trim() ? (
+          <SummaryField label="Customer ID" value={String(row.customerId).trim()} valueClassName="font-mono" />
+        ) : null}
         <SummaryField label="Recorded by" value={displayText(row.recordedBy)} />
         {row.requiresApproval ? (
           <SummaryField
@@ -826,6 +832,9 @@ function PromotionDetailContent({ row }) {
           valueClassName="font-mono"
         />
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
+        {String(row.customerId ?? '').trim() ? (
+          <SummaryField label="Customer ID" value={String(row.customerId).trim()} valueClassName="font-mono" />
+        ) : null}
         <SummaryField label="Recorded by" value={displayText(row.enteredBy || row.addedBy)} />
         {amount > 0 ? (
           <SummaryField
@@ -904,6 +913,9 @@ function PromotionRuleDetailContent({ row }) {
     <>
       <SummaryGrid>
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
+        {String(row.customerId ?? '').trim() ? (
+          <SummaryField label="Customer ID" value={String(row.customerId).trim()} valueClassName="font-mono" />
+        ) : null}
         <SummaryField label="Start date" value={displayText(row.startDate)} valueClassName="tabular-nums" />
         <SummaryField label="End date" value={displayText(row.endDate)} valueClassName="tabular-nums" />
         <SummaryField label="Recorded by" value={displayText(row.enteredBy || row.updatedBy)} />

@@ -452,6 +452,7 @@ function SpecialPromotionsPanel() {
       return rowMatchesQuery(search, [
         r.date,
         r.customerName,
+        r.customerId,
         r.billNumber,
         r.invoiceNumber,
         r.reason,
@@ -775,7 +776,7 @@ function SpecialPromotionsPanel() {
               <MobileRowCard
                 key={r.id}
                 title={r.customerName || '—'}
-                subtitle={r.date}
+                subtitle={[r.customerId ? `ID ${r.customerId}` : '', r.date].filter(Boolean).join(' · ')}
                 onClick={() => setDetailRow(r)}
                 fields={[
                   { label: 'Type', value: promoTypeLabel(promoType(r)) },
@@ -829,7 +830,12 @@ function SpecialPromotionsPanel() {
                     aria-label={`Promotion ${r.customerName || ''}`}
                   >
                     <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{r.date}</td>
-                    <td className="px-4 py-3 font-medium text-slate-900">{r.customerName || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      <p>{r.customerName || '—'}</p>
+                      {r.customerId ? (
+                        <p className="mt-0.5 font-mono text-xs font-normal text-slate-500">ID {r.customerId}</p>
+                      ) : null}
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">{promoTypeLabel(type)}</td>
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">
                       {r.invoiceNumber || (r.billNumber ? `#${r.billNumber}` : '—')}
@@ -1344,6 +1350,7 @@ function PromotionRulesPanel() {
     return items.filter((item) =>
       rowMatchesQuery(search, [
         item.rule.customerName,
+        item.rule.customerId,
         item.rule.startDate,
         item.rule.endDate,
         item.rule.enteredBy,
@@ -1598,7 +1605,12 @@ function PromotionRulesPanel() {
               <MobileRowCard
                 key={item.rowKey}
                 title={item.rule.customerName || '—'}
-                subtitle={`${item.rule.startDate || '—'} – ${item.rule.endDate || '—'}`}
+                subtitle={[
+                  item.rule.customerId ? `ID ${item.rule.customerId}` : '',
+                  `${item.rule.startDate || '—'} – ${item.rule.endDate || '—'}`,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
                 onClick={() => setDetailRow(item.rule)}
                 fields={[
                   { label: 'Product', value: item.productLabel },
@@ -1650,7 +1662,12 @@ function PromotionRulesPanel() {
                         rowSpan={item.ruleRowSpan}
                         className={`px-4 py-3 align-middle font-medium text-slate-900 ${stickyFirstTd}`}
                       >
-                        {item.rule.customerName || '—'}
+                        <p>{item.rule.customerName || '—'}</p>
+                        {item.rule.customerId ? (
+                          <p className="mt-0.5 font-mono text-xs font-normal text-slate-500">
+                            ID {item.rule.customerId}
+                          </p>
+                        ) : null}
                       </td>
                     ) : null}
                     {item.ruleRowSpan > 0 ? (

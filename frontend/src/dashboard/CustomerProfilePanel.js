@@ -159,6 +159,11 @@ export default function CustomerProfilePanel({
 
       <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <div className="space-y-1.5">
+          {customer?.id ? (
+            <ContactLine label="ID">
+              <span className="font-mono">{customer.id}</span>
+            </ContactLine>
+          ) : null}
           {customer?.location ? <ContactLine label="Location">{customer.location}</ContactLine> : null}
           <ContactLine label="Email">
             {customer?.email ? (

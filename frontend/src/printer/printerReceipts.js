@@ -243,6 +243,9 @@ export function buildPaymentReceiptLines(payment, shop) {
     { kind: 'align', value: 'left' },
     { kind: 'cols', left: 'Date', right: formatDate(payment?.date) },
     { kind: 'cols', left: 'Customer', right: display(payment?.customerName) },
+    ...(String(payment?.customerId ?? '').trim()
+      ? [{ kind: 'cols', left: 'Customer ID', right: display(payment.customerId) }]
+      : []),
     { kind: 'cols', left: 'Collected by', right: display(collectedByPrintLabel(payment)) },
     { kind: 'rule', char: '=' },
     { kind: 'align', value: 'center' },

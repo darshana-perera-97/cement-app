@@ -321,7 +321,11 @@ export default function CustomersPage() {
               <MobileRowCard
                 key={r.id}
                 title={r.name}
-                subtitle={[r.location, r.contactNumber, r.email].filter(Boolean).join(' · ') || undefined}
+                subtitle={
+                  [r.location, r.contactNumber, r.id ? `ID ${r.id}` : '', r.email]
+                    .filter(Boolean)
+                    .join(' · ') || undefined
+                }
                 onClick={() => openCustomerProfile(r.id)}
                 badge={
                   overdue ? (
@@ -400,6 +404,7 @@ export default function CustomersPage() {
                       <p className="mt-0.5 text-xs text-slate-500">
                         {r.location}
                         {r.contactNumber ? ` · ${r.contactNumber}` : ''}
+                        {r.id ? ` · ID ${r.id}` : ''}
                         {r.email ? ` · ${r.email}` : ''}
                       </p>
                     </td>

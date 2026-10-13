@@ -388,9 +388,14 @@ export default function CustomerTransactionsPage() {
             <span aria-hidden>←</span> Customers
           </Link>
           {customer ? (
-            <>
-              <h1 className="mt-2 truncate text-2xl font-bold tracking-tight text-slate-900">{customer.name}</h1>
-            </>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight text-slate-900">{customer.name}</h1>
+              {customer.id ? (
+                <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
+                  ID {customer.id}
+                </span>
+              ) : null}
+            </div>
           ) : (
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">Customer account</h1>
           )}

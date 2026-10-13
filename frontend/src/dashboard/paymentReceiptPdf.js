@@ -352,6 +352,11 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   const customerLines = doc.splitTextToSize(`Received from : ${customerName}`, contentWidth);
   doc.text(customerLines, MARGIN, y);
   y += customerLines.length * LINE;
+  const customerId = display(payment.customerId);
+  if (customerId !== '—') {
+    doc.text(`Customer ID : ${customerId}`, MARGIN, y);
+    y += LINE;
+  }
   doc.text(`Collected by : ${display(collectedByPrintLabel(payment))}`, MARGIN, y);
   y += LINE + 1.8;
 

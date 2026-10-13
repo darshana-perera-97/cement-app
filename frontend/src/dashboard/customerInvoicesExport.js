@@ -143,6 +143,11 @@ export function downloadCustomerInvoicesPdf(customer, rows, options = {}) {
     timeStyle: 'short',
   });
   let metaY = 22;
+  const customerId = String(customer?.id ?? '').trim();
+  if (customerId) {
+    doc.text(`Customer ID: ${customerId}`, MARGIN, metaY);
+    metaY += 5;
+  }
   doc.text(`Generated: ${dateStr}`, MARGIN, metaY);
   metaY += 5;
   const range =
