@@ -24,6 +24,7 @@ export const COLLECTOR_ACCESS_KEYS = [
   'stock',
   'pending-cheques',
   'overdue-bills',
+  'pending-bills',
   'payments',
   'reports',
 ];
@@ -47,6 +48,7 @@ export const DASHBOARD_ROUTE_ACCESS = {
   messages: 'messages',
   incentive: 'incentive',
   'overdue-bills': 'overdue-bills',
+  'pending-bills': 'pending-bills',
   'pending-cheques': 'pending-cheques',
   unloads: 'unloads',
 };
@@ -87,6 +89,12 @@ export const DASHBOARD_NAV = [
     label: 'Overdue bills',
     icon: 'overdue',
     accessKey: 'overdue-bills',
+  },
+  {
+    to: '/dashboard/pending-bills',
+    label: 'Pending bills',
+    icon: 'pending',
+    accessKey: 'pending-bills',
   },
   {
     to: '/dashboard/pending-cheques',

@@ -958,36 +958,7 @@ function CementBagsPerShopTable({ shopRows, visibleBrands, shopTotals, activeBra
   const emptyMessage = `No bag sales in this period${activeBrand ? ` for ${activeBrand.label}` : ''}.`;
   return (
     <>
-      <div className="space-y-3 sm:hidden">
-        {loading ? (
-          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-            <LoadingSpinner />
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-            {emptyMessage}
-          </p>
-        ) : (
-          pagedRows.map((r) => (
-            <MobileRowCard
-              key={r.shop}
-              title={r.shop}
-              subtitle={r.location || '—'}
-              fields={[
-                ...visibleBrands
-                  .filter((b) => (r[`${b.key}Bags`] || 0) > 0)
-                  .map((b) => ({
-                    label: formatReportItemLabel(b) || b.label,
-                    value: (r[`${b.key}Bags`] || 0).toLocaleString(),
-                  })),
-                { label: 'Total bags', value: r.totalBags.toLocaleString() },
-                { label: 'Bills', value: r.billCount },
-              ]}
-            />
-          ))
-        )}
-      </div>
-      <div className={`hidden sm:block ${scrollTableWrap}`}>
+      <div className={scrollTableWrap}>
         <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1072,6 +1043,200 @@ function CementBagsPerShopTable({ shopRows, visibleBrands, shopTotals, activeBra
         />
       ) : null}
     </>
+  );
+}
+
+const PER_SHOP_TABS = [
+  { id: 'bags', label: 'Cement bags per shop' },
+  { id: 'credit', label: 'Credit sales per shop' },
+  { id: 'cash', label: 'Cash in per shop' },
+];
+
+function CreditSalesPerShopTable({ shopRows, shopTotals, loading }) {
+  const rows = useMemo(
+    () => shopRows.filter((r) => r.creditSales > 0).sort((a, b) => b.creditSales - a.creditSales),
+    [shopRows],
+  );
+  return (
+    <div className={scrollTableWrap}>
+      <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
+        <thead className={stickyThead}>
+          <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+            <th className="whitespace-nowrap px-4 py-3">Location</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right">Bills</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right">Credit sales</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                <LoadingSpinner />
+              </td>
+            </tr>
+          ) : rows.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                No credit sales in this period.
+              </td>
+            </tr>
+          ) : (
+            rows.map((r) => (
+              <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
+                <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">{r.billCount}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
+                  {money(r.creditSales)}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+        {!loading && shopTotals.creditSales > 0 ? (
+          <tfoot>
+            <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+              <td className="px-4 py-3" colSpan={2}>
+                Total
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                {shopRows.reduce((s, r) => s + r.billCount, 0)}
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(shopTotals.creditSales)}</td>
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
+    </div>
+  );
+}
+
+function CashInPerShopTable({ shopRows, shopTotals, loading }) {
+  const rows = useMemo(
+    () => shopRows.filter((r) => r.cashIn > 0).sort((a, b) => b.cashIn - a.cashIn),
+    [shopRows],
+  );
+  return (
+    <div className={scrollTableWrap}>
+      <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
+        <thead className={stickyThead}>
+          <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+            <th className="whitespace-nowrap px-4 py-3">Location</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right">Payments</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right">Cash in</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                <LoadingSpinner />
+              </td>
+            </tr>
+          ) : rows.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                No payments in this period.
+              </td>
+            </tr>
+          ) : (
+            rows.map((r) => (
+              <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
+                <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">{r.paymentCount}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
+                  {money(r.cashIn)}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+        {!loading && shopTotals.cashIn > 0 ? (
+          <tfoot>
+            <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+              <td className="px-4 py-3" colSpan={2}>
+                Total
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                {shopRows.reduce((s, r) => s + r.paymentCount, 0)}
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
+                {money(shopTotals.cashIn)}
+              </td>
+            </tr>
+          </tfoot>
+        ) : null}
+      </table>
+    </div>
+  );
+}
+
+function PerShopReportSections({
+  shopRows,
+  visibleBrands,
+  shopTotals,
+  activeBrand,
+  loading,
+  assignedShops = false,
+}) {
+  const [tab, setTab] = useState('bags');
+  const who = assignedShops ? 'each of your assigned shops' : 'each customer';
+  const perWho = assignedShops ? 'assigned shop' : 'customer';
+  const subtitles = {
+    bags: `Credit bill bags sold to ${who} in the selected period${
+      activeBrand ? ` (${activeBrand.label} only)` : ''
+    }`,
+    credit: `Total credit bill amounts per ${perWho} in the selected period${
+      activeBrand ? ` (${activeBrand.label} line totals only)` : ''
+    }`,
+    cash: `Payments received (cash + cheque) per ${perWho} in the selected period`,
+  };
+
+  return (
+    <div>
+      <div
+        className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100/90 p-1 ring-1 ring-slate-200/60"
+        role="tablist"
+        aria-label="Cement bags per shop sections"
+      >
+        {PER_SHOP_TABS.map(({ id, label }) => {
+          const active = tab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(id)}
+              className={`${periodBtn} ${active ? periodActive : periodIdle}`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-xs text-slate-500">{subtitles[tab]}</p>
+      <div className="mt-4" role="tabpanel">
+        {tab === 'bags' ? (
+          <CementBagsPerShopTable
+            shopRows={shopRows}
+            visibleBrands={visibleBrands}
+            shopTotals={shopTotals}
+            activeBrand={activeBrand}
+            loading={loading}
+          />
+        ) : null}
+        {tab === 'credit' ? (
+          <CreditSalesPerShopTable shopRows={shopRows} shopTotals={shopTotals} loading={loading} />
+        ) : null}
+        {tab === 'cash' ? (
+          <CashInPerShopTable shopRows={shopRows} shopTotals={shopTotals} loading={loading} />
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -3401,8 +3566,8 @@ export default function ReportsPage() {
       {collectorReportsView ? (
       <Card
         title="Cement bags per shop"
-        subtitle={`Credit bill bags sold to each of your assigned shops in the selected period${
-          activeBrand ? ` (${activeBrand.label} only)` : ''
+        subtitle={`Bags, credit sales, and cash in for your assigned shops in the selected period${
+          activeBrand ? ` (${activeBrand.label} filter on bags and credit sales)` : ''
         }`}
       >
         <TableFiltersBar hint={!loading ? filterHint : null}>
@@ -3503,12 +3668,13 @@ export default function ReportsPage() {
         </TableFiltersBar>
 
         <div className="mt-5">
-          <CementBagsPerShopTable
+          <PerShopReportSections
             shopRows={shopRows}
             visibleBrands={visibleBrands}
             shopTotals={shopTotals}
             activeBrand={activeBrand}
             loading={loading}
+            assignedShops
           />
         </div>
       </Card>
@@ -4771,7 +4937,7 @@ export default function ReportsPage() {
         </p>
       ) : null}
 
-      <div className="hidden space-y-5 sm:block">
+      <div className="space-y-5">
       {loading ? (
         <div className="flex justify-center py-16">
           <LoadingSpinner size="lg" label="Loading report data…" />
@@ -4790,177 +4956,14 @@ export default function ReportsPage() {
             />
           </Card>
 
-          <Card
-            title="Cement bags per shop"
-            subtitle={`Credit bill bags sold to each customer in the selected period${activeBrand ? ` (${activeBrand.label} only)` : ''}`}
-          >
-            <CementBagsPerShopTable
+          <Card title="Cement bags per shop">
+            <PerShopReportSections
               shopRows={shopRows}
               visibleBrands={visibleBrands}
               shopTotals={shopTotals}
               activeBrand={activeBrand}
               loading={false}
             />
-          </Card>
-
-          <Card
-            title="Credit sales per shop"
-            subtitle={`Total credit bill amounts per customer in the selected period${activeBrand ? ` (${activeBrand.label} line totals only)` : ''}`}
-          >
-            <div className="hidden">
-              {shopRows.filter((r) => r.creditSales > 0).length === 0 ? (
-                <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-                  No credit sales in this period.
-                </p>
-              ) : (
-                shopRows
-                  .filter((r) => r.creditSales > 0)
-                  .sort((a, b) => b.creditSales - a.creditSales)
-                  .map((r) => (
-                    <MobileRowCard
-                      key={r.shop}
-                      title={r.shop}
-                      subtitle={r.location || '—'}
-                      fields={[
-                        { label: 'Bills', value: r.billCount },
-                        { label: 'Credit sales', value: money(r.creditSales) },
-                      ]}
-                    />
-                  ))
-              )}
-            </div>
-            <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
-                <thead className={stickyThead}>
-                  <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
-                    <th className="whitespace-nowrap px-4 py-3">Location</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Bills</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Credit sales</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shopRows.filter((r) => r.creditSales > 0).length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                        No credit sales in this period.
-                      </td>
-                    </tr>
-                  ) : (
-                    shopRows
-                      .filter((r) => r.creditSales > 0)
-                      .sort((a, b) => b.creditSales - a.creditSales)
-                      .map((r) => (
-                        <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
-                          <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
-                            {r.billCount}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
-                            {money(r.creditSales)}
-                          </td>
-                        </tr>
-                      ))
-                  )}
-                </tbody>
-                {shopTotals.creditSales > 0 ? (
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                      <td className="px-4 py-3" colSpan={2}>
-                        Total
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                        {shopRows.reduce((s, r) => s + r.billCount, 0)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                        {money(shopTotals.creditSales)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                ) : null}
-              </table>
-            </div>
-          </Card>
-
-          <Card
-            title="Cash in per shop"
-            subtitle="Payments received (cash + cheque) per customer in the selected period"
-          >
-            <div className="hidden">
-              {shopRows.filter((r) => r.cashIn > 0).length === 0 ? (
-                <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-                  No payments in this period.
-                </p>
-              ) : (
-                shopRows
-                  .filter((r) => r.cashIn > 0)
-                  .sort((a, b) => b.cashIn - a.cashIn)
-                  .map((r) => (
-                    <MobileRowCard
-                      key={r.shop}
-                      title={r.shop}
-                      subtitle={r.location || '—'}
-                      fields={[
-                        { label: 'Payments', value: r.paymentCount },
-                        { label: 'Cash in', value: money(r.cashIn) },
-                      ]}
-                    />
-                  ))
-              )}
-            </div>
-            <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[480px] data-table border-separate border-spacing-0 text-left text-sm">
-                <thead className={stickyThead}>
-                  <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
-                    <th className="whitespace-nowrap px-4 py-3">Location</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Payments</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Cash in</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shopRows.filter((r) => r.cashIn > 0).length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                        No payments in this period.
-                      </td>
-                    </tr>
-                  ) : (
-                    shopRows
-                      .filter((r) => r.cashIn > 0)
-                      .sort((a, b) => b.cashIn - a.cashIn)
-                      .map((r) => (
-                        <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
-                          <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
-                            {r.paymentCount}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
-                            {money(r.cashIn)}
-                          </td>
-                        </tr>
-                      ))
-                  )}
-                </tbody>
-                {shopTotals.cashIn > 0 ? (
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                      <td className="px-4 py-3" colSpan={2}>
-                        Total
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                        {shopRows.reduce((s, r) => s + r.paymentCount, 0)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
-                        {money(shopTotals.cashIn)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                ) : null}
-              </table>
-            </div>
           </Card>
 
           <Card

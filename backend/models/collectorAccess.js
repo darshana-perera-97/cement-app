@@ -4,6 +4,7 @@ const COLLECTOR_ACCESS_KEYS = [
   'stock',
   'pending-cheques',
   'overdue-bills',
+  'pending-bills',
   'payments',
   'reports',
 ];

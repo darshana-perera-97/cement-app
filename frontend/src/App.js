@@ -24,6 +24,7 @@ import ReportsPage from './dashboard/ReportsPage';
 import RequestsPage from './dashboard/RequestsPage';
 import ShopPage from './dashboard/ShopPage';
 import OverdueBillsPage from './dashboard/OverdueBillsPage';
+import PendingBillsPage from './dashboard/PendingBillsPage';
 import PendingChequesPage from './dashboard/PendingChequesPage';
 import UnloadsPage from './UnloadsPage';
 import SettingsPage from './dashboard/SettingsPage';
@@ -238,6 +239,14 @@ function AppRoutes() {
           element={
             <DashboardAccessRoute accessKey="overdue-bills">
               <OverdueBillsPage />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
+          path="pending-bills"
+          element={
+            <DashboardAccessRoute accessKey="pending-bills">
+              <PendingBillsPage />
             </DashboardAccessRoute>
           }
         />
