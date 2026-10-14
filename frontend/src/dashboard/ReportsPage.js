@@ -7,6 +7,7 @@ import {
   LoadingSpinner,
   MobileRowCard,
   TableFiltersBar,
+  TablePaginationBar,
   filterControl,
   filterLabel,
   filterLabelNarrow,
@@ -16,14 +17,11 @@ import {
   stickyFirstTd,
   stickyFirstTh,
   stickyThead,
+  useTablePagination,
 } from './tableToolbar';
 import { buildChequeTableRows, cdmPortion, chequePortion, getPaymentCdmDeposits, getPaymentCheques, getPaymentOnlineTransfers, onlineTransferPortion } from './paymentCheques';
 import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
-import {
-  buildDailyBagsByShopBrandRows,
-  downloadDailyBagsByShopReport,
-} from './dailyBagsByShopExport';
 import { buildShopTargetsRows } from './shopTargetsReport';
 import { downloadShopTargetsPdf } from './shopTargetsPdf';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
@@ -105,6 +103,7 @@ function buildMonthlyBillRows(bills, settledByBillId, from, to) {
     const shop = String(bill.customerName ?? '').trim() || '—';
     const settledDate = bill.id ? settledByBillId.get(bill.id) || '' : '';
     const daysToSettle = settledDate ? daysFromYmdToToday(date, settledDate) : null;
+    const spendDays = settledDate ? null : daysFromYmdToToday(date);
 
     let anyBrand = false;
     for (const brand of getCachedBrands()) {
@@ -121,6 +120,7 @@ function buildMonthlyBillRows(bills, settledByBillId, from, to) {
         amount: brandLineFromBill(bill, brand.key),
         settledDate,
         daysToSettle,
+        spendDays,
       });
     }
 
@@ -135,6 +135,7 @@ function buildMonthlyBillRows(bills, settledByBillId, from, to) {
         amount: Number(bill.totalAmount) || 0,
         settledDate,
         daysToSettle,
+        spendDays,
       });
     }
   }
@@ -947,6 +948,133 @@ const periodBtn =
 const periodActive = 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80';
 const periodIdle = 'text-slate-600 hover:bg-white/60';
 
+function CementBagsPerShopTable({ shopRows, visibleBrands, shopTotals, activeBrand, loading }) {
+  const rows = useMemo(() => shopRows.filter((r) => r.totalBags > 0), [shopRows]);
+  const pagination = useTablePagination(rows.length, [shopRows, activeBrand?.key || '']);
+  const pagedRows = useMemo(
+    () => rows.slice(pagination.offset, pagination.offset + pagination.pageSize),
+    [rows, pagination.offset, pagination.pageSize],
+  );
+  const emptyMessage = `No bag sales in this period${activeBrand ? ` for ${activeBrand.label}` : ''}.`;
+  return (
+    <>
+      <div className="space-y-3 sm:hidden">
+        {loading ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            <LoadingSpinner />
+          </p>
+        ) : rows.length === 0 ? (
+          <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+            {emptyMessage}
+          </p>
+        ) : (
+          pagedRows.map((r) => (
+            <MobileRowCard
+              key={r.shop}
+              title={r.shop}
+              subtitle={r.location || '—'}
+              fields={[
+                ...visibleBrands
+                  .filter((b) => (r[`${b.key}Bags`] || 0) > 0)
+                  .map((b) => ({
+                    label: formatReportItemLabel(b) || b.label,
+                    value: (r[`${b.key}Bags`] || 0).toLocaleString(),
+                  })),
+                { label: 'Total bags', value: r.totalBags.toLocaleString() },
+                { label: 'Bills', value: r.billCount },
+              ]}
+            />
+          ))
+        )}
+      </div>
+      <div className={`hidden sm:block ${scrollTableWrap}`}>
+        <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
+          <thead className={stickyThead}>
+            <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+              <th className="whitespace-nowrap px-4 py-3">Location</th>
+              {visibleBrands.map((b) => (
+                <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
+                  {formatReportItemLabel(b) || b.label}
+                </th>
+              ))}
+              <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Bills</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={visibleBrands.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  <LoadingSpinner />
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={visibleBrands.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : (
+              pagedRows.map((r) => (
+                <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
+                  <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
+                  {visibleBrands.map((b) => (
+                    <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      {(r[`${b.key}Bags`] || 0).toLocaleString()}
+                    </td>
+                  ))}
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
+                    {r.totalBags.toLocaleString()}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
+                    {r.billCount}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          {!loading && rows.length > 0 ? (
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                <td className="px-4 py-3" colSpan={2}>
+                  Total
+                </td>
+                {visibleBrands.map((b) => {
+                  const sum = rows.reduce((s, r) => s + (r[`${b.key}Bags`] || 0), 0);
+                  return (
+                    <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                      {sum.toLocaleString()}
+                    </td>
+                  );
+                })}
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  {shopTotals.totalBags.toLocaleString()}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  {rows.reduce((s, r) => s + r.billCount, 0)}
+                </td>
+              </tr>
+            </tfoot>
+            ) : null}
+        </table>
+      </div>
+      {!loading && rows.length > 0 ? (
+        <TablePaginationBar
+          className="mt-4"
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          pageSize={pagination.pageSize}
+          totalCount={rows.length}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function Card({ title, subtitle, children }) {
   return (
     <div className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
@@ -1030,8 +1158,6 @@ export default function ReportsPage() {
   const [billsMonth, setBillsMonth] = useState(() => currentMonthValue());
   const [billsMonthShop, setBillsMonthShop] = useState('');
   const [billsMonthSearch, setBillsMonthSearch] = useState('');
-  const [dailyBagsMonth, setDailyBagsMonth] = useState(() => currentMonthValue());
-  const [dailyBagsBrand, setDailyBagsBrand] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
   const [dailyReportDate, setDailyReportDate] = useState(() => localYmd());
   const [dailyReportUserId, setDailyReportUserId] = useState('');
@@ -1310,18 +1436,6 @@ export default function ReportsPage() {
 
   const billsMonthLabel = useMemo(() => monthDisplayLabel(billsMonth), [billsMonth]);
 
-  const dailyBagsMonthLabel = useMemo(() => monthDisplayLabel(dailyBagsMonth), [dailyBagsMonth]);
-
-  const dailyBagsActiveBrand = useMemo(
-    () => brands.find((b) => b.key === dailyBagsBrand) ?? null,
-    [dailyBagsBrand],
-  );
-
-  const dailyBagsReport = useMemo(
-    () => buildDailyBagsByShopBrandRows(bills, dailyBagsMonth, dailyBagsBrand),
-    [bills, dailyBagsMonth, dailyBagsBrand],
-  );
-
   const shopTargetsMonthLabel = useMemo(() => monthDisplayLabel(shopTargetsMonth), [shopTargetsMonth]);
 
   const shopTargetsReport = useMemo(
@@ -1363,6 +1477,7 @@ export default function ReportsPage() {
         money(r.amount),
         r.settledDate,
         r.daysToSettle,
+        r.spendDays,
       ]);
     });
   }, [monthlyBillRows, billsMonthShop, billsMonthSearch]);
@@ -1431,6 +1546,33 @@ export default function ReportsPage() {
   const settledCollectionsTotal = useMemo(
     () => settledCollectionsRows.reduce((s, r) => s + (Number(r.amount) || 0), 0),
     [settledCollectionsRows],
+  );
+
+  const settledCollectionsPagination = useTablePagination(settledCollectionsRows.length, [
+    collectionsMonth,
+    collectionsCollectorId,
+  ]);
+  const pagedSettledCollectionsRows = useMemo(
+    () =>
+      settledCollectionsRows.slice(
+        settledCollectionsPagination.offset,
+        settledCollectionsPagination.offset + settledCollectionsPagination.pageSize,
+      ),
+    [settledCollectionsRows, settledCollectionsPagination.offset, settledCollectionsPagination.pageSize],
+  );
+
+  const monthlyBillsPagination = useTablePagination(filteredMonthlyBillRows.length, [
+    billsMonth,
+    billsMonthShop,
+    billsMonthSearch,
+  ]);
+  const pagedMonthlyBillRows = useMemo(
+    () =>
+      filteredMonthlyBillRows.slice(
+        monthlyBillsPagination.offset,
+        monthlyBillsPagination.offset + monthlyBillsPagination.pageSize,
+      ),
+    [filteredMonthlyBillRows, monthlyBillsPagination.offset, monthlyBillsPagination.pageSize],
   );
 
   const collectionsCollectorLabel = useMemo(() => {
@@ -1729,7 +1871,7 @@ export default function ReportsPage() {
 
   const visibleBrands = useMemo(
     () => (activeBrand ? [activeBrand] : brands),
-    [activeBrand],
+    [activeBrand, brands],
   );
 
   const refDetailRows = useMemo(() => {
@@ -2047,20 +2189,6 @@ export default function ReportsPage() {
     );
   }, [billsMonth, billsMonthLabel, billsMonthFilterNote, filteredMonthlyBillRows, monthlyBillTotals]);
 
-  const handleDownloadDailyBagsByShop = useCallback(() => {
-    downloadDailyBagsByShopReport(
-      {
-        monthLabel: dailyBagsMonthLabel,
-        brandLabel: dailyBagsActiveBrand ? dailyBagsActiveBrand.label : 'All brands',
-        daysInMonth: dailyBagsReport.daysInMonth,
-        rows: dailyBagsReport.rows,
-        dayTotals: dailyBagsReport.dayTotals,
-        grandTotal: dailyBagsReport.grandTotal,
-      },
-      { monthSlug: dailyBagsMonth },
-    );
-  }, [dailyBagsMonth, dailyBagsMonthLabel, dailyBagsActiveBrand, dailyBagsReport]);
-
   const handleDownloadShopTargets = useCallback(() => {
     downloadShopTargetsPdf(
       {
@@ -2257,7 +2385,7 @@ export default function ReportsPage() {
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
           {collectorReportsView
-            ? 'Daily collections, monthly bills, daily bags sold, and settled collections for your assigned shops.'
+            ? 'Daily collections, monthly bills, cement bags per shop, and settled collections for your assigned shops.'
             : showDailyCollectionsReport
               ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
               : 'Monthly summaries, balances, and downloadable reports.'}
@@ -3019,7 +3147,7 @@ export default function ReportsPage() {
                   </td>
                 </tr>
               ) : (
-                settledCollectionsRows.map((r) => {
+                pagedSettledCollectionsRows.map((r) => {
                   const brand = brands.find((b) => b.key === r.brandKey);
                   return (
                     <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
@@ -3058,6 +3186,17 @@ export default function ReportsPage() {
             </tbody>
           </table>
         </div>
+        {!loading && settledCollectionsRows.length > 0 ? (
+          <TablePaginationBar
+            className="mt-4"
+            page={settledCollectionsPagination.page}
+            totalPages={settledCollectionsPagination.totalPages}
+            pageSize={settledCollectionsPagination.pageSize}
+            totalCount={settledCollectionsRows.length}
+            onPageChange={settledCollectionsPagination.setPage}
+            onPageSizeChange={settledCollectionsPagination.setPageSize}
+          />
+        ) : null}
       </Card>
 
       <Card
@@ -3121,7 +3260,7 @@ export default function ReportsPage() {
           </button>
         </TableFiltersBar>
 
-        <div className="mt-5 hidden">
+        <div className="mt-5 space-y-3 lg:hidden">
           {loading ? (
             <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
               <LoadingSpinner />
@@ -3131,24 +3270,36 @@ export default function ReportsPage() {
               {billsMonthEmptyMessage}
             </p>
           ) : (
-            filteredMonthlyBillRows.map((r) => (
-              <MobileRowCard
-                key={r.rowKey}
-                title={r.shop}
-                subtitle={r.date}
-                badge={r.bagType !== '—' ? r.bagType : null}
-                fields={[
-                  { label: 'Bags', value: r.bagCount.toLocaleString() },
-                  { label: 'Amount', value: money(r.amount) },
-                  { label: 'Settled', value: r.settledDate || '—' },
-                  { label: 'Days', value: r.daysToSettle != null ? r.daysToSettle : '—' },
-                ]}
-              />
-            ))
+            <>
+              {pagedMonthlyBillRows.map((r) => (
+                <MobileRowCard
+                  key={r.rowKey}
+                  title={r.shop}
+                  subtitle={r.date}
+                  badge={r.bagType !== '—' ? r.bagType : null}
+                  fields={[
+                    { label: 'Bags', value: r.bagCount.toLocaleString() },
+                    { label: 'Amount', value: money(r.amount) },
+                    { label: 'Spend days', value: r.spendDays != null ? r.spendDays : '—' },
+                    { label: 'Settled', value: r.settledDate || '—' },
+                    { label: 'Days', value: r.daysToSettle != null ? r.daysToSettle : '—' },
+                  ]}
+                />
+              ))}
+              <div className="flex items-center justify-between gap-3 rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-semibold text-slate-900 ring-1 ring-indigo-100">
+                <span>
+                  Total ({filteredMonthlyBillRows.length} line
+                  {filteredMonthlyBillRows.length === 1 ? '' : 's'})
+                </span>
+                <span className="tabular-nums text-indigo-900">
+                  {monthlyBillTotals.bagCount.toLocaleString()} bags · {money(monthlyBillTotals.amount)}
+                </span>
+              </div>
+            </>
           )}
         </div>
 
-        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
+        <div className={`mt-5 hidden lg:block ${scrollTableWrap}`}>
           <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3157,6 +3308,7 @@ export default function ReportsPage() {
                 <th className="whitespace-nowrap px-4 py-3">Bag type</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Bag count</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Spend days</th>
                 <th className="whitespace-nowrap px-4 py-3">Bill settled date</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Days to settle</th>
               </tr>
@@ -3164,18 +3316,18 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : filteredMonthlyBillRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                     {billsMonthEmptyMessage}
                   </td>
                 </tr>
               ) : (
-                filteredMonthlyBillRows.map((r) => {
+                pagedMonthlyBillRows.map((r) => {
                   const brand = brands.find((b) => b.key === r.brandKey);
                   return (
                     <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
@@ -3200,6 +3352,9 @@ export default function ReportsPage() {
                       <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
                         {money(r.amount)}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
+                        {r.spendDays != null ? r.spendDays : '—'}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
                         {r.settledDate || '—'}
                       </td>
@@ -3223,43 +3378,120 @@ export default function ReportsPage() {
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-900">
                     {money(monthlyBillTotals.amount)}
                   </td>
+                  <td className="px-4 py-3" />
                   <td className="px-4 py-3" colSpan={2} />
                 </tr>
               </tfoot>
             ) : null}
           </table>
         </div>
+        {!loading && filteredMonthlyBillRows.length > 0 ? (
+          <TablePaginationBar
+            className="mt-4"
+            page={monthlyBillsPagination.page}
+            totalPages={monthlyBillsPagination.totalPages}
+            pageSize={monthlyBillsPagination.pageSize}
+            totalCount={filteredMonthlyBillRows.length}
+            onPageChange={monthlyBillsPagination.setPage}
+            onPageSizeChange={monthlyBillsPagination.setPageSize}
+          />
+        ) : null}
       </Card>
 
+      {collectorReportsView ? (
       <Card
-        title="Daily bags sold by shop"
-        subtitle={
-          collectorReportsView
-            ? `Bags sold for your assigned shops for each day of ${dailyBagsMonthLabel}${
-                dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
-              }`
-            : `Bags sold per shop and brand for each day of ${dailyBagsMonthLabel}${
-                dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
-              }`
-        }
+        title="Cement bags per shop"
+        subtitle={`Credit bill bags sold to each of your assigned shops in the selected period${
+          activeBrand ? ` (${activeBrand.label} only)` : ''
+        }`}
       >
-        <TableFiltersBar>
-          <label className={filterLabelNarrow}>
-            Month
-            <input
-              type="month"
-              value={dailyBagsMonth}
-              onChange={(e) => setDailyBagsMonth(e.target.value || currentMonthValue())}
-              className={filterControl}
-            />
-          </label>
+        <TableFiltersBar hint={!loading ? filterHint : null}>
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-slate-600">Period</span>
+            <div className="inline-flex rounded-xl bg-slate-100/90 p-1 ring-1 ring-slate-200/60">
+              <button
+                type="button"
+                className={`${periodBtn} ${periodMode === 'weekly' ? periodActive : periodIdle}`}
+                onClick={() => handlePeriodChange('weekly')}
+              >
+                Weekly
+              </button>
+              <button
+                type="button"
+                className={`${periodBtn} ${periodMode === 'monthly' ? periodActive : periodIdle}`}
+                onClick={() => handlePeriodChange('monthly')}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                className={`${periodBtn} ${periodMode === 'custom' ? periodActive : periodIdle}`}
+                onClick={() => setPeriodMode('custom')}
+              >
+                Custom
+              </button>
+            </div>
+          </div>
+
+          {periodMode === 'weekly' ? (
+            <label className={filterLabelNarrow}>
+              Week
+              <input
+                type="week"
+                value={selectedWeek}
+                onChange={(e) => applyWeek(e.target.value)}
+                className={filterControl}
+              />
+            </label>
+          ) : null}
+
+          {periodMode === 'monthly' ? (
+            <label className={filterLabelNarrow}>
+              Month
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => applyMonth(e.target.value)}
+                className={filterControl}
+              />
+            </label>
+          ) : null}
+
+          {periodMode === 'custom' ? (
+            <>
+              <label className={filterLabelNarrow}>
+                From date
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className={filterControl}
+                />
+              </label>
+              <label className={filterLabelNarrow}>
+                To date
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className={filterControl}
+                />
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={handleGenerate}
+                  className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+                >
+                  Generate report
+                </button>
+              </div>
+            </>
+          ) : null}
+
           <label className={filterLabelNarrow}>
             Brand
-            <select
-              value={dailyBagsBrand}
-              onChange={(e) => setDailyBagsBrand(e.target.value)}
-              className={filterControl}
-            >
+            <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className={filterControl}>
               <option value="">All brands</option>
               {brands.map((b) => (
                 <option key={b.key} value={b.key}>
@@ -3268,160 +3500,20 @@ export default function ReportsPage() {
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            onClick={handleDownloadDailyBagsByShop}
-            disabled={loading || !!error}
-            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Download report (PDF + Excel)
-          </button>
         </TableFiltersBar>
 
-        <div className="mt-5 space-y-3 sm:hidden">
-          {loading ? (
-            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-              <LoadingSpinner />
-            </p>
-          ) : dailyBagsReport.rows.length === 0 ? (
-            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-              No bags sold in {dailyBagsMonthLabel}.
-            </p>
-          ) : (
-            dailyBagsReport.rows.map((r) => {
-              const brand = brands.find((b) => b.key === r.brandKey);
-              const soldDays = r.dayBags
-                .map((n, i) => (n > 0 ? { day: i + 1, bags: n } : null))
-                .filter(Boolean);
-              return (
-                <MobileRowCard
-                  key={r.rowKey}
-                  title={r.shop}
-                  subtitle={`${soldDays.length} day${soldDays.length === 1 ? '' : 's'} with sales`}
-                  badge={
-                    <span
-                      className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                        brand?.iconBg || 'bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      {r.brand}
-                    </span>
-                  }
-                  fields={[
-                    { label: 'Month total', value: r.total.toLocaleString() },
-                    {
-                      label: 'By day',
-                      value:
-                        soldDays.length === 0
-                          ? '—'
-                          : soldDays.map((d) => `${d.day}: ${d.bags}`).join(' · '),
-                    },
-                  ]}
-                />
-              );
-            })
-          )}
-        </div>
-
-        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
-          <table
-            className="w-full data-table border-separate border-spacing-0 text-left text-sm"
-            style={{ minWidth: `${220 + dailyBagsReport.daysInMonth * 36 + 64}px` }}
-          >
-            <thead className={stickyThead}>
-              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th className={`whitespace-nowrap px-3 py-3 ${stickyFirstTh}`}>Shop name</th>
-                <th className="whitespace-nowrap px-3 py-3">Brand</th>
-                {Array.from({ length: dailyBagsReport.daysInMonth }, (_, i) => (
-                  <th key={i + 1} className="whitespace-nowrap px-2 py-3 text-center tabular-nums">
-                    {i + 1}
-                  </th>
-                ))}
-                <th className="whitespace-nowrap px-3 py-3 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={dailyBagsReport.daysInMonth + 3}
-                    className="px-4 py-8 text-center text-slate-500"
-                  >
-                    <LoadingSpinner />
-                  </td>
-                </tr>
-              ) : dailyBagsReport.rows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={dailyBagsReport.daysInMonth + 3}
-                    className="px-4 py-8 text-center text-slate-500"
-                  >
-                    No bags sold in {dailyBagsMonthLabel}.
-                  </td>
-                </tr>
-              ) : (
-                dailyBagsReport.rows.map((r) => {
-                  const brand = brands.find((b) => b.key === r.brandKey);
-                  return (
-                    <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
-                      {r.shopRowSpan > 0 ? (
-                        <td
-                          rowSpan={r.shopRowSpan}
-                          className={`whitespace-nowrap px-3 py-2.5 align-middle font-medium text-slate-900 ${stickyFirstTd}`}
-                        >
-                          {r.shop}
-                        </td>
-                      ) : null}
-                      <td className="whitespace-nowrap px-3 py-2.5">
-                        <span
-                          className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                            brand?.iconBg || 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {r.brand}
-                        </span>
-                      </td>
-                      {r.dayBags.map((n, i) => (
-                        <td
-                          key={i}
-                          className={`whitespace-nowrap px-2 py-2.5 text-center tabular-nums ${
-                            n > 0 ? 'font-medium text-slate-800' : 'text-slate-300'
-                          }`}
-                        >
-                          {n > 0 ? n.toLocaleString() : '—'}
-                        </td>
-                      ))}
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">
-                        {r.total.toLocaleString()}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-            {!loading && dailyBagsReport.rows.length > 0 ? (
-              <tfoot>
-                <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-slate-900">
-                  <td className="sticky left-0 z-[11] bg-indigo-50 px-3 py-3 shadow-[2px_0_4px_-2px_rgba(15,23,42,0.06)]" colSpan={2}>
-                    Total ({dailyBagsReport.shopCount || dailyBagsReport.rows.length} shop
-                    {(dailyBagsReport.shopCount || dailyBagsReport.rows.length) === 1 ? '' : 's'} ·{' '}
-                    {dailyBagsReport.rows.length} brand row
-                    {dailyBagsReport.rows.length === 1 ? '' : 's'})
-                  </td>
-                  {dailyBagsReport.dayTotals.map((n, i) => (
-                    <td key={i} className="whitespace-nowrap px-2 py-3 text-center tabular-nums">
-                      {n > 0 ? n.toLocaleString() : '—'}
-                    </td>
-                  ))}
-                  <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-indigo-900">
-                    {dailyBagsReport.grandTotal.toLocaleString()}
-                  </td>
-                </tr>
-              </tfoot>
-            ) : null}
-          </table>
+        <div className="mt-5">
+          <CementBagsPerShopTable
+            shopRows={shopRows}
+            visibleBrands={visibleBrands}
+            shopTotals={shopTotals}
+            activeBrand={activeBrand}
+            loading={loading}
+          />
         </div>
       </Card>
+      ) : null}
+
 
       {!collectorReportsView ? (
       <>
@@ -4702,102 +4794,13 @@ export default function ReportsPage() {
             title="Cement bags per shop"
             subtitle={`Credit bill bags sold to each customer in the selected period${activeBrand ? ` (${activeBrand.label} only)` : ''}`}
           >
-            <div className="hidden">
-              {shopRows.filter((r) => r.totalBags > 0).length === 0 ? (
-                <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-                  No bag sales in this period{activeBrand ? ` for ${activeBrand.label}` : ''}.
-                </p>
-              ) : (
-                shopRows
-                  .filter((r) => r.totalBags > 0)
-                  .map((r) => (
-                    <MobileRowCard
-                      key={r.shop}
-                      title={r.shop}
-                      subtitle={r.location || '—'}
-                      fields={[
-                        ...visibleBrands.slice(0, 4).map((b) => ({
-                          label: formatReportItemLabel(b) || b.label,
-                          value: r[`${b.key}Bags`].toLocaleString(),
-                        })),
-                        { label: 'Total bags', value: r.totalBags.toLocaleString() },
-                        { label: 'Bills', value: r.billCount },
-                      ]}
-                    />
-                  ))
-              )}
-            </div>
-            <div className={`hidden sm:block ${scrollTableWrap}`}>
-              <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
-                <thead className={stickyThead}>
-                  <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
-                    <th className="whitespace-nowrap px-4 py-3">Location</th>
-                    {visibleBrands.map((b) => (
-                      <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
-                        {formatReportItemLabel(b) || b.label}
-                      </th>
-                    ))}
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
-                    <th className="whitespace-nowrap px-4 py-3 text-right">Bills</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shopRows.filter((r) => r.totalBags > 0).length === 0 ? (
-                    <tr>
-                      <td colSpan={visibleBrands.length + 4} className="px-4 py-8 text-center text-slate-500">
-                        No bag sales in this period{activeBrand ? ` for ${activeBrand.label}` : ''}.
-                      </td>
-                    </tr>
-                  ) : (
-                    shopRows
-                      .filter((r) => r.totalBags > 0)
-                      .map((r) => (
-                      <tr key={r.shop} className="border-t border-slate-100 hover:bg-slate-50/80">
-                        <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.shop}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
-                        {visibleBrands.map((b) => (
-                          <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                            {r[`${b.key}Bags`].toLocaleString()}
-                          </td>
-                        ))}
-                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
-                          {r.totalBags.toLocaleString()}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
-                          {r.billCount}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                {shopRows.filter((r) => r.totalBags > 0).length > 0 ? (
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                      <td className="px-4 py-3" colSpan={2}>
-                        Total
-                      </td>
-                      {visibleBrands.map((b) => {
-                        const sum = shopRows
-                          .filter((r) => r.totalBags > 0)
-                          .reduce((s, r) => s + (r[`${b.key}Bags`] || 0), 0);
-                        return (
-                          <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                            {sum.toLocaleString()}
-                          </td>
-                        );
-                      })}
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                        {shopTotals.totalBags.toLocaleString()}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
-                        {shopRows.filter((r) => r.totalBags > 0).reduce((s, r) => s + r.billCount, 0)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                ) : null}
-              </table>
-            </div>
+            <CementBagsPerShopTable
+              shopRows={shopRows}
+              visibleBrands={visibleBrands}
+              shopTotals={shopTotals}
+              activeBrand={activeBrand}
+              loading={false}
+            />
           </Card>
 
           <Card

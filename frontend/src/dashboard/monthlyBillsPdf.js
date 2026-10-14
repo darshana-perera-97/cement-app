@@ -49,7 +49,7 @@ function addPageFooters(doc) {
 }
 
 /**
- * Monthly bills PDF: date, shop, bag type, bags, amount, settled date, days to settle.
+ * Monthly bills PDF: date, shop, bag type, bags, amount, spend days, settled date, days to settle.
  */
 export function downloadMonthlyBillsPdf(data, options = {}) {
   const {
@@ -96,17 +96,18 @@ export function downloadMonthlyBillsPdf(data, options = {}) {
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
   const head = [
-    ['Date', 'Shop name', 'Bag type', 'Bag count', 'Amount', 'Bill settled date', 'Days to settle'],
+    ['Date', 'Shop name', 'Bag type', 'Bag count', 'Amount', 'Spend days', 'Bill settled date', 'Days to settle'],
   ];
   const body =
     rows.length === 0
-      ? [['—', '—', '—', '0', moneyCell(0), '—', '—']]
+      ? [['—', '—', '—', '0', moneyCell(0), '—', '—', '—']]
       : rows.map((r) => [
           r.date || '—',
           r.shop || '—',
           r.bagType || '—',
           formatBags(r.bagCount),
           moneyCell(r.amount),
+          r.spendDays != null ? String(r.spendDays) : '—',
           r.settledDate || '—',
           r.daysToSettle != null ? String(r.daysToSettle) : '—',
         ]);
@@ -123,6 +124,7 @@ export function downloadMonthlyBillsPdf(data, options = {}) {
             moneyCell(totals.amount),
             '',
             '',
+            '',
           ],
         ];
 
@@ -134,13 +136,14 @@ export function downloadMonthlyBillsPdf(data, options = {}) {
     startY: tableStartY,
     tableWidth: pageW,
     columnStyles: {
-      0: { cellWidth: 28 },
-      1: { cellWidth: 48 },
-      2: { cellWidth: 28 },
-      3: { halign: 'right', cellWidth: 26 },
-      4: { halign: 'right', cellWidth: 36 },
-      5: { cellWidth: 36 },
-      6: { halign: 'right', cellWidth: pageW - 28 - 48 - 28 - 26 - 36 - 36 },
+      0: { cellWidth: 26 },
+      1: { cellWidth: 44 },
+      2: { cellWidth: 26 },
+      3: { halign: 'right', cellWidth: 22 },
+      4: { halign: 'right', cellWidth: 34 },
+      5: { halign: 'right', cellWidth: 24 },
+      6: { cellWidth: 34 },
+      7: { halign: 'right', cellWidth: pageW - 26 - 44 - 26 - 22 - 34 - 24 - 34 },
     },
   });
 
