@@ -1159,7 +1159,11 @@ export default function BillsPage() {
         setSaleInvoiceFilename(preview.filename);
       }
       setAddStep(2);
-      requestAutoPrint('billGenerate', data);
+      requestAutoPrint('billGenerate', {
+        ...data,
+        customerId: form.customerId,
+        overdueDays: selectedCustomer?.overdueDays,
+      });
     } catch {
       setSaveError('Could not reach the server.');
     } finally {

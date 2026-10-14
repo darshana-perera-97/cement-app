@@ -3,6 +3,7 @@ import { formatBrandLabel, getCachedBrands } from '../dashboard/brandTheme';
 import { collectedByPrintLabel, invoiceCollectorName } from '../dashboard/collectorPrintName';
 import { cashPortion, cdmPortion, chequePortion, getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from '../dashboard/paymentCheques';
 import { getPaymentReceiptInvoices } from '../dashboard/paymentReceipt';
+import { settleBeforeYmd } from '../dashboard/pendingBills';
 import { printEscPosLines } from './bluetoothPrinter';
 
 function display(v) {
@@ -159,6 +160,17 @@ function paymentFooterLines() {
   ];
 }
 
+function shopIdLines(id) {
+  const shopId = String(id ?? '').trim();
+  if (!shopId || shopId === '—') return [];
+  return [
+    { kind: 'blank' },
+    { kind: 'rule' },
+    { kind: 'align', value: 'center' },
+    { text: `Shop ID : ${shopId}`, bold: true },
+  ];
+}
+
 function pushInvoiceLines(lines, payment) {
   const invoices = getPaymentReceiptInvoices(payment);
   if (invoices.length === 0) return;
@@ -223,6 +235,7 @@ export function buildUnloadReceiptLines(unload, shop) {
     lines.push({ text: `Note: ${unload.note}` });
   }
   lines.push(...footerLines());
+  lines.push(...shopIdLines(unload?.customerId));
   return lines;
 }
 
@@ -243,9 +256,6 @@ export function buildPaymentReceiptLines(payment, shop) {
     { kind: 'align', value: 'left' },
     { kind: 'cols', left: 'Date', right: formatDate(payment?.date) },
     { kind: 'cols', left: 'Customer', right: display(payment?.customerName) },
-    ...(String(payment?.customerId ?? '').trim()
-      ? [{ kind: 'cols', left: 'Customer ID', right: display(payment.customerId) }]
-      : []),
     { kind: 'cols', left: 'Collected by', right: display(collectedByPrintLabel(payment)) },
     { kind: 'rule', char: '=' },
     { kind: 'align', value: 'center' },
@@ -328,6 +338,7 @@ export function buildPaymentReceiptLines(payment, shop) {
   lines.push({ kind: 'blank' });
   lines.push({ kind: 'cols', left: '______________', right: '______________' });
   lines.push(...paymentFooterLines());
+  lines.push(...shopIdLines(payment?.customerId));
   return lines;
 }
 
@@ -504,6 +515,9 @@ export function buildBillReceiptLines(bill, shop) {
     { kind: 'cols', left: 'Invoice #', right: display(bill?.invoiceNumber) },
     { kind: 'cols', left: 'Date', right: formatDate(bill?.date) },
     { kind: 'cols', left: 'Customer', right: display(bill?.customerName) },
+    ...(settleBeforeYmd(bill?.date, bill)
+      ? [{ kind: 'cols', left: 'Settle before', right: formatDate(settleBeforeYmd(bill?.date, bill)) }]
+      : []),
     ...collectorLines(bill),
     ...(bill?.driverName
       ? [{ kind: 'cols', left: 'Driver', right: display(bill.driverName) }]
@@ -533,6 +547,7 @@ export function buildBillReceiptLines(bill, shop) {
     lines.push({ text: `Note: ${bill.note}` });
   }
   lines.push(...footerLines());
+  lines.push(...shopIdLines(bill?.customerId));
   return lines;
 }
 

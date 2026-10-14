@@ -11,6 +11,7 @@ import {
   filterLabel,
   filterLabelNarrow,
   inDateRange,
+  rowMatchesQuery,
   scrollTableWrap,
   stickyFirstTd,
   stickyFirstTh,
@@ -1027,6 +1028,8 @@ export default function ReportsPage() {
   const [stockDistBrand, setStockDistBrand] = useState('');
   const [stockDistMonthPurchasesOnly, setStockDistMonthPurchasesOnly] = useState(false);
   const [billsMonth, setBillsMonth] = useState(() => currentMonthValue());
+  const [billsMonthShop, setBillsMonthShop] = useState('');
+  const [billsMonthSearch, setBillsMonthSearch] = useState('');
   const [dailyBagsMonth, setDailyBagsMonth] = useState(() => currentMonthValue());
   const [dailyBagsBrand, setDailyBagsBrand] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
@@ -1336,17 +1339,60 @@ export default function ReportsPage() {
     [bills, billSettledDateLookup, billsMonthRange],
   );
 
+  const billsMonthShopOptions = useMemo(() => {
+    const shops = new Set();
+    for (const row of monthlyBillRows) {
+      const shop = String(row.shop ?? '').trim();
+      if (shop && shop !== '—') shops.add(shop);
+    }
+    if (billsMonthShop && billsMonthShop !== '—') shops.add(billsMonthShop);
+    return [...shops].sort((a, b) => a.localeCompare(b));
+  }, [monthlyBillRows, billsMonthShop]);
+
+  const filteredMonthlyBillRows = useMemo(() => {
+    const shop = billsMonthShop.trim();
+    return monthlyBillRows.filter((r) => {
+      if (shop && r.shop !== shop) return false;
+      return rowMatchesQuery(billsMonthSearch, [
+        r.date,
+        r.shop,
+        r.bagType,
+        r.bagCount,
+        r.bagCount.toLocaleString(),
+        r.amount,
+        money(r.amount),
+        r.settledDate,
+        r.daysToSettle,
+      ]);
+    });
+  }, [monthlyBillRows, billsMonthShop, billsMonthSearch]);
+
   const monthlyBillTotals = useMemo(
     () =>
-      monthlyBillRows.reduce(
+      filteredMonthlyBillRows.reduce(
         (acc, r) => ({
           bagCount: acc.bagCount + r.bagCount,
           amount: acc.amount + r.amount,
         }),
         { bagCount: 0, amount: 0 },
       ),
-    [monthlyBillRows],
+    [filteredMonthlyBillRows],
   );
+
+  const billsMonthFilterNote = useMemo(() => {
+    const parts = [];
+    if (billsMonthShop) parts.push(`Shop: ${billsMonthShop}`);
+    const query = billsMonthSearch.trim();
+    if (query) parts.push(`Search: ${query}`);
+    return parts.join(' · ');
+  }, [billsMonthShop, billsMonthSearch]);
+
+  const billsMonthEmptyMessage = useMemo(() => {
+    if (billsMonthShop || billsMonthSearch.trim()) {
+      return `No credit bills match your shop or search in ${billsMonthLabel}.`;
+    }
+    return `No credit bills in ${billsMonthLabel}.`;
+  }, [billsMonthShop, billsMonthSearch, billsMonthLabel]);
 
   const collectionsMonthRange = useMemo(
     () => monthlyRangeFromMonthValue(collectionsMonth),
@@ -1993,12 +2039,13 @@ export default function ReportsPage() {
     downloadMonthlyBillsPdf(
       {
         monthLabel: billsMonthLabel,
-        rows: monthlyBillRows,
+        filterNote: billsMonthFilterNote,
+        rows: filteredMonthlyBillRows,
         totals: monthlyBillTotals,
       },
       { monthSlug: billsMonth },
     );
-  }, [billsMonth, billsMonthLabel, monthlyBillRows, monthlyBillTotals]);
+  }, [billsMonth, billsMonthLabel, billsMonthFilterNote, filteredMonthlyBillRows, monthlyBillTotals]);
 
   const handleDownloadDailyBagsByShop = useCallback(() => {
     downloadDailyBagsByShopReport(
@@ -2210,7 +2257,7 @@ export default function ReportsPage() {
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
           {collectorReportsView
-            ? 'Daily collections, monthly bills, and settled collections for your assigned shops.'
+            ? 'Daily collections, monthly bills, daily bags sold, and settled collections for your assigned shops.'
             : showDailyCollectionsReport
               ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
               : 'Monthly summaries, balances, and downloadable reports.'}
@@ -3021,13 +3068,46 @@ export default function ReportsPage() {
             : `All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`
         }
       >
-        <TableFiltersBar>
+        <TableFiltersBar
+          hint={
+            !loading && monthlyBillRows.length > 0
+              ? `Showing ${filteredMonthlyBillRows.length} of ${monthlyBillRows.length} line${
+                  monthlyBillRows.length === 1 ? '' : 's'
+                }`
+              : null
+          }
+        >
           <label className={filterLabelNarrow}>
             Month
             <input
               type="month"
               value={billsMonth}
               onChange={(e) => setBillsMonth(e.target.value || currentMonthValue())}
+              className={filterControl}
+            />
+          </label>
+          <label className={filterLabel}>
+            Shop
+            <select
+              value={billsMonthShop}
+              onChange={(e) => setBillsMonthShop(e.target.value)}
+              className={filterControl}
+            >
+              <option value="">All shops</option>
+              {billsMonthShopOptions.map((shop) => (
+                <option key={shop} value={shop}>
+                  {shop}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={filterLabel}>
+            Search
+            <input
+              type="search"
+              value={billsMonthSearch}
+              onChange={(e) => setBillsMonthSearch(e.target.value)}
+              placeholder="Shop, bag type, date, amount…"
               className={filterControl}
             />
           </label>
@@ -3046,12 +3126,12 @@ export default function ReportsPage() {
             <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
               <LoadingSpinner />
             </p>
-          ) : monthlyBillRows.length === 0 ? (
+          ) : filteredMonthlyBillRows.length === 0 ? (
             <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
-              No credit bills in {billsMonthLabel}.
+              {billsMonthEmptyMessage}
             </p>
           ) : (
-            monthlyBillRows.map((r) => (
+            filteredMonthlyBillRows.map((r) => (
               <MobileRowCard
                 key={r.rowKey}
                 title={r.shop}
@@ -3088,14 +3168,14 @@ export default function ReportsPage() {
                     <LoadingSpinner />
                   </td>
                 </tr>
-              ) : monthlyBillRows.length === 0 ? (
+              ) : filteredMonthlyBillRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                    No credit bills in {billsMonthLabel}.
+                    {billsMonthEmptyMessage}
                   </td>
                 </tr>
               ) : (
-                monthlyBillRows.map((r) => {
+                filteredMonthlyBillRows.map((r) => {
                   const brand = brands.find((b) => b.key === r.brandKey);
                   return (
                     <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
@@ -3131,11 +3211,11 @@ export default function ReportsPage() {
                 })
               )}
             </tbody>
-            {!loading && monthlyBillRows.length > 0 ? (
+            {!loading && filteredMonthlyBillRows.length > 0 ? (
               <tfoot>
                 <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-slate-900">
                   <td className="px-4 py-3" colSpan={3}>
-                    Total ({monthlyBillRows.length} line{monthlyBillRows.length === 1 ? '' : 's'})
+                    Total ({filteredMonthlyBillRows.length} line{filteredMonthlyBillRows.length === 1 ? '' : 's'})
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                     {monthlyBillTotals.bagCount.toLocaleString()}
@@ -3151,13 +3231,17 @@ export default function ReportsPage() {
         </div>
       </Card>
 
-      {!collectorReportsView ? (
-      <>
       <Card
         title="Daily bags sold by shop"
-        subtitle={`Bags sold per shop and brand for each day of ${dailyBagsMonthLabel}${
-          dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
-        }`}
+        subtitle={
+          collectorReportsView
+            ? `Bags sold for your assigned shops for each day of ${dailyBagsMonthLabel}${
+                dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
+              }`
+            : `Bags sold per shop and brand for each day of ${dailyBagsMonthLabel}${
+                dailyBagsActiveBrand ? ` · ${dailyBagsActiveBrand.label}` : ' · all brands'
+              }`
+        }
       >
         <TableFiltersBar>
           <label className={filterLabelNarrow}>
@@ -3339,6 +3423,8 @@ export default function ReportsPage() {
         </div>
       </Card>
 
+      {!collectorReportsView ? (
+      <>
       <Card
         title="Shop targets"
         subtitle={`Monthly bag sales vs target for ${shopTargetsMonthLabel} — from credit bills and customer targets`}

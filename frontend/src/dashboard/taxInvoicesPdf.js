@@ -301,7 +301,6 @@ function renderTaxInvoicePage(doc, bill, opts) {
     [
       { label: 'TIN', value: customer.purchaserTin },
       { label: 'Name', value: purchaserTaxName(customer) },
-      { label: 'Customer ID', value: customer.id },
       { label: 'Address', value: purchaserTaxAddress(customer) },
       { label: 'Telephone No', value: purchaserTaxPhone(customer) },
     ],
@@ -435,11 +434,32 @@ function renderTaxInvoicePage(doc, bill, opts) {
     opts.generatedAt instanceof Date ? opts.generatedAt : new Date(),
   );
   const collectorName = invoiceCollectorName(bill);
+  let endY = ackY || y + 10;
   if (collectorName && ackY) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...BLACK);
     doc.text(`Collector : ${collectorName}`, MARGIN, ackY + 5);
+    endY = ackY + 5;
+  }
+
+  const shopId = display(customer.id);
+  if (shopId !== '—') {
+    const pageHeight = doc.internal.pageSize.getHeight();
+    if (endY > pageHeight - 18) {
+      doc.addPage();
+      endY = 16;
+    } else {
+      endY += 8;
+    }
+    doc.setDrawColor(...BLACK);
+    doc.setLineWidth(0.35);
+    doc.line(MARGIN, endY, pageWidth - MARGIN, endY);
+    endY += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...BLACK);
+    doc.text(`Shop ID : ${shopId}`, pageWidth / 2, endY, { align: 'center' });
   }
 }
 

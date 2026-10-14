@@ -442,6 +442,11 @@ function settlementDaysForCustomer(cust) {
   return DEFAULT_OVERDUE_DAYS;
 }
 
+/** Bill date plus the customer's credit days (`overdueDays`, default 14). */
+export function settleBeforeYmd(billDate, customer) {
+  return addDaysToYmd(String(billDate ?? '').slice(0, 10), settlementDaysForCustomer(customer));
+}
+
 function sortBillsChronological(bills) {
   return [...bills].sort((a, b) => {
     const cmp = String(a.date).localeCompare(String(b.date));

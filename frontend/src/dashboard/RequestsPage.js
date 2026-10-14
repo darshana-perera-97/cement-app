@@ -454,7 +454,12 @@ export default function RequestsPage() {
       }
       closeApprove();
       await load();
-      if (data?.bill) requestAutoPrint('billGenerate', data.bill);
+      if (data?.bill) {
+        requestAutoPrint('billGenerate', {
+          ...data.bill,
+          customerId: data.bill.customerId || approveRow?.customerId || '',
+        });
+      }
     } catch {
       setSaveError('Network error');
     } finally {

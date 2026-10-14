@@ -353,10 +353,6 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   doc.text(customerLines, MARGIN, y);
   y += customerLines.length * LINE;
   const customerId = display(payment.customerId);
-  if (customerId !== '—') {
-    doc.text(`Customer ID : ${customerId}`, MARGIN, y);
-    y += LINE;
-  }
   doc.text(`Collected by : ${display(collectedByPrintLabel(payment))}`, MARGIN, y);
   y += LINE + 1.8;
 
@@ -499,7 +495,8 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   }
 
   const pageHeight = doc.internal.pageSize.getHeight();
-  if (y > pageHeight - 28) {
+  const footerRoom = customerId !== '—' ? 42 : 28;
+  if (y > pageHeight - footerRoom) {
     doc.addPage();
     y = 14;
   }
@@ -528,6 +525,19 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
     doc.setFontSize(7.5);
     doc.setTextColor(...MUTED);
     doc.text(stamp, MARGIN, y);
+    y += 5;
+  }
+
+  if (customerId !== '—') {
+    y += 3;
+    doc.setDrawColor(...BLACK);
+    doc.setLineWidth(0.35);
+    doc.line(MARGIN, y, pageWidth - MARGIN, y);
+    y += 5;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(FONT.body);
+    doc.setTextColor(...BLACK);
+    doc.text(`Shop ID : ${customerId}`, pageWidth / 2, y, { align: 'center' });
   }
 
   return { doc, filename: receiptFilename(payment) };

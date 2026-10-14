@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable';
 import { getCachedBrands, formatBrandLabel } from './brandTheme';
 import { normalizeBillInvoiceNumber } from './billInvoiceNumber';
 import { invoiceCollectorName } from './collectorPrintName';
+import { settleBeforeYmd } from './pendingBills';
 
 const MARGIN = 16;
 const BLACK = [0, 0, 0];
@@ -294,15 +295,18 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
   doc.text(customerName.toUpperCase(), MARGIN, y);
   y += 5;
   const customerId = display(customer?.id || bill.customerId);
-  if (customerId !== '—') {
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Customer ID : ${customerId}`, MARGIN, y);
-    y += 5;
-  }
   if (customerLocation !== '—') {
     doc.setFont('helvetica', 'normal');
     doc.text(customerLocation, MARGIN, y);
     y += 5;
+  }
+  const settleBefore = formatDisplayDate(settleBeforeYmd(bill.date, customer));
+  if (settleBefore !== '—') {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(...BLACK);
+    doc.text(`Bill to be settled before : ${settleBefore}`, MARGIN, y);
+    y += 6;
   }
   y += 2;
 
@@ -404,6 +408,25 @@ function renderInvoicePage(doc, bill, index, opts, loadByStockId, customerByName
     doc.setTextColor(...MUTED);
     const noteLines = doc.splitTextToSize(String(opts.deliveryNote), contentWidth);
     doc.text(noteLines, MARGIN, y);
+    y += noteLines.length * 4;
+  }
+
+  if (customerId !== '—') {
+    const pageHeight = doc.internal.pageSize.getHeight();
+    if (y > pageHeight - 18) {
+      doc.addPage();
+      y = 16;
+    } else {
+      y += 8;
+    }
+    doc.setDrawColor(...BLACK);
+    doc.setLineWidth(0.35);
+    doc.line(MARGIN, y, pageWidth - MARGIN, y);
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...BLACK);
+    doc.text(`Shop ID : ${customerId}`, pageWidth / 2, y, { align: 'center' });
   }
 }
 

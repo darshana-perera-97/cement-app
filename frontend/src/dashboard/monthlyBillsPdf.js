@@ -54,6 +54,7 @@ function addPageFooters(doc) {
 export function downloadMonthlyBillsPdf(data, options = {}) {
   const {
     monthLabel = '',
+    filterNote = '',
     rows = [],
     totals = { bagCount: 0, amount: 0 },
     generatedAt = new Date(),
@@ -78,13 +79,20 @@ export function downloadMonthlyBillsPdf(data, options = {}) {
     timeStyle: 'short',
   });
   doc.text(`Generated: ${dateStr}`, MARGIN, 22);
-  doc.text(`Month: ${monthLabel}`, MARGIN, 27);
+  let cursorY = 27;
+  doc.text(`Month: ${monthLabel}`, MARGIN, cursorY);
+  cursorY += 5;
+  if (String(filterNote).trim()) {
+    doc.text(String(filterNote).trim(), MARGIN, cursorY);
+    cursorY += 5;
+  }
   doc.text(
     'Credit bills for the selected month. Settled date from payments (oldest bills first).',
     MARGIN,
-    32,
+    cursorY,
   );
   doc.setTextColor(0, 0, 0);
+  const tableStartY = cursorY + 6;
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
   const head = [
@@ -123,7 +131,7 @@ export function downloadMonthlyBillsPdf(data, options = {}) {
     head,
     body,
     foot: foot || undefined,
-    startY: 38,
+    startY: tableStartY,
     tableWidth: pageW,
     columnStyles: {
       0: { cellWidth: 28 },
