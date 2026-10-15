@@ -95,13 +95,14 @@ function daysFromYmdToToday(fromYmd, toYmd = localYmd()) {
 }
 
 /** One row per brand line on bills in the month, with settled date from payment FIFO. */
-function buildMonthlyBillRows(bills, settledByBillId, from, to) {
+function buildMonthlyBillRows(bills, settledByBillId, from, to, { unsettledOnly = false } = {}) {
   const rows = [];
   for (const bill of bills) {
     if (!inDateRange(bill.date, from, to)) continue;
     const date = String(bill.date ?? '').slice(0, 10);
     const shop = String(bill.customerName ?? '').trim() || '—';
     const settledDate = bill.id ? settledByBillId.get(bill.id) || '' : '';
+    if (unsettledOnly && settledDate) continue;
     const daysToSettle = settledDate ? daysFromYmdToToday(date, settledDate) : null;
     const spendDays = settledDate ? null : daysFromYmdToToday(date);
 
@@ -1321,6 +1322,7 @@ export default function ReportsPage() {
   const [stockDistBrand, setStockDistBrand] = useState('');
   const [stockDistMonthPurchasesOnly, setStockDistMonthPurchasesOnly] = useState(false);
   const [billsMonth, setBillsMonth] = useState(() => currentMonthValue());
+  const [billsReportTab, setBillsReportTab] = useState('month');
   const [billsMonthShop, setBillsMonthShop] = useState('');
   const [billsMonthSearch, setBillsMonthSearch] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
@@ -1618,19 +1620,27 @@ export default function ReportsPage() {
     [bills, billSettledDateLookup, billsMonthRange],
   );
 
+  const pendingBillRows = useMemo(
+    () => buildMonthlyBillRows(bills, billSettledDateLookup, '', '', { unsettledOnly: true }),
+    [bills, billSettledDateLookup],
+  );
+
+  const billsReportIsPending = billsReportTab === 'pending';
+  const sourceBillRows = billsReportIsPending ? pendingBillRows : monthlyBillRows;
+
   const billsMonthShopOptions = useMemo(() => {
     const shops = new Set();
-    for (const row of monthlyBillRows) {
+    for (const row of sourceBillRows) {
       const shop = String(row.shop ?? '').trim();
       if (shop && shop !== '—') shops.add(shop);
     }
     if (billsMonthShop && billsMonthShop !== '—') shops.add(billsMonthShop);
     return [...shops].sort((a, b) => a.localeCompare(b));
-  }, [monthlyBillRows, billsMonthShop]);
+  }, [sourceBillRows, billsMonthShop]);
 
   const filteredMonthlyBillRows = useMemo(() => {
     const shop = billsMonthShop.trim();
-    return monthlyBillRows.filter((r) => {
+    return sourceBillRows.filter((r) => {
       if (shop && r.shop !== shop) return false;
       return rowMatchesQuery(billsMonthSearch, [
         r.date,
@@ -1645,7 +1655,7 @@ export default function ReportsPage() {
         r.spendDays,
       ]);
     });
-  }, [monthlyBillRows, billsMonthShop, billsMonthSearch]);
+  }, [sourceBillRows, billsMonthShop, billsMonthSearch]);
 
   const monthlyBillTotals = useMemo(
     () =>
@@ -1668,11 +1678,15 @@ export default function ReportsPage() {
   }, [billsMonthShop, billsMonthSearch]);
 
   const billsMonthEmptyMessage = useMemo(() => {
+    if (billsReportIsPending) {
+      if (billsMonthShop || billsMonthSearch.trim()) return 'No pending bills match your shop or search.';
+      return 'No pending bills.';
+    }
     if (billsMonthShop || billsMonthSearch.trim()) {
       return `No credit bills match your shop or search in ${billsMonthLabel}.`;
     }
     return `No credit bills in ${billsMonthLabel}.`;
-  }, [billsMonthShop, billsMonthSearch, billsMonthLabel]);
+  }, [billsReportIsPending, billsMonthShop, billsMonthSearch, billsMonthLabel]);
 
   const collectionsMonthRange = useMemo(
     () => monthlyRangeFromMonthValue(collectionsMonth),
@@ -1727,6 +1741,7 @@ export default function ReportsPage() {
   );
 
   const monthlyBillsPagination = useTablePagination(filteredMonthlyBillRows.length, [
+    billsReportTab,
     billsMonth,
     billsMonthShop,
     billsMonthSearch,
@@ -2345,14 +2360,21 @@ export default function ReportsPage() {
   const handleDownloadMonthlyBills = useCallback(() => {
     downloadMonthlyBillsPdf(
       {
-        monthLabel: billsMonthLabel,
+        monthLabel: billsReportTab === 'pending' ? 'Pending bills' : billsMonthLabel,
         filterNote: billsMonthFilterNote,
         rows: filteredMonthlyBillRows,
         totals: monthlyBillTotals,
       },
-      { monthSlug: billsMonth },
+      { monthSlug: billsReportTab === 'pending' ? 'pending' : billsMonth },
     );
-  }, [billsMonth, billsMonthLabel, billsMonthFilterNote, filteredMonthlyBillRows, monthlyBillTotals]);
+  }, [
+    billsReportTab,
+    billsMonth,
+    billsMonthLabel,
+    billsMonthFilterNote,
+    filteredMonthlyBillRows,
+    monthlyBillTotals,
+  ]);
 
   const handleDownloadShopTargets = useCallback(() => {
     downloadShopTargetsPdf(
@@ -3365,22 +3387,52 @@ export default function ReportsPage() {
       </Card>
 
       <Card
-        title="Bills by month"
+        title={billsReportIsPending ? 'Pending bills' : 'Bills by month'}
         subtitle={
-          collectorReportsView
-            ? `Credit bills for your assigned shops in ${billsMonthLabel} — settled date from payments (oldest bills first)`
-            : `All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`
+          billsReportIsPending
+            ? collectorReportsView
+              ? 'Unsettled credit bills for your assigned shops. Spend days count from the bill date.'
+              : 'Unsettled credit bills. Spend days count from the bill date.'
+            : collectorReportsView
+              ? `Credit bills for your assigned shops in ${billsMonthLabel} — settled date from payments (oldest bills first)`
+              : `All credit bills in ${billsMonthLabel} — settled date from payments (oldest bills first)`
         }
       >
+        <div
+          className="mb-4 flex flex-wrap gap-1.5 rounded-xl bg-slate-100/90 p-1 ring-1 ring-slate-200/60"
+          role="tablist"
+          aria-label="Bills report"
+        >
+          {[
+            { id: 'month', label: 'Bills by month' },
+            { id: 'pending', label: 'Pending bills' },
+          ].map(({ id, label }) => {
+            const active = billsReportTab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setBillsReportTab(id)}
+                className={`${periodBtn} ${active ? periodActive : periodIdle}`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div role="tabpanel">
         <TableFiltersBar
           hint={
-            !loading && monthlyBillRows.length > 0
-              ? `Showing ${filteredMonthlyBillRows.length} of ${monthlyBillRows.length} line${
-                  monthlyBillRows.length === 1 ? '' : 's'
+            !loading && sourceBillRows.length > 0
+              ? `Showing ${filteredMonthlyBillRows.length} of ${sourceBillRows.length} line${
+                  sourceBillRows.length === 1 ? '' : 's'
                 }`
               : null
           }
         >
+          {billsReportIsPending ? null : (
           <label className={filterLabelNarrow}>
             Month
             <input
@@ -3390,6 +3442,7 @@ export default function ReportsPage() {
               className={filterControl}
             />
           </label>
+          )}
           <label className={filterLabel}>
             Shop
             <select
@@ -3425,7 +3478,7 @@ export default function ReportsPage() {
           </button>
         </TableFiltersBar>
 
-        <div className="mt-5 space-y-3 lg:hidden">
+        <div className="mt-5 space-y-3 sm:hidden">
           {loading ? (
             <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
               <LoadingSpinner />
@@ -3464,7 +3517,7 @@ export default function ReportsPage() {
           )}
         </div>
 
-        <div className={`mt-5 hidden lg:block ${scrollTableWrap}`}>
+        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
           <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -3561,6 +3614,7 @@ export default function ReportsPage() {
             onPageSizeChange={monthlyBillsPagination.setPageSize}
           />
         ) : null}
+        </div>
       </Card>
 
       {collectorReportsView ? (
