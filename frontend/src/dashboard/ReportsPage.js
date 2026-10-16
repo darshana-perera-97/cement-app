@@ -601,6 +601,93 @@ function customerNameKey(name) {
     .replace(/\s+/g, ' ');
 }
 
+function promotionKind(row) {
+  const t = String(row?.type ?? '').trim();
+  if (t === 'invoice_discount' || t === 'target_promotion' || t === 'rule_cashback') return t;
+  return 'free_bags';
+}
+
+/** Free-bag issues can store a short bill number; match it to an invoice suffix (26OCT_012 ↔ 12 / 012). */
+function invoiceMatchesBillNumber(invoiceNumber, billNumber) {
+  const inv = String(invoiceNumber ?? '').trim();
+  const num = String(billNumber ?? '').trim();
+  if (!inv || !num) return false;
+  if (inv.toLowerCase() === num.toLowerCase()) return true;
+  const suffix = inv.match(/(\d+)$/);
+  if (!suffix || !/^\d+$/.test(num)) return false;
+  return parseInt(suffix[1], 10) === parseInt(num, 10);
+}
+
+/**
+ * One row per item on a credit bill (shop unload).
+ * Free bag amount is free bags issued to that shop for the same item,
+ * linked by invoice number when present, otherwise by the same date.
+ */
+function buildCompanyUnloadRows(bills, promotions, brands = getCachedBrands()) {
+  const list = Array.isArray(brands) ? brands : [];
+  const lines = [];
+  for (const bill of Array.isArray(bills) ? bills : []) {
+    const date = String(bill.date ?? '').slice(0, 10);
+    const shop = String(bill.customerName ?? '').trim() || '—';
+    for (const brand of list) {
+      const bagCount = Number(bill[brand.bagsField]) || 0;
+      if (bagCount <= 0) continue;
+      const unitRaw = bill[brand.unitPriceField];
+      const perBagPrice =
+        unitRaw == null || unitRaw === '' || !Number.isFinite(Number(unitRaw))
+          ? null
+          : round2(Number(unitRaw));
+      lines.push({
+        rowKey: `${bill.id || date}-${brand.key}`,
+        invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
+        date,
+        shopKey: customerNameKey(shop),
+        shop,
+        brandKey: brand.key,
+        itemName: String(brand.label ?? '').trim() || brand.key,
+        bagCount,
+        freeBags: 0,
+        perBagPrice,
+      });
+    }
+  }
+
+  for (const promo of Array.isArray(promotions) ? promotions : []) {
+    if (promotionKind(promo) !== 'free_bags') continue;
+    const shopKey = customerNameKey(promo.customerName);
+    const date = String(promo.date ?? '').slice(0, 10);
+    const billNumber = String(promo.billNumber ?? '').trim();
+    for (const brand of list) {
+      const freeBags = Number(promo[brand.bagsField]) || 0;
+      if (freeBags <= 0 || !shopKey) continue;
+      let match = null;
+      if (billNumber) {
+        match = lines.find(
+          (line) =>
+            line.shopKey === shopKey &&
+            line.brandKey === brand.key &&
+            invoiceMatchesBillNumber(line.invoiceNumber, billNumber),
+        );
+      }
+      if (!match) {
+        match = lines.find(
+          (line) => line.shopKey === shopKey && line.brandKey === brand.key && line.date === date,
+        );
+      }
+      if (match) match.freeBags += freeBags;
+    }
+  }
+
+  lines.sort((a, b) => {
+    const byDate = b.date.localeCompare(a.date);
+    if (byDate !== 0) return byDate;
+    const byShop = a.shop.localeCompare(b.shop);
+    if (byShop !== 0) return byShop;
+    return a.itemName.localeCompare(b.itemName);
+  });
+  return lines;
+}
+
 function paymentMatchesRecordedByKeys(p, keys) {
   if (!Array.isArray(keys) || keys.length === 0) return false;
   const by = normalizeUserKey(p?.recordedBy);
@@ -1305,6 +1392,7 @@ export default function ReportsPage() {
   const [bills, setBills] = useState([]);
   const [payments, setPayments] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [promotions, setPromotions] = useState([]);
   const [dailyStockDays, setDailyStockDays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1327,6 +1415,10 @@ export default function ReportsPage() {
   const [billsMonthSearch, setBillsMonthSearch] = useState('');
   const [shopTargetsMonth, setShopTargetsMonth] = useState(() => currentMonthValue());
   const [dailyReportDate, setDailyReportDate] = useState(() => localYmd());
+  const [unloadReportFrom, setUnloadReportFrom] = useState('');
+  const [unloadReportTo, setUnloadReportTo] = useState('');
+  const [unloadReportShop, setUnloadReportShop] = useState('');
+  const [unloadReportSearch, setUnloadReportSearch] = useState('');
   const [dailyReportUserId, setDailyReportUserId] = useState('');
   const [collectionsMonth, setCollectionsMonth] = useState(() => currentMonthValue());
   const [collectionsCollectorId, setCollectionsCollectorId] = useState('');
@@ -1352,20 +1444,22 @@ export default function ReportsPage() {
     setError(null);
     try {
       if (collectorReportsView) {
-        const [billsRes, paymentsRes, customersRes, meRes] = await Promise.all([
+        const [billsRes, paymentsRes, customersRes, meRes, promoRes] = await Promise.all([
           authFetch(`${apiBase}/api/bills`),
           authFetch(`${apiBase}/api/payments`),
           authFetch(`${apiBase}/api/customers`),
           authFetch(`${apiBase}/api/me`),
+          fetch(`${apiBase}/api/promotions`),
         ]);
         if (!billsRes.ok) throw new Error('Failed to load bills');
         if (!paymentsRes.ok) throw new Error('Failed to load payments');
         if (!customersRes.ok) throw new Error('Failed to load customers');
 
-        const [billsData, paymentsData, customersData] = await Promise.all([
+        const [billsData, paymentsData, customersData, promoData] = await Promise.all([
           billsRes.json(),
           paymentsRes.json(),
           customersRes.json(),
+          promoRes.ok ? promoRes.json() : Promise.resolve([]),
         ]);
 
         let session = {
@@ -1406,20 +1500,23 @@ export default function ReportsPage() {
         setBills(billsList);
         setPayments(paymentsList);
         setCustomers(customersList);
+        setPromotions(Array.isArray(promoData) ? promoData : []);
         setLoads([]);
         setDailyStockDays([]);
         setCollectionStaff([]);
         return;
       }
 
-      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectionStaffRes] = await Promise.all([
-        fetch(`${apiBase}/api/stocks`),
-        fetch(`${apiBase}/api/bills`),
-        fetch(`${apiBase}/api/payments`),
-        fetch(`${apiBase}/api/customers`),
-        fetch(`${apiBase}/api/daily-stock`),
-        authFetch(`${apiBase}/api/collection-staff`),
-      ]);
+      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectionStaffRes, promoRes] =
+        await Promise.all([
+          fetch(`${apiBase}/api/stocks`),
+          fetch(`${apiBase}/api/bills`),
+          fetch(`${apiBase}/api/payments`),
+          fetch(`${apiBase}/api/customers`),
+          fetch(`${apiBase}/api/daily-stock`),
+          authFetch(`${apiBase}/api/collection-staff`),
+          fetch(`${apiBase}/api/promotions`),
+        ]);
       if (!loadsRes.ok) throw new Error('Failed to load loads');
       if (!billsRes.ok) throw new Error('Failed to load bills');
       if (!paymentsRes.ok) throw new Error('Failed to load payments');
@@ -1427,19 +1524,22 @@ export default function ReportsPage() {
       if (!dailyRes.ok) throw new Error('Failed to load daily stock');
       if (!collectionStaffRes.ok) throw new Error('Failed to load collection staff');
 
-      const [loadsData, billsData, paymentsData, customersData, dailyData, collectionStaffData] = await Promise.all([
-        loadsRes.json(),
-        billsRes.json(),
-        paymentsRes.json(),
-        customersRes.json(),
-        dailyRes.json(),
-        collectionStaffRes.json(),
-      ]);
+      const [loadsData, billsData, paymentsData, customersData, dailyData, collectionStaffData, promoData] =
+        await Promise.all([
+          loadsRes.json(),
+          billsRes.json(),
+          paymentsRes.json(),
+          customersRes.json(),
+          dailyRes.json(),
+          collectionStaffRes.json(),
+          promoRes.ok ? promoRes.json() : Promise.resolve([]),
+        ]);
 
       setLoads(Array.isArray(loadsData) ? loadsData : []);
       setBills(Array.isArray(billsData) ? billsData : []);
       setPayments(Array.isArray(paymentsData) ? paymentsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
+      setPromotions(Array.isArray(promoData) ? promoData : []);
       setDailyStockDays(Array.isArray(dailyData?.days) ? dailyData.days : []);
       setCollectionStaff(Array.isArray(collectionStaffData) ? collectionStaffData : []);
       setCollectorSession(null);
@@ -1449,6 +1549,7 @@ export default function ReportsPage() {
       setBills([]);
       setPayments([]);
       setCustomers([]);
+      setPromotions([]);
       setDailyStockDays([]);
       setCollectionStaff([]);
       setCollectorSession(null);
@@ -1623,6 +1724,67 @@ export default function ReportsPage() {
   const pendingBillRows = useMemo(
     () => buildMonthlyBillRows(bills, billSettledDateLookup, '', '', { unsettledOnly: true }),
     [bills, billSettledDateLookup],
+  );
+
+  const companyUnloadRows = useMemo(
+    () => buildCompanyUnloadRows(bills, promotions, brands),
+    [bills, promotions, brands],
+  );
+
+  const unloadReportShopOptions = useMemo(() => {
+    const shops = new Set();
+    for (const row of companyUnloadRows) {
+      const shop = String(row.shop ?? '').trim();
+      if (shop && shop !== '—') shops.add(shop);
+    }
+    if (unloadReportShop && unloadReportShop !== '—') shops.add(unloadReportShop);
+    return [...shops].sort((a, b) => a.localeCompare(b));
+  }, [companyUnloadRows, unloadReportShop]);
+
+  const filteredCompanyUnloadRows = useMemo(() => {
+    const shop = unloadReportShop.trim();
+    return companyUnloadRows.filter((r) => {
+      if (!inDateRange(r.date, unloadReportFrom, unloadReportTo)) return false;
+      if (shop && r.shop !== shop) return false;
+      return rowMatchesQuery(unloadReportSearch, [
+        r.date,
+        r.shop,
+        r.itemName,
+        r.bagCount,
+        r.bagCount.toLocaleString(),
+        r.freeBags,
+        r.freeBags.toLocaleString(),
+        r.perBagPrice,
+        r.perBagPrice != null ? money(r.perBagPrice) : '',
+      ]);
+    });
+  }, [companyUnloadRows, unloadReportFrom, unloadReportTo, unloadReportShop, unloadReportSearch]);
+
+  const companyUnloadTotals = useMemo(
+    () =>
+      filteredCompanyUnloadRows.reduce(
+        (acc, r) => ({
+          bagCount: acc.bagCount + r.bagCount,
+          freeBags: acc.freeBags + r.freeBags,
+        }),
+        { bagCount: 0, freeBags: 0 },
+      ),
+    [filteredCompanyUnloadRows],
+  );
+
+  const companyUnloadPagination = useTablePagination(filteredCompanyUnloadRows.length, [
+    unloadReportFrom,
+    unloadReportTo,
+    unloadReportShop,
+    unloadReportSearch,
+  ]);
+  const pagedCompanyUnloadRows = useMemo(
+    () =>
+      filteredCompanyUnloadRows.slice(
+        companyUnloadPagination.offset,
+        companyUnloadPagination.offset + companyUnloadPagination.pageSize,
+      ),
+    [filteredCompanyUnloadRows, companyUnloadPagination.offset, companyUnloadPagination.pageSize],
   );
 
   const billsReportIsPending = billsReportTab === 'pending';
@@ -2572,10 +2734,10 @@ export default function ReportsPage() {
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
           {collectorReportsView
-            ? 'Daily collections, monthly bills, cement bags per shop, and settled collections for your assigned shops.'
+            ? 'Daily collections, company unloading, monthly bills, cement bags per shop, and settled collections for your assigned shops.'
             : showDailyCollectionsReport
-              ? 'Daily collections for managers, plus monthly summaries and downloadable reports.'
-              : 'Monthly summaries, balances, and downloadable reports.'}
+              ? 'Daily collections and the company unloading report, plus monthly summaries and downloadable reports.'
+              : 'Company unloading report, monthly summaries, balances, and downloadable reports.'}
         </p>
       </div>
 
@@ -3220,6 +3382,199 @@ export default function ReportsPage() {
           )}
         </Card>
       ) : null}
+
+      <Card
+        title="Unloading report for Company"
+        subtitle={
+          collectorReportsView
+            ? 'Every item unloaded to your assigned shops. Item names omit the item code. Free bag amount is free bags given for that shop and item on the same day, or on the matching invoice.'
+            : 'Every item unloaded to a shop. Item names omit the item code. Free bag amount is free bags given for that shop and item on the same day, or on the matching invoice.'
+        }
+      >
+        <TableFiltersBar
+          hint={
+            !loading && companyUnloadRows.length > 0
+              ? `Showing ${filteredCompanyUnloadRows.length} of ${companyUnloadRows.length} line${
+                  companyUnloadRows.length === 1 ? '' : 's'
+                }`
+              : null
+          }
+        >
+          <label className={filterLabelNarrow}>
+            From
+            <input
+              type="date"
+              value={unloadReportFrom}
+              onChange={(e) => setUnloadReportFrom(e.target.value)}
+              className={filterControl}
+            />
+          </label>
+          <label className={filterLabelNarrow}>
+            To
+            <input
+              type="date"
+              value={unloadReportTo}
+              onChange={(e) => setUnloadReportTo(e.target.value)}
+              className={filterControl}
+            />
+          </label>
+          <label className={filterLabel}>
+            Shop
+            <select
+              value={unloadReportShop}
+              onChange={(e) => setUnloadReportShop(e.target.value)}
+              className={filterControl}
+            >
+              <option value="">All shops</option>
+              {unloadReportShopOptions.map((shop) => (
+                <option key={shop} value={shop}>
+                  {shop}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={filterLabel}>
+            Search
+            <input
+              type="search"
+              value={unloadReportSearch}
+              onChange={(e) => setUnloadReportSearch(e.target.value)}
+              placeholder="Date, shop, item, bags, price…"
+              className={filterControl}
+            />
+          </label>
+        </TableFiltersBar>
+
+        <div className="mt-5 space-y-3 sm:hidden">
+          {loading ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              <LoadingSpinner label="Loading unloads…" />
+            </p>
+          ) : filteredCompanyUnloadRows.length === 0 ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              {companyUnloadRows.length === 0
+                ? 'No unloads yet.'
+                : 'No unloads match these filters.'}
+            </p>
+          ) : (
+            <>
+              {pagedCompanyUnloadRows.map((r) => (
+                <MobileRowCard
+                  key={r.rowKey}
+                  title={r.shop}
+                  subtitle={r.date}
+                  badge={r.itemName}
+                  fields={[
+                    { label: 'Number of items', value: r.bagCount.toLocaleString() },
+                    { label: 'Free bag amount', value: r.freeBags.toLocaleString() },
+                    { label: 'Per bag price', value: r.perBagPrice != null ? money(r.perBagPrice) : '—' },
+                  ]}
+                />
+              ))}
+              <div className="flex items-center justify-between gap-3 rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-semibold text-slate-900 ring-1 ring-indigo-100">
+                <span>
+                  Total ({filteredCompanyUnloadRows.length} line
+                  {filteredCompanyUnloadRows.length === 1 ? '' : 's'})
+                </span>
+                <span className="tabular-nums text-indigo-900">
+                  {companyUnloadTotals.bagCount.toLocaleString()} items ·{' '}
+                  {companyUnloadTotals.freeBags.toLocaleString()} free
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
+          <table className="w-full min-w-[860px] data-table border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+                <th className="whitespace-nowrap px-4 py-3">Shop name</th>
+                <th className="whitespace-nowrap px-4 py-3">Item name</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Number of items</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Free bag amount</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Per bag price</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                    <LoadingSpinner label="Loading unloads…" />
+                  </td>
+                </tr>
+              ) : filteredCompanyUnloadRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                    {companyUnloadRows.length === 0
+                      ? 'No unloads yet.'
+                      : 'No unloads match these filters.'}
+                  </td>
+                </tr>
+              ) : (
+                pagedCompanyUnloadRows.map((r) => {
+                  const brand = brands.find((b) => b.key === r.brandKey);
+                  return (
+                    <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
+                      <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-600 ${stickyFirstTd}`}>
+                        {r.date}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{r.shop}</td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                            brand?.iconBg || 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {r.itemName}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-800">
+                        {r.bagCount.toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-800">
+                        {r.freeBags.toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
+                        {r.perBagPrice != null ? money(r.perBagPrice) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+            {!loading && filteredCompanyUnloadRows.length > 0 ? (
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-slate-900">
+                  <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={3}>
+                    Total ({filteredCompanyUnloadRows.length} line
+                    {filteredCompanyUnloadRows.length === 1 ? '' : 's'})
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {companyUnloadTotals.bagCount.toLocaleString()}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-800">
+                    {companyUnloadTotals.freeBags.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-3" />
+                </tr>
+              </tfoot>
+            ) : null}
+          </table>
+        </div>
+        {!loading && filteredCompanyUnloadRows.length > 0 ? (
+          <TablePaginationBar
+            className="mt-4"
+            page={companyUnloadPagination.page}
+            totalPages={companyUnloadPagination.totalPages}
+            pageSize={companyUnloadPagination.pageSize}
+            totalCount={filteredCompanyUnloadRows.length}
+            onPageChange={companyUnloadPagination.setPage}
+            onPageSizeChange={companyUnloadPagination.setPageSize}
+          />
+        ) : null}
+      </Card>
 
       <Card
         title="Settled collections"
