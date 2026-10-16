@@ -21,6 +21,10 @@ import {
 } from './tableToolbar';
 import { buildChequeTableRows, cdmPortion, chequePortion, getPaymentCdmDeposits, getPaymentCheques, getPaymentOnlineTransfers, onlineTransferPortion } from './paymentCheques';
 import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
+import {
+  downloadCompanyUnloadReportExcel,
+  downloadCompanyUnloadReportPdf,
+} from './companyUnloadReportExport';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import { buildShopTargetsRows } from './shopTargetsReport';
 import { downloadShopTargetsPdf } from './shopTargetsPdf';
@@ -2654,6 +2658,24 @@ export default function ReportsPage() {
     financialConvertingRows,
   ]);
 
+  const companyUnloadExportOptions = useMemo(
+    () => ({
+      dateFrom: unloadReportFrom,
+      dateTo: unloadReportTo,
+      shop: unloadReportShop,
+      search: unloadReportSearch,
+    }),
+    [unloadReportFrom, unloadReportTo, unloadReportShop, unloadReportSearch],
+  );
+
+  const handleDownloadCompanyUnloadPdf = useCallback(() => {
+    downloadCompanyUnloadReportPdf(filteredCompanyUnloadRows, companyUnloadExportOptions);
+  }, [filteredCompanyUnloadRows, companyUnloadExportOptions]);
+
+  const handleDownloadCompanyUnloadExcel = useCallback(() => {
+    downloadCompanyUnloadReportExcel(filteredCompanyUnloadRows, companyUnloadExportOptions);
+  }, [filteredCompanyUnloadRows, companyUnloadExportOptions]);
+
   const handleDownloadDailyCollectionsPdf = useCallback(() => {
     downloadDailyCollectionsReportPdf(
       {
@@ -3443,6 +3465,22 @@ export default function ReportsPage() {
               className={filterControl}
             />
           </label>
+          <button
+            type="button"
+            onClick={handleDownloadCompanyUnloadPdf}
+            disabled={loading || !!error || filteredCompanyUnloadRows.length === 0}
+            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Download PDF
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadCompanyUnloadExcel}
+            disabled={loading || !!error || filteredCompanyUnloadRows.length === 0}
+            className={downloadBtnClass}
+          >
+            Download Excel
+          </button>
         </TableFiltersBar>
 
         <div className="mt-5 space-y-3 sm:hidden">
