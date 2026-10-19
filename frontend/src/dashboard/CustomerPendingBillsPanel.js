@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch } from '../auth';
+import { downloadCustomerPendingBillsPdf } from './customerPendingBillsPdf';
 import { buildCustomerOutstandingBills } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
@@ -170,12 +171,22 @@ export default function CustomerPendingBillsPanel({
 
   return (
     <section className="space-y-3">
-      <div>
-        <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
-        <p className="mt-0.5 text-sm text-slate-500">
-          Unpaid return cheques, opening balance, and credit bills. Return cheques stay ahead of invoices
-          when a collection is not split by bill. Invoices are due within {settlementDays} days.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Unpaid return cheques, opening balance, and credit bills. Return cheques stay ahead of invoices
+            when a collection is not split by bill. Invoices are due within {settlementDays} days.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={busy || rows.length === 0}
+          onClick={() => downloadCustomerPendingBillsPdf(customer, rows, { scope: tab })}
+          className="inline-flex shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Download PDF
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-2">
