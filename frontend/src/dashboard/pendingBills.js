@@ -876,3 +876,65 @@ export function buildCustomerOutstandingBills(
     : payments;
   return buildPendingBillRows([cust], bills, pay, { includeOrphanBills: false, promotions });
 }
+
+/**
+ * All returned customer cheques with settlement progress (paid / outstanding / settled date).
+ * Includes both unsettled and fully settled return cheques.
+ */
+export function buildReturnChequeRows(customers = [], bills = [], payments = [], promotions = []) {
+  const todayYmd = todayYmdLocal();
+  const rows = [];
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const safeBills = Array.isArray(bills) ? bills : [];
+  const safePayments = Array.isArray(payments) ? payments : [];
+
+  for (const cust of safeCustomers) {
+    const { paidByReturnChequeId, returnCheques } = computeBillPaymentAllocation(
+      cust,
+      safeBills,
+      safePayments,
+      promotions,
+    );
+    const settledByBillId = buildSettledDateByBillIdForCustomer(
+      cust,
+      safeBills,
+      safePayments,
+      promotions,
+    );
+
+    for (const rc of returnCheques || []) {
+      const paid = toNonNegMoney(paidByReturnChequeId?.get(rc.id) || 0);
+      const outstanding = Math.round((rc.amount - paid) * 100) / 100;
+      const settled = outstanding <= 0.009;
+      const settledDate = settled ? settledByBillId.get(rc.id) || '' : '';
+      rows.push({
+        id: rc.id,
+        rowKey: rc.id,
+        customerId: String(cust.id ?? '').trim(),
+        customerName: String(cust.name ?? '').trim() || '—',
+        chequeNumber: rc.chequeNumber || '',
+        chequeBank: rc.chequeBank || '',
+        chequeDate: rc.chequeDate || '',
+        returnDate: rc.returnDate || '',
+        receiptNumber: rc.receiptNumber || '',
+        paymentId: rc.paymentId || '',
+        amount: rc.amount,
+        paidAmount: paid,
+        outstandingAmount: Math.max(0, outstanding),
+        settled,
+        settledDate,
+        daysFromReturn: daysBetweenYmd(rc.returnDate, todayYmd),
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    if (a.settled !== b.settled) return a.settled ? 1 : -1;
+    const byReturn = String(a.returnDate ?? '').localeCompare(String(b.returnDate ?? ''));
+    if (byReturn !== 0) return byReturn;
+    const byShop = String(a.customerName ?? '').localeCompare(String(b.customerName ?? ''));
+    if (byShop !== 0) return byShop;
+    return String(a.chequeNumber ?? '').localeCompare(String(b.chequeNumber ?? ''));
+  });
+  return rows;
+}

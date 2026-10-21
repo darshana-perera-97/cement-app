@@ -38,6 +38,9 @@ function titleForPath(pathname, brand) {
     { test: (p) => p === '/dashboard/map', title: `Map — ${brand}` },
     { test: (p) => p === '/dashboard/settings', title: `Settings — ${brand}` },
     { test: (p) => p === '/dashboard/incentive', title: `Incentive — ${brand}` },
+    { test: (p) => p === '/dashboard/pending-bills', title: `Pending Bills & RC — ${brand}` },
+    { test: (p) => p === '/dashboard/pending-cheques', title: `Pending cheques — ${brand}` },
+    { test: (p) => p === '/dashboard/overdue-bills', title: `Overdue bills — ${brand}` },
   ];
   const rule = rules.find((r) => r.test(normalized));
   return rule ? rule.title : `Cement supply dashboard — ${brand}`;

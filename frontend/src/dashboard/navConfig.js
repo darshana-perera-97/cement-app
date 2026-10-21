@@ -92,7 +92,7 @@ export const DASHBOARD_NAV = [
   },
   {
     to: '/dashboard/pending-bills',
-    label: 'Pending bills',
+    label: 'Pending Bills & RC',
     icon: 'pending',
     accessKey: 'pending-bills',
   },
