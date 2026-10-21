@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch } from '../auth';
 import { downloadCustomerPendingBillsPdf } from './customerPendingBillsPdf';
-import { buildCustomerOutstandingBills } from './pendingBills';
+import { alignOutstandingRowsToAmount, buildCustomerOutstandingBills } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
   LoadingSpinner,
@@ -102,6 +102,7 @@ export default function CustomerPendingBillsPanel({
   const [tab, setTab] = useState('remaining');
   const [bills, setBills] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [billsLoading, setBillsLoading] = useState(true);
   const [detailRow, setDetailRow] = useState(null);
 
@@ -110,20 +111,24 @@ export default function CustomerPendingBillsPanel({
     (async () => {
       setBillsLoading(true);
       try {
-        const [billsRes, promoRes] = await Promise.all([
+        const [billsRes, promoRes, returnsRes] = await Promise.all([
           authFetch(`${apiBase}/api/bills`),
           authFetch(`${apiBase}/api/promotions`),
+          authFetch(`${apiBase}/api/returns`),
         ]);
         const data = await billsRes.json().catch(() => []);
         const promoData = await promoRes.json().catch(() => []);
+        const returnsData = await returnsRes.json().catch(() => []);
         if (!cancelled) {
           setBills(Array.isArray(data) ? data : []);
           setPromotions(Array.isArray(promoData) ? promoData : []);
+          setReturnsRows(Array.isArray(returnsData) ? returnsData : []);
         }
       } catch {
         if (!cancelled) {
           setBills([]);
           setPromotions([]);
+          setReturnsRows([]);
         }
       } finally {
         if (!cancelled) setBillsLoading(false);
@@ -138,10 +143,17 @@ export default function CustomerPendingBillsPanel({
 
   const allRows = useMemo(() => {
     if (!customer?.id) return [];
-    return buildCustomerOutstandingBills([customer], bills, payments, customer.id, { promotions })
-      .map((row) => enrichPendingRow(row, todayYmd))
-      .sort(comparePendingRows);
-  }, [customer, bills, payments, promotions, todayYmd]);
+    const built = buildCustomerOutstandingBills([customer], bills, payments, customer.id, {
+      promotions,
+      returnsRows,
+    })
+      .map((row) => enrichPendingRow(row, todayYmd));
+    const amountToPay = Number(customer.remainingAmount);
+    const aligned = Number.isFinite(amountToPay)
+      ? alignOutstandingRowsToAmount(built, amountToPay, { hideSettled: true })
+      : built;
+    return aligned.sort(comparePendingRows);
+  }, [customer, bills, payments, promotions, returnsRows, todayYmd]);
 
   const counts = useMemo(() => {
     let overdue = 0;
@@ -175,8 +187,9 @@ export default function CustomerPendingBillsPanel({
         <div className="min-w-0">
           <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Unpaid return cheques, opening balance, and credit bills. Return cheques stay ahead of invoices
-            when a collection is not split by bill. Invoices are due within {settlementDays} days.
+            Unpaid return cheques, opening balance, and credit bills. Promotions, returns, and price
+            changes are applied in that same order, so All remaining matches Amount to pay. Invoices are due
+            within {settlementDays} days.
           </p>
         </div>
         <button

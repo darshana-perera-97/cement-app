@@ -52,9 +52,22 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  const periodSelected = Boolean(dateFrom || dateTo);
+  const accountBalance = useMemo(() => {
+    if (!customer || !Number.isFinite(Number(customer.remainingAmount))) return null;
+    const due = Math.max(0, Number(customer.remainingAmount) || 0);
+    const overpayment = Math.max(0, Number(customer.overpaymentAmount) || 0);
+    return due > 0 ? due : -overpayment;
+  }, [customer]);
+
   const ledgerRows = useMemo(
-    () => buildCustomerLedgerRows(transactions, { dateFrom, dateTo }),
-    [transactions, dateFrom, dateTo],
+    () =>
+      buildCustomerLedgerRows(transactions, {
+        dateFrom,
+        dateTo,
+        accountBalance: periodSelected ? null : accountBalance,
+      }),
+    [transactions, dateFrom, dateTo, accountBalance, periodSelected],
   );
 
   const totals = useMemo(() => {
@@ -70,8 +83,6 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
   }, [ledgerRows]);
 
   if (!open) return null;
-
-  const periodSelected = Boolean(dateFrom || dateTo);
 
   return (
     <div
@@ -98,9 +109,8 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
             Ledger — {customer?.name || 'Customer'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Account activity in date order. Debits increase what is owed. Each payment is listed against the
-            invoices it was applied to, instead of one cash-in for the whole receipt. Balance is amount still owed
-            (negative means overpaid).
+            Account activity in date order. Debits increase what is owed. The closing balance matches Amount to
+            pay (negative means overpaid).
           </p>
         </div>
 

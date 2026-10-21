@@ -14,7 +14,7 @@ import {
   stickyThead,
 } from './tableToolbar';
 import { downloadCustomerInvoicesReport } from './customerInvoicesExport';
-import { buildCustomerInvoiceRows } from './pendingBills';
+import { alignOutstandingRowsToAmount, buildCustomerInvoiceRows } from './pendingBills';
 import { isTaxInvoiceReady } from './customerTaxUtils';
 import { downloadTaxInvoicePdf } from './taxInvoicesPdf';
 
@@ -78,6 +78,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
   const [shop, setShop] = useState(null);
   const [unloads, setUnloads] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
@@ -91,12 +92,13 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
     setLoading(true);
     setLoadError(null);
     try {
-      const [billsRes, payRes, shopRes, unloadsRes, promosRes] = await Promise.all([
+      const [billsRes, payRes, shopRes, unloadsRes, promosRes, returnsRes] = await Promise.all([
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/payments`),
         fetch(`${apiBase}/api/shop`),
         fetch(`${apiBase}/api/unloads`),
         fetch(`${apiBase}/api/promotions`),
+        fetch(`${apiBase}/api/returns`),
       ]);
       if (!billsRes.ok) throw new Error('Failed to load bills');
       if (!payRes.ok) throw new Error('Failed to load payments');
@@ -105,11 +107,13 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
       const shopData = shopRes.ok ? await shopRes.json() : null;
       const unloadsData = unloadsRes.ok ? await unloadsRes.json() : [];
       const promosData = promosRes.ok ? await promosRes.json() : [];
+      const returnsData = returnsRes.ok ? await returnsRes.json() : [];
       setBills(Array.isArray(billsData) ? billsData : []);
       setPayments(Array.isArray(payData) ? payData : []);
       setShop(shopData);
       setUnloads(Array.isArray(unloadsData) ? unloadsData : []);
       setPromotions(Array.isArray(promosData) ? promosData : []);
+      setReturnsRows(Array.isArray(returnsData) ? returnsData : []);
     } catch (e) {
       setLoadError(e.message || 'Could not load invoices');
       setBills([]);
@@ -117,6 +121,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
       setShop(null);
       setUnloads([]);
       setPromotions([]);
+      setReturnsRows([]);
     } finally {
       setLoading(false);
     }
@@ -136,10 +141,13 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  const allRows = useMemo(
-    () => (customer ? buildCustomerInvoiceRows(customer, bills, payments, promotions) : []),
-    [customer, bills, payments, promotions],
-  );
+  const allRows = useMemo(() => {
+    if (!customer) return [];
+    const built = buildCustomerInvoiceRows(customer, bills, payments, promotions, returnsRows);
+    const amountToPay = Number(customer.remainingAmount);
+    if (!Number.isFinite(amountToPay)) return built;
+    return alignOutstandingRowsToAmount(built, amountToPay);
+  }, [customer, bills, payments, promotions, returnsRows]);
 
   const filteredRows = useMemo(
     () => allRows.filter((r) => inDateRange(r.billDate, dateFrom, dateTo)),
@@ -213,9 +221,10 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
             Invoices — {customer?.name || 'Customer'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Credit bills and opening balance · settle within {settlementDays} day
-            {settlementDays === 1 ? '' : 's'} of bill date. Payments apply to opening balance first, then oldest
-            bills.
+            Credit bills, opening balance, and unpaid return cheques. Promotions, returns, and price
+            changes are included in the balances, so the total matches Amount to pay. Settle within{' '}
+            {settlementDays} day
+            {settlementDays === 1 ? '' : 's'} of bill date.
             {taxReady ? ' Tax invoice download is available per credit bill.' : null}
           </p>
         </div>
@@ -301,6 +310,16 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                               Opening
                             </span>
                           ) : null}
+                          {r.isReturnCheque ? (
+                            <span className="ml-2 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+                              Cheque
+                            </span>
+                          ) : null}
+                          {r.isAccountAdjustment ? (
+                            <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-700">
+                              Balance
+                            </span>
+                          ) : null}
                         </td>
                         <td className="max-w-[14rem] px-4 py-3 text-xs text-slate-600">{r.details}</td>
                         <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
@@ -321,7 +340,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
                         <td className="whitespace-nowrap px-4 py-3">{statusBadge(r.status, r.isOverdue)}</td>
                         {taxReady ? (
                           <td className="whitespace-nowrap px-4 py-3">
-                            {r.isOpeningBalance ? (
+                            {r.isOpeningBalance || r.isReturnCheque || r.isAccountAdjustment ? (
                               <span className="text-xs text-slate-400">—</span>
                             ) : (
                               <button
