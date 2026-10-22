@@ -81,7 +81,157 @@ const EMPTY_INVOICE_DISCOUNT_FILTERS = {
 function invoiceDiscountTypeLabel(mode) {
   if (mode === 'per_bag') return 'Per bag';
   if (mode === 'whole_invoice') return 'Whole invoice';
+  if (mode === 'rule_cashback') return 'Cashback';
   return 'All types';
+}
+
+function roundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function normalizeCustomerName(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/** Bag lines actually on the invoice, so the discount table can show the bill instead of only the promotion note. */
+function invoiceBagLines(bill, brands) {
+  if (!bill || typeof bill !== 'object') return [];
+  const lines = [];
+  const seen = new Set();
+  for (const brand of Array.isArray(brands) ? brands : []) {
+    const field = brand.bagsField || `${brand.key}Bags`;
+    if (!field || seen.has(field)) continue;
+    seen.add(field);
+    const bags = Number(bill[field]) || 0;
+    if (bags <= 0) continue;
+    lines.push({
+      brandKey: brand.key,
+      brandLabel: formatBrandLabel(brand) || brand.label || brand.key,
+      bags,
+    });
+  }
+  if (lines.length > 0) return lines;
+  for (const key of Object.keys(bill)) {
+    if (!key.endsWith('Bags')) continue;
+    const bags = Number(bill[key]) || 0;
+    if (bags <= 0) continue;
+    const brandKey = key.slice(0, -4);
+    lines.push({ brandKey, brandLabel: brandKey, bags });
+  }
+  return lines;
+}
+
+function findBillForPromotion(promo, billById, billByInvoice) {
+  const byId = billById.get(String(promo?.billId ?? '').trim());
+  if (byId) return byId;
+  const invoice = String(promo?.invoiceNumber ?? '').trim().toLowerCase();
+  if (!invoice) return null;
+  return billByInvoice.get(invoice) || null;
+}
+
+function labelForProductKey(key, brandMap) {
+  const brand = brandMap.get(key);
+  if (!brand) return key || '—';
+  return formatBrandLabel(brand) || brand.label || key;
+}
+
+/** Highest matching cashback-rule rate per product × bags on the invoice. */
+function computeRuleCashbackLines(bill, rules, customerId, brands) {
+  const id = String(customerId ?? '').trim();
+  const date = String(bill?.date ?? '').slice(0, 10);
+  if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  const catalog = Array.isArray(brands) ? brands : [];
+  const matched = (Array.isArray(rules) ? rules : []).filter((rule) => {
+    if (String(rule?.customerId ?? '').trim() !== id) return false;
+    const start = String(rule.startDate ?? '').slice(0, 10);
+    const end = String(rule.endDate ?? '').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end) && date >= start && date <= end;
+  });
+  const rates = {};
+  for (const rule of matched) {
+    const cashbacks = rule.cashbacks && typeof rule.cashbacks === 'object' ? rule.cashbacks : {};
+    for (const brand of catalog) {
+      const rate = Math.max(0, Number(cashbacks[brand.key]) || 0);
+      if (rate <= 0) continue;
+      if (rate >= (rates[brand.key] || 0)) rates[brand.key] = rate;
+    }
+  }
+  const lines = [];
+  for (const brand of catalog) {
+    const rate = rates[brand.key] || 0;
+    if (rate <= 0) continue;
+    const bags = Math.max(0, Number(bill?.[brand.bagsField || `${brand.key}Bags`]) || 0);
+    if (bags <= 0) continue;
+    const amount = roundMoney(rate * bags);
+    if (amount <= 0) continue;
+    lines.push({ key: brand.key, bags, rate, amount });
+  }
+  return lines;
+}
+
+function rowsFromCashbackLines({
+  id,
+  bill,
+  customerName,
+  invoiceNumber,
+  recordedDate,
+  lines,
+  brandMap,
+  reason,
+  enteredBy,
+  posted,
+  fallbackAmount,
+}) {
+  const invoiceDate = String(bill?.date ?? '').slice(0, 10) || String(recordedDate ?? '').slice(0, 10);
+  const shared = {
+    date: invoiceDate,
+    recordedDate: posted ? String(recordedDate ?? '').slice(0, 10) : '',
+    customerName: String(customerName ?? '').trim() || '—',
+    invoiceNumber: String(invoiceNumber ?? '').trim() || '—',
+    invoiceAmount: bill ? Number(bill.totalAmount) || 0 : null,
+    discountModeKey: 'rule_cashback',
+    discountMode: 'Cashback',
+    reason: reason || 'Promotion rule cashback',
+    enteredBy: enteredBy || '—',
+    posted,
+  };
+  const usable = (Array.isArray(lines) ? lines : []).filter(
+    (line) => (Number(line.amount) || 0) > 0 || (Number(line.bags) || 0) > 0,
+  );
+  if (usable.length === 0) {
+    const bagLines = invoiceBagLines(bill, [...brandMap.values()]);
+    return [
+      {
+        ...shared,
+        id,
+        lines: bagLines,
+        bags: bagLines.reduce((sum, line) => sum + line.bags, 0),
+        discountValue: 0,
+        discountAmount: Number(fallbackAmount) || 0,
+      },
+    ];
+  }
+  return usable.map((line) => {
+    const key = String(line.key ?? '').trim();
+    const bags = Number(line.bags) || 0;
+    return {
+      ...shared,
+      id: usable.length > 1 ? `${id}:${key}` : id,
+      lines: [
+        {
+          brandKey: key,
+          brandLabel: labelForProductKey(key, brandMap),
+          bags,
+        },
+      ],
+      bags,
+      discountValue: Number(line.rate) || 0,
+      discountAmount: Number(line.amount) || roundMoney((Number(line.rate) || 0) * bags),
+    };
+  });
 }
 
 function countActiveIncentiveFilters(filters, { includeShop = true } = {}) {
@@ -712,6 +862,7 @@ export default function IncentivePage() {
   const [bills, setBills] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [promotionRules, setPromotionRules] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [doorStockTransportSettings, setDoorStockTransportSettings] = useState(
     EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
@@ -740,22 +891,24 @@ export default function IncentivePage() {
     setLoading(true);
     setError(null);
     try {
-      const [loadsRes, billsRes, customersRes, promoRes, poRes, shopRes] = await Promise.all([
+      const [loadsRes, billsRes, customersRes, promoRes, rulesRes, poRes, shopRes] = await Promise.all([
         fetch(`${apiBase}/api/stocks`),
         fetch(`${apiBase}/api/bills`),
         fetch(`${apiBase}/api/customers`),
         fetch(`${apiBase}/api/promotions`),
+        fetch(`${apiBase}/api/promotion-rules`),
         fetch(`${apiBase}/api/purchase-orders`),
         fetch(`${apiBase}/api/shop`),
       ]);
       if (!loadsRes.ok) throw new Error('Failed to load stock data');
       if (!billsRes.ok) throw new Error('Failed to load bill data');
       if (!customersRes.ok) throw new Error('Failed to load customer data');
-      const [loadsData, billsData, customersData, promoData, poData, shopData] = await Promise.all([
+      const [loadsData, billsData, customersData, promoData, rulesData, poData, shopData] = await Promise.all([
         loadsRes.json(),
         billsRes.json(),
         customersRes.json(),
         promoRes.ok ? promoRes.json() : Promise.resolve([]),
+        rulesRes.ok ? rulesRes.json() : Promise.resolve([]),
         poRes.ok ? poRes.json() : Promise.resolve([]),
         shopRes.ok ? shopRes.json() : Promise.resolve({}),
       ]);
@@ -763,6 +916,7 @@ export default function IncentivePage() {
       setBills(Array.isArray(billsData) ? billsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
       setPromotions(Array.isArray(promoData) ? promoData : []);
+      setPromotionRules(Array.isArray(rulesData) ? rulesData : []);
       setPurchaseOrders(Array.isArray(poData) ? poData : []);
       setDoorStockTransportSettings({
         ...EMPTY_DOOR_STOCK_TRANSPORT_SETTINGS,
@@ -893,22 +1047,113 @@ export default function IncentivePage() {
   );
 
   const invoiceDiscountRows = useMemo(() => {
-    return promotions
-      .filter((p) => String(p.type ?? '').trim() === 'invoice_discount')
-      .map((p) => ({
-        id: p.id,
-        date: p.date,
-        customerName: p.customerName || '—',
-        invoiceNumber: p.invoiceNumber || '—',
-        discountModeKey: p.discountMode === 'per_bag' ? 'per_bag' : 'whole_invoice',
-        discountMode: p.discountMode === 'per_bag' ? 'Per bag' : 'Whole invoice',
-        discountValue: Number(p.discountValue) || 0,
-        discountAmount: Number(p.discountAmount) || 0,
-        reason: p.reason || '—',
-        enteredBy: p.enteredBy || '—',
-      }))
-      .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
-  }, [promotions]);
+    const billById = new Map();
+    const billByInvoice = new Map();
+    for (const bill of bills) {
+      const id = String(bill?.id ?? '').trim();
+      if (id) billById.set(id, bill);
+      const invoice = String(bill?.invoiceNumber ?? '').trim().toLowerCase();
+      if (invoice && !billByInvoice.has(invoice)) billByInvoice.set(invoice, bill);
+    }
+    const customerIdByName = new Map();
+    for (const customer of customers) {
+      const name = normalizeCustomerName(customer?.name);
+      const id = String(customer?.id ?? '').trim();
+      if (name && id && !customerIdByName.has(name)) customerIdByName.set(name, id);
+    }
+    const brandMap = new Map((Array.isArray(brands) ? brands : []).map((brand) => [brand.key, brand]));
+
+    const rows = [];
+    const ruleCashbackBillIds = new Set();
+    const invoiceDiscountAmountByBill = new Map();
+
+    for (const promo of promotions) {
+      const type = String(promo?.type ?? '').trim();
+      if (type !== 'invoice_discount' && type !== 'rule_cashback') continue;
+      const bill = findBillForPromotion(promo, billById, billByInvoice);
+      const billId = String(bill?.id ?? promo.billId ?? '').trim();
+      if (type === 'rule_cashback') {
+        if (billId) ruleCashbackBillIds.add(billId);
+        rows.push(
+          ...rowsFromCashbackLines({
+            id: promo.id,
+            bill,
+            customerName: String(bill?.customerName ?? '').trim() || promo.customerName,
+            invoiceNumber: String(bill?.invoiceNumber ?? '').trim() || promo.invoiceNumber,
+            recordedDate: String(promo.createdAt || promo.date || '').slice(0, 10),
+            lines: promo.cashbackLines,
+            brandMap,
+            reason: promo.reason || 'Promotion rule cashback',
+            enteredBy: promo.enteredBy,
+            posted: true,
+            fallbackAmount: promo.discountAmount,
+          }),
+        );
+        continue;
+      }
+
+      if (billId) {
+        invoiceDiscountAmountByBill.set(
+          billId,
+          roundMoney((invoiceDiscountAmountByBill.get(billId) || 0) + (Number(promo.discountAmount) || 0)),
+        );
+      }
+      const lines = invoiceBagLines(bill, brands);
+      const invoiceDate = String(bill?.date ?? '').slice(0, 10);
+      const recordedDate = String(promo.date ?? '').slice(0, 10);
+      rows.push({
+        id: promo.id,
+        date: invoiceDate || recordedDate,
+        recordedDate,
+        customerName: String(bill?.customerName ?? '').trim() || promo.customerName || '—',
+        invoiceNumber: String(bill?.invoiceNumber ?? '').trim() || promo.invoiceNumber || '—',
+        lines,
+        bags: lines.reduce((sum, line) => sum + line.bags, 0),
+        invoiceAmount: bill ? Number(bill.totalAmount) || 0 : null,
+        discountModeKey: promo.discountMode === 'per_bag' ? 'per_bag' : 'whole_invoice',
+        discountMode: promo.discountMode === 'per_bag' ? 'Per bag' : 'Whole invoice',
+        discountValue: Number(promo.discountValue) || 0,
+        discountAmount: Number(promo.discountAmount) || 0,
+        reason: promo.reason || '—',
+        enteredBy: promo.enteredBy || '—',
+        posted: true,
+      });
+    }
+
+    for (const bill of bills) {
+      const billId = String(bill?.id ?? '').trim();
+      if (!billId || ruleCashbackBillIds.has(billId)) continue;
+      const customerId = customerIdByName.get(normalizeCustomerName(bill.customerName));
+      if (!customerId) continue;
+      const lines = computeRuleCashbackLines(bill, promotionRules, customerId, brands);
+      if (lines.length === 0) continue;
+      const amount = roundMoney(lines.reduce((sum, line) => sum + line.amount, 0));
+      const manual = invoiceDiscountAmountByBill.get(billId);
+      if (manual != null && Math.abs(manual - amount) < 0.01) continue;
+      rows.push(
+        ...rowsFromCashbackLines({
+          id: `rule:${billId}`,
+          bill,
+          customerName: bill.customerName,
+          invoiceNumber: bill.invoiceNumber,
+          recordedDate: '',
+          lines,
+          brandMap,
+          reason: 'Cashback rule (not posted on this invoice)',
+          enteredBy: '—',
+          posted: false,
+          fallbackAmount: amount,
+        }),
+      );
+    }
+
+    rows.sort((a, b) => {
+      const byDate = String(b.date ?? '').localeCompare(String(a.date ?? ''));
+      if (byDate !== 0) return byDate;
+      return String(a.invoiceNumber ?? '').localeCompare(String(b.invoiceNumber ?? ''));
+    });
+    return rows;
+  }, [promotions, bills, brands, customers, promotionRules]);
 
   const invoiceDiscountCustomerOptions = useMemo(() => {
     const names = new Set();
@@ -941,10 +1186,16 @@ export default function IncentivePage() {
     [filteredInvoiceDiscountRows, invoiceDiscountPagination.offset, invoiceDiscountPagination.pageSize],
   );
 
-  const invoiceDiscountTotal = useMemo(
-    () => filteredInvoiceDiscountRows.reduce((s, r) => s + (Number(r.discountAmount) || 0), 0),
-    [filteredInvoiceDiscountRows],
-  );
+  const invoiceDiscountTotals = useMemo(() => {
+    let posted = 0;
+    let unposted = 0;
+    for (const row of filteredInvoiceDiscountRows) {
+      const amount = Number(row.discountAmount) || 0;
+      if (row.posted === false) unposted += amount;
+      else posted += amount;
+    }
+    return { posted: roundMoney(posted), unposted: roundMoney(unposted) };
+  }, [filteredInvoiceDiscountRows]);
 
   const doorStockRows = useMemo(
     () => buildDoorStockRows(loads, purchaseOrders, normalizedDoorStockSettings, brands),
@@ -1920,9 +2171,12 @@ export default function IncentivePage() {
           {!loading ? (
             <p className="mt-1 text-sm text-slate-500">
               Showing {filteredInvoiceDiscountRows.length} discount
-              {filteredInvoiceDiscountRows.length === 1 ? '' : 's'}
+              {filteredInvoiceDiscountRows.length === 1 ? '' : 's'}, including cashback rules
               {filteredInvoiceDiscountRows.length > 0
-                ? ` · Total ${money(invoiceDiscountTotal)} deducted from customer ledger and cashier`
+                ? ` · ${money(invoiceDiscountTotals.posted)} deducted from customer ledger and cashier`
+                : ''}
+              {invoiceDiscountTotals.unposted > 0
+                ? ` · ${money(invoiceDiscountTotals.unposted)} matches a cashback rule but is not posted yet`
                 : ''}
               .
             </p>
@@ -1950,7 +2204,7 @@ export default function IncentivePage() {
 
       <TableFiltersBar>
         <label className={filterLabelNarrow}>
-          From date
+          Invoice from
           <input
             type="date"
             value={invoiceDiscountFilters.dateFrom}
@@ -1959,7 +2213,7 @@ export default function IncentivePage() {
           />
         </label>
         <label className={filterLabelNarrow}>
-          To date
+          Invoice to
           <input
             type="date"
             value={invoiceDiscountFilters.dateTo}
@@ -1977,6 +2231,7 @@ export default function IncentivePage() {
             <option value="">All types</option>
             <option value="whole_invoice">Whole invoice</option>
             <option value="per_bag">Per bag</option>
+            <option value="rule_cashback">Cashback</option>
           </select>
         </label>
         <label className={filterLabel}>
@@ -2004,7 +2259,7 @@ export default function IncentivePage() {
         ) : filteredInvoiceDiscountRows.length === 0 ? (
           <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
             {invoiceDiscountRows.length === 0
-              ? 'No invoice discount promotions yet. Record them on the Promotions page.'
+              ? 'No invoice discounts or cashback rules yet. Record them on the Promotions page.'
               : 'No invoice discounts match these filters.'}
           </p>
         ) : (
@@ -2015,8 +2270,20 @@ export default function IncentivePage() {
               subtitle={r.date}
               fields={[
                 { label: 'Invoice', value: r.invoiceNumber },
+                {
+                  label: 'Bag type',
+                  value: r.lines.length
+                    ? r.lines.map((line) => line.brandLabel).join(', ')
+                    : '—',
+                },
+                { label: 'Bags', value: r.bags > 0 ? r.bags.toLocaleString() : '—' },
+                {
+                  label: 'Invoice amount',
+                  value: r.invoiceAmount == null ? '—' : money(r.invoiceAmount),
+                },
                 { label: 'Type', value: r.discountMode },
                 { label: 'Discount', value: money(r.discountAmount) },
+                { label: 'Recorded', value: r.posted === false ? 'Not posted' : r.recordedDate || '—' },
                 { label: 'Reason', value: r.reason },
               ]}
             />
@@ -2025,12 +2292,16 @@ export default function IncentivePage() {
       </div>
 
       <div className={`hidden sm:block ${scrollTableWrap}`}>
-        <table className="w-full min-w-[800px] data-table border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1280px] data-table border-separate border-spacing-0 text-left text-sm">
           <thead className={stickyThead}>
             <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+              <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Invoice date</th>
+              <th className="whitespace-nowrap px-4 py-3">Recorded</th>
               <th className="px-4 py-3">Customer</th>
               <th className="whitespace-nowrap px-4 py-3 font-mono">Invoice</th>
+              <th className="whitespace-nowrap px-4 py-3">Bag type</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Bags</th>
+              <th className="whitespace-nowrap px-4 py-3 text-right">Invoice amount</th>
               <th className="whitespace-nowrap px-4 py-3">Discount type</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Value</th>
               <th className="whitespace-nowrap px-4 py-3 text-right">Total discount</th>
@@ -2040,15 +2311,15 @@ export default function IncentivePage() {
           <tbody className="divide-y divide-slate-100 text-slate-800">
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
                   <LoadingSpinner />
                 </td>
               </tr>
             ) : filteredInvoiceDiscountRows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
                   {invoiceDiscountRows.length === 0
-                    ? 'No invoice discount promotions yet. Record them on the Promotions page.'
+                    ? 'No invoice discounts or cashback rules yet. Record them on the Promotions page.'
                     : 'No invoice discounts match these filters.'}
                 </td>
               </tr>
@@ -2056,8 +2327,37 @@ export default function IncentivePage() {
               pagedInvoiceDiscountRows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50/80">
                   <td className={`whitespace-nowrap px-4 py-3 tabular-nums ${stickyFirstTd}`}>{r.date}</td>
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
+                    {r.posted === false ? (
+                      <span className="font-medium text-amber-700">Not posted</span>
+                    ) : (
+                      r.recordedDate || '—'
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-medium text-slate-900">{r.customerName}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.invoiceNumber}</td>
+                  <td className="px-4 py-3">
+                    {r.lines.length === 0 ? (
+                      '—'
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {r.lines.map((line) => (
+                          <span
+                            key={line.brandKey}
+                            className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${brandByKey[line.brandKey]?.iconBg || 'bg-slate-100 text-slate-700'}`}
+                          >
+                            {line.brandLabel}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {r.bags > 0 ? r.bags.toLocaleString() : '—'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {r.invoiceAmount == null ? '—' : money(r.invoiceAmount)}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.discountMode}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.discountValue)}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold text-emerald-800">

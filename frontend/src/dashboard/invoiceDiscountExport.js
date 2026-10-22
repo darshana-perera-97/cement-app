@@ -5,18 +5,36 @@ import * as XLSX from 'xlsx';
 const MARGIN = 14;
 
 const PDF_HEAD = [
-  ['Date', 'Customer', 'Invoice', 'Discount type', 'Value (LKR)', 'Total discount (LKR)', 'Reason'],
+  [
+    'Invoice date',
+    'Recorded',
+    'Customer',
+    'Invoice',
+    'Bag type',
+    'Bags',
+    'Invoice amount',
+    'Discount type',
+    'Value (LKR)',
+    'Total discount (LKR)',
+    'Reason',
+  ],
 ];
 
 const EXCEL_HEAD = [
-  'Date',
+  'Invoice date',
+  'Recorded',
   'Customer',
   'Invoice',
+  'Bag type',
+  'Bags',
+  'Invoice amount',
   'Discount type',
   'Value (LKR)',
   'Total discount (LKR)',
   'Reason',
 ];
+
+const EMPTY_PDF_ROW = PDF_HEAD[0].map(() => '—');
 
 function display(v) {
   const s = String(v ?? '').trim();
@@ -63,11 +81,24 @@ function addPageFooters(doc) {
   }
 }
 
+function bagTypeLabel(row) {
+  const lines = Array.isArray(row?.lines) ? row.lines : [];
+  const label = lines
+    .map((line) => String(line.brandLabel ?? '').trim())
+    .filter(Boolean)
+    .join(', ');
+  return label;
+}
+
 function bodyRows(rows) {
   return (Array.isArray(rows) ? rows : []).map((r) => [
     display(r.date),
+    display(r.recordedDate),
     display(r.customerName),
     display(r.invoiceNumber),
+    display(bagTypeLabel(r)),
+    Number(r.bags) > 0 ? Number(r.bags).toLocaleString() : '—',
+    r.invoiceAmount == null ? '—' : formatLkr(r.invoiceAmount),
     display(r.discountMode),
     formatLkr(r.discountValue),
     formatLkr(r.discountAmount),
@@ -78,8 +109,12 @@ function bodyRows(rows) {
 function excelBodyRows(rows) {
   return (Array.isArray(rows) ? rows : []).map((r) => [
     String(r.date ?? '').slice(0, 10),
+    String(r.recordedDate ?? '').slice(0, 10),
     String(r.customerName ?? '').trim(),
     String(r.invoiceNumber ?? '').trim(),
+    bagTypeLabel(r),
+    Number(r.bags) || 0,
+    r.invoiceAmount == null ? '' : Number(r.invoiceAmount) || 0,
     String(r.discountMode ?? '').trim(),
     Number(r.discountValue) || 0,
     Number(r.discountAmount) || 0,
@@ -129,16 +164,17 @@ export function downloadInvoiceDiscountPdf(rows, options = {}) {
 
   autoTable(doc, {
     head: PDF_HEAD,
-    body:
-      safeRows.length > 0
-        ? bodyRows(safeRows)
-        : [['—', '—', '—', '—', '—', '—', '—']],
+    body: safeRows.length > 0 ? bodyRows(safeRows) : [EMPTY_PDF_ROW],
     foot: [
       [
         '',
         '',
         '',
         `Total (${safeRows.length})`,
+        '',
+        '',
+        '',
+        '',
         '',
         formatLkr(total),
         '',
@@ -151,8 +187,10 @@ export function downloadInvoiceDiscountPdf(rows, options = {}) {
     footStyles: { fillColor: [226, 232, 240], textColor: [15, 23, 42], fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      4: { halign: 'right' },
       5: { halign: 'right' },
+      6: { halign: 'right' },
+      8: { halign: 'right' },
+      9: { halign: 'right' },
     },
     showHead: 'everyPage',
   });
@@ -180,18 +218,22 @@ export function downloadInvoiceDiscountExcel(rows, options = {}) {
     EXCEL_HEAD,
     ...excelBodyRows(safeRows),
     [],
-    ['', '', '', `Total (${safeRows.length})`, '', total, ''],
+    ['', '', '', `Total (${safeRows.length})`, '', '', '', '', '', total, ''],
   ];
 
   const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
   worksheet['!cols'] = [
-    { wch: 12 },
+    { wch: 14 },
+    { wch: 14 },
     { wch: 28 },
+    { wch: 16 },
+    { wch: 22 },
+    { wch: 10 },
     { wch: 16 },
     { wch: 16 },
     { wch: 14 },
     { wch: 20 },
-    { wch: 36 },
+    { wch: 42 },
   ];
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Invoice discounts');
