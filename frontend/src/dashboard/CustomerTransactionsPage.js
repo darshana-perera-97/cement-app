@@ -23,6 +23,7 @@ import CustomerChequesPanel from './CustomerChequesPanel';
 import CustomerPendingBillsPanel from './CustomerPendingBillsPanel';
 import CustomerInvoicesModal from './CustomerInvoicesModal';
 import CustomerLedgerModal from './CustomerLedgerModal';
+import CustomerPaymentApplicationsModal from './CustomerPaymentApplicationsModal';
 import { expandCustomerLedgerTransactions } from './customerLedger';
 import CustomerTaxModal from './CustomerTaxModal';
 import RecordPaymentModal from './RecordPaymentModal';
@@ -214,6 +215,7 @@ export default function CustomerTransactionsPage() {
   const [invoicesOpen, setInvoicesOpen] = useState(false);
   const [taxOpen, setTaxOpen] = useState(false);
   const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [applicationsOpen, setApplicationsOpen] = useState(false);
   const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
   const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
@@ -433,6 +435,28 @@ export default function CustomerTransactionsPage() {
                 className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 hover:text-sky-900"
               >
                 Ledger
+              </button>
+              <button
+                type="button"
+                onClick={() => setApplicationsOpen(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-amber-200 hover:bg-amber-50 hover:text-amber-900"
+                title="Payment applications"
+              >
+                <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M7.5 6.75h9M7.5 12h9M7.5 17.25h5.25"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M4.5 4.5h15a1.5 1.5 0 011.5 1.5v12a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18V6a1.5 1.5 0 011.5-1.5z"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Applications
               </button>
               <button
                 type="button"
@@ -963,6 +987,15 @@ export default function CustomerTransactionsPage() {
         transactions={transactions}
         loading={loading}
         onClose={() => setLedgerOpen(false)}
+      />
+
+      <CustomerPaymentApplicationsModal
+        open={applicationsOpen}
+        customer={customer}
+        transactions={transactions}
+        payments={payments}
+        loading={loading}
+        onClose={() => setApplicationsOpen(false)}
       />
 
       <RecordPaymentModal
