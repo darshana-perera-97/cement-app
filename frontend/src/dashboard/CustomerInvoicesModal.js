@@ -14,7 +14,7 @@ import {
   stickyThead,
 } from './tableToolbar';
 import { downloadCustomerInvoicesReport } from './customerInvoicesExport';
-import { alignOutstandingRowsToAmount, buildCustomerInvoiceRows } from './pendingBills';
+import { buildCustomerInvoiceRows } from './pendingBills';
 import { isTaxInvoiceReady } from './customerTaxUtils';
 import { downloadTaxInvoicePdf } from './taxInvoicesPdf';
 
@@ -143,10 +143,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
 
   const allRows = useMemo(() => {
     if (!customer) return [];
-    const built = buildCustomerInvoiceRows(customer, bills, payments, promotions, returnsRows);
-    const amountToPay = Number(customer.remainingAmount);
-    if (!Number.isFinite(amountToPay)) return built;
-    return alignOutstandingRowsToAmount(built, amountToPay);
+    return buildCustomerInvoiceRows(customer, bills, payments, promotions, returnsRows);
   }, [customer, bills, payments, promotions, returnsRows]);
 
   const filteredRows = useMemo(
@@ -221,8 +218,8 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
             Invoices — {customer?.name || 'Customer'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Credit bills, opening balance, and unpaid return cheques. Promotions, returns, and price
-            changes are included in the balances, so the total matches Amount to pay. Settle within{' '}
+            Credit bills, opening balance, and unpaid return cheques (invoice discounts and returns
+            applied per bill). Charges not tied to an invoice appear under Pending bills. Settle within{' '}
             {settlementDays} day
             {settlementDays === 1 ? '' : 's'} of bill date.
             {taxReady ? ' Tax invoice download is available per credit bill.' : null}

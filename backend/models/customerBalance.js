@@ -244,18 +244,24 @@ function forEachCustomerSettlementApplication(
     if (credit <= 0) continue;
     const explicit = getPaymentBillCashAllocations(p);
     if (explicit.length > 0) {
+      // Never apply more than this receipt actually credited (stale splits after a
+      // reduced/doubled payment must not clear invoices).
+      let remaining = credit;
       for (const { billId, cashAmount } of explicit) {
+        if (remaining <= 0.009) break;
+        const want = Math.min(toNonNegMoney(cashAmount), remaining);
+        if (want <= 0) continue;
+        let applied = 0;
         if (isReturnChequeBillId(billId)) {
           const rc = returnById.get(billId);
           if (!rc || !returnChequePayableByPayment(rc, p)) continue;
-          applyReturn(p, rc, cashAmount);
-          continue;
+          applied = applyReturn(p, rc, want);
+        } else if (openingId && billId === openingId) {
+          applied = applyOpening(p, want);
+        } else {
+          applied = applyBill(p, billId, want);
         }
-        if (openingId && billId === openingId) {
-          applyOpening(p, cashAmount);
-          continue;
-        }
-        applyBill(p, billId, cashAmount);
+        remaining = roundMoney(remaining - applied);
       }
       continue;
     }

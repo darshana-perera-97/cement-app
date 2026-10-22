@@ -53,21 +53,14 @@ export default function CustomerLedgerModal({ open, customer, transactions, load
   }, [open, onClose]);
 
   const periodSelected = Boolean(dateFrom || dateTo);
-  const accountBalance = useMemo(() => {
-    if (!customer || !Number.isFinite(Number(customer.remainingAmount))) return null;
-    const due = Math.max(0, Number(customer.remainingAmount) || 0);
-    const overpayment = Math.max(0, Number(customer.overpaymentAmount) || 0);
-    return due > 0 ? due : -overpayment;
-  }, [customer]);
 
   const ledgerRows = useMemo(
     () =>
       buildCustomerLedgerRows(transactions, {
         dateFrom,
         dateTo,
-        accountBalance: periodSelected ? null : accountBalance,
       }),
-    [transactions, dateFrom, dateTo, accountBalance, periodSelected],
+    [transactions, dateFrom, dateTo],
   );
 
   const totals = useMemo(() => {

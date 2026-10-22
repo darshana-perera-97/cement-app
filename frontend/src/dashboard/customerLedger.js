@@ -165,8 +165,9 @@ export function computeBalanceBeforeDate(transactions, beforeYmd) {
 /**
  * Chronological ledger with debit, credit, and running balance.
  * When `dateFrom` is set, prepends a starting-balance row for that period.
+ * Account gaps (charges not on an invoice) are not added here — only Pending bills shows them.
  */
-export function buildCustomerLedgerRows(transactions, { dateFrom = '', dateTo = '', accountBalance = null } = {}) {
+export function buildCustomerLedgerRows(transactions, { dateFrom = '', dateTo = '' } = {}) {
   const sorted = expandCustomerLedgerTransactions(transactions).sort(compareTransactionsByDateAsc);
   const rows = [];
   let balance = dateFrom ? computeBalanceBeforeDate(transactions, dateFrom) : 0;
@@ -201,30 +202,6 @@ export function buildCustomerLedgerRows(transactions, { dateFrom = '', dateTo = 
       credit,
       balance,
     });
-  }
-
-  const fullPeriod = !dateFrom && !dateTo;
-  const target = Number(accountBalance);
-  if (fullPeriod && Number.isFinite(target)) {
-    const gap = roundMoney(target - balance);
-    if (Math.abs(gap) > 0.009) {
-      const lastDate = rows.length ? rows[rows.length - 1].date : '';
-      balance = target;
-      rows.push({
-        id: 'account-balance',
-        kind: 'adjustment',
-        date: lastDate,
-        type: 'Account balance',
-        invoice: '',
-        details:
-          gap > 0
-            ? 'Charge already in Amount to pay that is not on a line above'
-            : 'Credit already in Amount to pay that is not on a line above',
-        debit: gap > 0 ? gap : null,
-        credit: gap < 0 ? roundMoney(-gap) : null,
-        balance,
-      });
-    }
   }
 
   return rows;

@@ -187,9 +187,8 @@ export default function CustomerPendingBillsPanel({
         <div className="min-w-0">
           <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Unpaid return cheques, opening balance, and credit bills. Promotions, returns, and price
-            changes are applied in that same order, so All remaining matches Amount to pay. Invoices are due
-            within {settlementDays} days.
+            Unpaid return cheques, opening balance, and credit bills. Promotions and returns are applied
+            so All remaining matches Amount to pay. Invoices are due within {settlementDays} days.
           </p>
         </div>
         <button
