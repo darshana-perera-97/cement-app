@@ -56,6 +56,28 @@ function receiptFromPayment(paymentTx, paymentsById) {
   return match ? match[1].trim() : '';
 }
 
+function explicitAllocations(payment) {
+  if (!Array.isArray(payment?.billCashAllocations)) return [];
+  return payment.billCashAllocations
+    .map((alloc) => ({
+      billId: String(alloc?.billId ?? '').trim(),
+      amount: roundMoney(alloc?.cashAmount ?? alloc?.amount),
+      invoiceNumber: String(alloc?.invoiceNumber ?? '').trim(),
+      date: String(alloc?.billDate ?? alloc?.date ?? '').slice(0, 10),
+      isReturnCheque: Boolean(alloc?.isReturnCheque) || String(alloc?.billId ?? '').startsWith('return-cheque:'),
+    }))
+    .filter((alloc) => alloc.billId && alloc.amount > 0.009);
+}
+
+function labelForAllocation(alloc, invoiceMeta) {
+  const meta = invoiceMeta.get(alloc.billId);
+  if (meta?.invoice) return meta.invoice;
+  if (alloc.billId.endsWith('-opening')) return 'Opening';
+  if (alloc.invoiceNumber) return alloc.invoiceNumber;
+  if (alloc.isReturnCheque) return 'Return cheque';
+  return 'Invoice';
+}
+
 /**
  * Build payment → invoice and invoice → payment views from customer transactions.
  */
@@ -99,9 +121,15 @@ function buildApplicationViews(transactions, payments, { dateFrom, dateTo }) {
     const paymentId = String(tx.paymentId || tx.id || '').trim();
     const receipt = receiptFromPayment(tx, paymentsById);
     const methods = String(tx.paymentMethods || '').trim();
-    const applications = Array.isArray(tx.applications) ? tx.applications : [];
+    // Settled amounts only. The receipt split can name an invoice that was already
+    // paid, and that leftover still reduces Amount to pay without showing on Pending Bills.
+    const applications = Array.isArray(tx.applications)
+      ? tx.applications
+      : Array.isArray(tx.recordedApplications)
+        ? tx.recordedApplications
+        : [];
     const applied = [];
-    let appliedTotal = 0;
+    const landedByBill = new Map();
 
     for (const app of applications) {
       const amt = roundMoney(app?.appliedAmount);
@@ -115,8 +143,11 @@ function buildApplicationViews(transactions, payments, { dateFrom, dateTo }) {
         invoiceDate,
         amount: amt,
         settled: Boolean(app?.settled),
+        unapplied: false,
       });
-      appliedTotal = roundMoney(appliedTotal + amt);
+      if (!billId.startsWith('anon-')) {
+        landedByBill.set(billId, roundMoney((landedByBill.get(billId) || 0) + amt));
+      }
 
       if (!invoiceMeta.has(billId)) {
         invoiceMeta.set(billId, {
@@ -140,19 +171,44 @@ function buildApplicationViews(transactions, payments, { dateFrom, dateTo }) {
       }
     }
 
-    if (!inDateRange(paymentDate, dateFrom, dateTo)) continue;
-
     const paymentAmount = roundMoney(tx.amount);
-    const unallocated = roundMoney(Math.max(0, paymentAmount - appliedTotal));
-    if (unallocated > 0.009) {
+    const landedLeft = new Map(landedByBill);
+    let unappliedRoom = roundMoney(
+      paymentAmount - applied.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
+    );
+    if (Array.isArray(tx.applications) && unappliedRoom > 0.009) {
+      for (const alloc of explicitAllocations(paymentsById.get(paymentId))) {
+        if (unappliedRoom <= 0.009) break;
+        const landed = landedLeft.get(alloc.billId) || 0;
+        const used = roundMoney(Math.min(landed, alloc.amount));
+        landedLeft.set(alloc.billId, roundMoney(Math.max(0, landed - used)));
+        const missed = roundMoney(Math.min(unappliedRoom, alloc.amount - used));
+        if (missed <= 0.009) continue;
+        unappliedRoom = roundMoney(unappliedRoom - missed);
+        const meta = invoiceMeta.get(alloc.billId);
+        applied.push({
+          billId: alloc.billId,
+          invoice: labelForAllocation(alloc, invoiceMeta),
+          invoiceDate: meta?.invoiceDate || alloc.date,
+          amount: missed,
+          unapplied: true,
+        });
+      }
+    }
+    const stillUnapplied = roundMoney(
+      paymentAmount - applied.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
+    );
+    if (stillUnapplied > 0.009) {
       applied.push({
-        billId: '',
-        invoice: 'On account',
+        billId: `unapplied-${paymentId}`,
+        invoice: 'Not applied to an invoice',
         invoiceDate: '',
-        amount: unallocated,
-        settled: false,
+        amount: stillUnapplied,
+        unapplied: true,
       });
     }
+
+    if (!inDateRange(paymentDate, dateFrom, dateTo)) continue;
 
     paymentRows.push({
       id: paymentId || `${paymentDate}-${paymentRows.length}`,
@@ -203,11 +259,21 @@ function ApplicationsCell({ items, emptyLabel = '—' }) {
           key={`${item.key || item.label}-${index}`}
           className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs sm:text-sm"
         >
-          <span className="min-w-0 text-slate-700">
-            <span className="font-medium text-slate-900">{item.label}</span>
-            {item.sub ? <span className="text-slate-500"> · {item.sub}</span> : null}
+          <span className={`min-w-0 ${item.unapplied ? 'text-amber-800' : 'text-slate-700'}`}>
+            <span className={`font-medium ${item.unapplied ? 'text-amber-900' : 'text-slate-900'}`}>
+              {item.label}
+            </span>
+            {item.sub ? (
+              <span className={item.unapplied ? 'text-amber-700' : 'text-slate-500'}> · {item.sub}</span>
+            ) : null}
           </span>
-          <span className="shrink-0 tabular-nums font-semibold text-slate-900">{money(item.amount)}</span>
+          <span
+            className={`shrink-0 tabular-nums font-semibold ${
+              item.unapplied ? 'text-amber-800' : 'text-slate-900'
+            }`}
+          >
+            {money(item.amount)}
+          </span>
         </li>
       ))}
     </ul>
@@ -334,7 +400,8 @@ export default function CustomerPaymentApplicationsModal({
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">Payments → invoices</h3>
                     <p className="mt-0.5 text-xs text-slate-500">
-                      Each receipt in the period and the invoices it settled.
+                      Each receipt in the period, the invoices it settled, and any amount that was not
+                      applied to an open invoice.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -395,10 +462,20 @@ export default function CustomerPaymentApplicationsModal({
                             <td className="px-4 py-3">
                               <ApplicationsCell
                                 items={row.applications.map((app) => ({
-                                  key: `${app.billId}-${app.invoice}`,
+                                  key: `${app.unapplied ? 'gap' : 'paid'}-${app.billId}-${app.invoice}`,
                                   label: app.invoice,
-                                  sub: app.invoiceDate ? formatDisplayDate(app.invoiceDate) : '',
+                                  sub: app.unapplied
+                                    ? [
+                                        app.invoice === 'Not applied to an invoice' ? '' : 'Not applied',
+                                        app.invoiceDate ? formatDisplayDate(app.invoiceDate) : '',
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' · ')
+                                    : app.invoiceDate
+                                      ? formatDisplayDate(app.invoiceDate)
+                                      : '',
                                   amount: app.amount,
+                                  unapplied: Boolean(app.unapplied),
                                 }))}
                                 emptyLabel="Not applied to an invoice"
                               />

@@ -68,21 +68,29 @@ function paymentSlice(tx, id, amount, details, invoiceNumber) {
   };
 }
 
+/** Receipt split when the payment names its invoices; otherwise the settled split. */
+function paymentApplicationsForLedger(tx) {
+  const recorded = Array.isArray(tx?.recordedApplications) ? tx.recordedApplications : [];
+  if (recorded.some((app) => roundMoney(Number(app?.appliedAmount) || 0) > 0.009)) return recorded;
+  return Array.isArray(tx?.applications) ? tx.applications : null;
+}
+
 /**
  * One ledger credit per invoice a payment was applied to.
  * Amounts still add up to the original payment, so the running balance is unchanged.
  * A returned cheque stays in that total and is reversed later by the returned-cheque charge.
  */
 function expandPaymentForLedger(tx) {
-  if (!tx || tx.kind !== 'payment' || !Array.isArray(tx.applications)) return [tx];
+  const applications = paymentApplicationsForLedger(tx);
+  if (!tx || tx.kind !== 'payment' || !applications) return [tx];
   const gross = roundMoney(Number(tx.amount) || 0);
   const net = roundMoney(Math.max(0, Number(tx.netCredit) || 0));
   if (gross <= 0) return [tx];
-  if (tx.applications.length === 0 && net <= 0) return [tx];
+  if (applications.length === 0 && net <= 0) return [tx];
 
   const slices = [];
   let unallocatedNet = roundMoney(Math.min(gross, net));
-  tx.applications.forEach((app, index) => {
+  applications.forEach((app, index) => {
     if (unallocatedNet <= 0.009) return;
     const want = roundMoney(Number(app?.appliedAmount) || 0);
     const amt = roundMoney(Math.min(unallocatedNet, want));
@@ -98,10 +106,9 @@ function expandPaymentForLedger(tx) {
     slices.push(
       paymentSlice(
         tx,
-        `${tx.id}::on-account`,
+        `${tx.id}::unallocated`,
         unallocatedNet,
-        joinDetails(['On account (not applied to an invoice)', tx.paymentMethods, tx.entryNote]),
-        'On account',
+        tx.details || joinDetails([tx.paymentMethods, tx.entryNote]) || 'Payment',
       ),
     );
   }

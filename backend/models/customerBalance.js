@@ -423,6 +423,153 @@ function listPaymentAffectedInvoices(customer, bills, payments, paymentId, promo
   return map.get(targetId) || [];
 }
 
+function paymentsThrough(customer, payments, payment) {
+  const sorted = (Array.isArray(payments) ? payments : [])
+    .filter((p) => p.customerId === customer.id)
+    .sort(comparePaymentsChronological);
+  const id = String(payment?.id ?? '').trim();
+  const idx = sorted.findIndex((p) => String(p.id ?? '').trim() === id);
+  if (idx < 0) return sorted;
+  return sorted.slice(0, idx + 1);
+}
+
+/**
+ * Name any receipt amount that was not written against an invoice.
+ * Uses the balances still open when that payment was collected (return cheques, opening, then oldest bills).
+ */
+function attributeUnallocatedToOpenInvoices(customer, bills, payments, promotions, payment, rows, gap) {
+  let left = roundMoney(gap);
+  if (left <= 0.009) return rows;
+  const subset = paymentsThrough(customer, payments, payment);
+  const { paidByBillId, pastPaid, paidByReturnChequeId, custBills, returnCheques } =
+    computeBillPaymentAllocation(customer, bills, subset, promotions, []);
+
+  const extras = [];
+  const take = (billId, invoiceNumber, date, room, isReturnCheque) => {
+    if (left <= 0.009) return;
+    const open = roundMoney(room);
+    if (!billId || open <= 0.009) return;
+    const amt = roundMoney(Math.min(left, open));
+    if (amt <= 0.009) return;
+    left = roundMoney(left - amt);
+    extras.push({
+      billId,
+      invoiceNumber: String(invoiceNumber || '').trim(),
+      date: String(date || '').slice(0, 10),
+      appliedAmount: amt,
+      isReturnCheque: Boolean(isReturnCheque),
+    });
+  };
+
+  for (const rc of returnCheques || []) {
+    const paid = paidByReturnChequeId?.get(rc.id) || 0;
+    const label = rc.chequeNumber ? `#${rc.chequeNumber}` : 'Return cheque';
+    take(rc.id, label, rc.returnDate, rc.amount - paid, true);
+  }
+
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  if (pastOwed > 0) {
+    take(
+      openingBalanceBillId(customer.id),
+      'Opening',
+      openingBalanceBillDate(customer),
+      pastOwed - (pastPaid || 0),
+      false,
+    );
+  }
+
+  for (const bill of custBills || []) {
+    const id = String(bill.id ?? '').trim();
+    const total = effectiveBillTotal(bill, promotions, []);
+    const paid = paidByBillId?.get(id) || 0;
+    take(id, String(bill.invoiceNumber ?? '').trim(), bill.date, total - paid, false);
+  }
+
+  const merged = rows.map((row) => ({ ...row }));
+  for (const extra of extras) {
+    const existing = merged.find((row) => row.billId === extra.billId);
+    if (existing) {
+      existing.appliedAmount = roundMoney(existing.appliedAmount + extra.appliedAmount);
+    } else {
+      merged.push(extra);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Invoices written on the receipt (`billCashAllocations`), with invoice numbers filled in.
+ * Used by the customer ledger so a payment shows the invoices it was applied to,
+ * including amounts that no longer fit an open balance.
+ * Returns null when the receipt has no per-invoice split.
+ */
+function recordedPaymentApplications(payment, customer, bills, payments = [], promotions = []) {
+  const explicit = Array.isArray(payment?.billCashAllocations) ? payment.billCashAllocations : [];
+  if (!explicit.length || !customer) return null;
+  let remaining = paymentSettlementCredit(payment);
+  if (remaining <= 0) return null;
+
+  const billById = new Map(
+    (Array.isArray(bills) ? bills : []).map((b) => [String(b.id ?? '').trim(), b]),
+  );
+  const returnById = new Map(
+    listCustomerReturnedCheques(customer, payments).map((rc) => [rc.id, rc]),
+  );
+  const rows = [];
+
+  for (const alloc of explicit) {
+    if (remaining <= 0.009) break;
+    const billId = String(alloc?.billId ?? '').trim();
+    const want = roundMoney(Math.min(toNonNegMoney(alloc?.cashAmount), remaining));
+    if (!billId || want <= 0.009) continue;
+    remaining = roundMoney(remaining - want);
+
+    let invoiceNumber = String(alloc?.invoiceNumber ?? '').trim();
+    let date = String(alloc?.billDate ?? alloc?.date ?? '').slice(0, 10);
+    let isReturnCheque = Boolean(alloc?.isReturnCheque) || isReturnChequeBillId(billId);
+
+    if (isOpeningBalanceBillId(billId, customer.id)) {
+      invoiceNumber = 'Opening';
+      date = openingBalanceBillDate(customer) || date;
+      isReturnCheque = false;
+    } else if (isReturnCheque) {
+      const rc = returnById.get(billId);
+      invoiceNumber = rc?.chequeNumber ? `#${rc.chequeNumber}` : invoiceNumber || 'Return cheque';
+      date = rc?.returnDate || date;
+    } else {
+      const bill = billById.get(billId);
+      if (bill) {
+        const fromBill = String(bill.invoiceNumber ?? '').trim();
+        if (fromBill) invoiceNumber = fromBill;
+        const billDate = String(bill.date ?? '').slice(0, 10);
+        if (billDate) date = billDate;
+      }
+    }
+
+    rows.push({
+      billId,
+      invoiceNumber,
+      date,
+      appliedAmount: want,
+      isReturnCheque,
+    });
+  }
+
+  if (!rows.length) return null;
+  if (remaining > 0.009) {
+    return attributeUnallocatedToOpenInvoices(
+      customer,
+      bills,
+      payments,
+      promotions,
+      payment,
+      rows,
+      remaining,
+    );
+  }
+  return rows;
+}
+
 /** Signed balance: opening past bill + credit bills − payments − promotion credits − returns (negative = overpaid). */
 function computeRawBalance(customer, bills, payments, promotions = [], returnsRows = []) {
   const nameKey = normalizeCustomerName(customer.name);
@@ -478,6 +625,7 @@ module.exports = {
   buildSettledDateByBillIdForCustomer,
   listPaymentAffectedInvoices,
   mapPaymentAffectedInvoices,
+  recordedPaymentApplications,
   effectiveBillTotal,
   openingBalanceBillId,
   isOpeningBalanceBillId,

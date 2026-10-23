@@ -41,6 +41,7 @@ const {
   openingBalanceBillDate,
   listPaymentAffectedInvoices,
   mapPaymentAffectedInvoices,
+  recordedPaymentApplications,
 } = require('./models/customerBalance');
 const {
   readOverdueDates,
@@ -4020,6 +4021,7 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
       if (p.cancelled) continue;
       const paymentId = String(p.id ?? '').trim();
       const hits = paymentId ? affectedByPaymentId.get(paymentId) || [] : [];
+      const recordedApplications = recordedPaymentApplications(p, cust, bills, payments, promotions);
       transactions.push({
         kind: 'payment',
         id: p.id,
@@ -4048,7 +4050,9 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
           appliedAmount: hit.appliedAmount,
           remainingAfter: hit.remainingAfter,
           settled: hit.settled,
+          isReturnCheque: Boolean(hit.isReturnCheque),
         })),
+        recordedApplications: recordedApplications || undefined,
       });
       for (const c of getPaymentCheques(p)) {
         if (!c.chequeReturned) continue;

@@ -105,7 +105,7 @@ export function downloadPaymentsToInvoicesPdf(customer, paymentRows, options = {
     'Payments → invoices',
     customer,
     options,
-    'Each receipt and the invoices it settled (with amounts).',
+    'Each receipt, the invoices it settled, and any amount not applied to an open invoice.',
   );
 
   const body = list.map((row) => [
@@ -114,9 +114,14 @@ export function downloadPaymentsToInvoicesPdf(customer, paymentRows, options = {
     row.methods || '—',
     formatLkr(row.amount),
     formatApplicationsLines(row.applications || [], (app) => {
-      const inv = app.invoice || 'Invoice';
-      const when = app.invoiceDate ? ` (${dateCell(app.invoiceDate)})` : '';
-      return `${inv}${when}: ${formatLkr(app.amount)}`;
+      const named =
+        app.unapplied && app.invoice && app.invoice !== 'Not applied to an invoice'
+          ? `${app.invoice} (not applied)`
+          : app.unapplied
+            ? 'Not applied to an invoice'
+            : app.invoice || 'Invoice';
+      const when = !app.unapplied && app.invoiceDate ? ` (${dateCell(app.invoiceDate)})` : '';
+      return `${named}${when}: ${formatLkr(app.amount)}`;
     }),
   ]);
 
