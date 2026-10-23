@@ -141,7 +141,7 @@ export function downloadCustomerPendingBillsPdf(customer, rows, options = {}) {
   metaY += 5;
   const settlementDays = customer?.overdueDays ?? 14;
   const note = doc.splitTextToSize(
-    `Unpaid return cheques, opening balance, and credit bills. Invoices are due within ${settlementDays} day${settlementDays === 1 ? '' : 's'}.`,
+    `Unpaid invoices, opening balance, and return cheques, with the same pending amounts as the Invoices list. Due within ${settlementDays} day${settlementDays === 1 ? '' : 's'}.`,
     tableW,
   );
   doc.text(note, MARGIN, metaY);

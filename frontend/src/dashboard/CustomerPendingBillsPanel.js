@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
 import { authFetch } from '../auth';
 import { downloadCustomerPendingBillsPdf } from './customerPendingBillsPdf';
-import { alignOutstandingRowsToAmount, buildCustomerOutstandingBills } from './pendingBills';
+import { buildCustomerInvoiceRows } from './pendingBills';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import {
   LoadingSpinner,
@@ -71,14 +71,27 @@ function billStatusBucket(row) {
   return isOverdueRow(row) ? 'overdue' : 'within';
 }
 
-function enrichPendingRow(row, todayYmd) {
+function enrichPendingRow(row, todayYmd, customerName) {
   const due = String(row?.dueDate ?? '').slice(0, 10);
+  const billDate = String(row?.billDate ?? '').slice(0, 10);
   const overdue = isOverdueRow(row);
   const daysLeftUntilDue =
     !overdue && due && /^\d{4}-\d{2}-\d{2}$/.test(due) && due >= todayYmd
       ? daysBetweenYmd(todayYmd, due)
       : 0;
-  return { ...row, isOverdue: overdue, daysLeftUntilDue };
+  const daysFromBillDate =
+    row?.daysFromBillDate != null && row.daysFromBillDate !== ''
+      ? row.daysFromBillDate
+      : /^\d{4}-\d{2}-\d{2}$/.test(billDate)
+        ? daysBetweenYmd(billDate, todayYmd)
+        : null;
+  return {
+    ...row,
+    customerName: row.customerName || customerName || '',
+    isOverdue: overdue,
+    daysLeftUntilDue,
+    daysFromBillDate,
+  };
 }
 
 function comparePendingRows(a, b) {
@@ -143,16 +156,10 @@ export default function CustomerPendingBillsPanel({
 
   const allRows = useMemo(() => {
     if (!customer?.id) return [];
-    const built = buildCustomerOutstandingBills([customer], bills, payments, customer.id, {
-      promotions,
-      returnsRows,
-    })
-      .map((row) => enrichPendingRow(row, todayYmd));
-    const amountToPay = Number(customer.remainingAmount);
-    const aligned = Number.isFinite(amountToPay)
-      ? alignOutstandingRowsToAmount(built, amountToPay, { hideSettled: true })
-      : built;
-    return aligned.sort(comparePendingRows);
+    return buildCustomerInvoiceRows(customer, bills, payments, promotions, returnsRows)
+      .filter((row) => (Number(row.outstandingAmount) || 0) > 0.009)
+      .map((row) => enrichPendingRow(row, todayYmd, customer.name))
+      .sort(comparePendingRows);
   }, [customer, bills, payments, promotions, returnsRows, todayYmd]);
 
   const counts = useMemo(() => {
@@ -187,8 +194,8 @@ export default function CustomerPendingBillsPanel({
         <div className="min-w-0">
           <h2 className="text-base font-bold text-slate-900">Pending bills</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Unpaid return cheques, opening balance, and credit bills. Promotions and returns are applied
-            so All remaining matches Amount to pay. Invoices are due within {settlementDays} days.
+            Unpaid invoices from the Invoices list, including opening balance and return cheques, with the
+            same pending amounts. Invoices are due within {settlementDays} days.
           </p>
         </div>
         <button

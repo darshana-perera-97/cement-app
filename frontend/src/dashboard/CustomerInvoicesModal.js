@@ -219,7 +219,7 @@ export default function CustomerInvoicesModal({ open, customer, onClose }) {
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             Credit bills, opening balance, and unpaid return cheques (invoice discounts and returns
-            applied per bill). Charges not tied to an invoice appear under Pending bills. Settle within{' '}
+            applied per bill). Pending bills lists the same unpaid invoices and balances. Settle within{' '}
             {settlementDays} day
             {settlementDays === 1 ? '' : 's'} of bill date.
             {taxReady ? ' Tax invoice download is available per credit bill.' : null}
