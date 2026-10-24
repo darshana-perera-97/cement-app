@@ -53,6 +53,22 @@ function invoiceLabel(app) {
   return '';
 }
 
+function paymentInvoiceFromTx(tx) {
+  const fromField = String(tx?.billNumber || '').trim();
+  if (fromField) return fromField;
+  const type = String(tx?.type || '').trim();
+  const fromType = type.match(/^Payment\((.+)\)$/);
+  if (fromType) return String(fromType[1] || '').trim();
+  const fromDetails = String(tx?.details || '').match(/\bBill\s*#\s*([A-Za-z0-9][\w./-]*)/i);
+  if (fromDetails) return String(fromDetails[1] || '').trim();
+  return '';
+}
+
+function paymentTypeLabel(tx) {
+  const billNumber = paymentInvoiceFromTx(tx);
+  return billNumber ? `Payment(${billNumber})` : 'Payment';
+}
+
 function paymentSlice(tx, id, amount, details, invoiceNumber) {
   return {
     kind: 'payment',
@@ -60,7 +76,8 @@ function paymentSlice(tx, id, amount, details, invoiceNumber) {
     paymentId: tx.id,
     date: tx.date,
     sortAt: tx.sortAt,
-    type: 'Payment',
+    type: paymentTypeLabel(tx),
+    billNumber: paymentInvoiceFromTx(tx) || undefined,
     invoiceNumber: invoiceNumber || '',
     details,
     amount,
@@ -80,13 +97,22 @@ function paymentApplicationsForLedger(tx) {
  * Amounts still add up to the original payment, so the running balance is unchanged.
  * A returned cheque stays in that total and is reversed later by the returned-cheque charge.
  */
+function withPaymentType(tx) {
+  if (!tx || tx.kind !== 'payment') return tx;
+  return {
+    ...tx,
+    type: paymentTypeLabel(tx),
+    billNumber: paymentInvoiceFromTx(tx) || tx.billNumber,
+  };
+}
+
 function expandPaymentForLedger(tx) {
   const applications = paymentApplicationsForLedger(tx);
-  if (!tx || tx.kind !== 'payment' || !applications) return [tx];
+  if (!tx || tx.kind !== 'payment' || !applications) return [withPaymentType(tx)];
   const gross = roundMoney(Number(tx.amount) || 0);
   const net = roundMoney(Math.max(0, Number(tx.netCredit) || 0));
-  if (gross <= 0) return [tx];
-  if (applications.length === 0 && net <= 0) return [tx];
+  if (gross <= 0) return [withPaymentType(tx)];
+  if (applications.length === 0 && net <= 0) return [withPaymentType(tx)];
 
   const slices = [];
   let unallocatedNet = roundMoney(Math.min(gross, net));
@@ -129,7 +155,7 @@ function expandPaymentForLedger(tx) {
   if (leftover > 0.009) {
     slices.push(paymentSlice(tx, `${tx.id}::remainder`, leftover, tx.details || 'Payment'));
   }
-  return slices.length ? slices : [tx];
+  return slices.length ? slices : [withPaymentType(tx)];
 }
 
 /** Payments that covered more than one invoice become one row per invoice. */
@@ -202,7 +228,7 @@ export function buildCustomerLedgerRows(transactions, { dateFrom = '', dateTo = 
       id: `${tx.kind}-${tx.id}`,
       kind: tx.kind,
       date: tx.date,
-      type: tx.type,
+      type: tx.kind === 'payment' ? paymentTypeLabel(tx) : tx.type,
       invoice: displayInvoice(tx),
       details: tx.details,
       debit,

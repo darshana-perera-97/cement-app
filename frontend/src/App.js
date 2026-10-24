@@ -22,6 +22,7 @@ import MessagesPage from './dashboard/MessagesPage';
 import StockPage from './dashboard/StockPage';
 import ReportsPage from './dashboard/ReportsPage';
 import RequestsPage from './dashboard/RequestsPage';
+import HistoryPage from './dashboard/HistoryPage';
 import ShopPage from './dashboard/ShopPage';
 import OverdueBillsPage from './dashboard/OverdueBillsPage';
 import PendingBillsPage from './dashboard/PendingBillsPage';
@@ -103,6 +104,7 @@ function AppRoutes() {
             </DashboardAccessRoute>
           }
         />
+        <Route path="history" element={<HistoryPage />} />
         <Route
           path="reports"
           element={

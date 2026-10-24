@@ -463,6 +463,7 @@ export default function DashboardLayout() {
       return isAdmin() || (stockUpdateEnabled && canAccessMap());
     }
     if (isDsr()) return false;
+    if (item.to === '/dashboard/history') return isManagerOrAdmin();
     if (item.adminOnly) return isAdmin();
     if (isAdmin()) return true;
     if (getStaffRole() === 'Manager') {

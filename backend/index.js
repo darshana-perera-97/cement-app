@@ -355,6 +355,7 @@ const {
   monthlyTargetFieldsForCustomer,
 } = require('./models/customerMonthlyTarget');
 const { signToken, requireAdmin, getAuthFromRequest } = require('./models/authToken');
+const { installActivityHistory, readActivityHistory } = require('./models/activityHistory');
 const { getEffectiveManagerAccess } = require('./models/managerAccess');
 const { getEffectiveCollectorAccess } = require('./models/collectorAccess');
 const {
@@ -508,6 +509,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
+installActivityHistory(app);
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'backend' });
@@ -4022,15 +4024,17 @@ app.get('/api/customers/:id/transactions', async (req, res) => {
       const paymentId = String(p.id ?? '').trim();
       const hits = paymentId ? affectedByPaymentId.get(paymentId) || [] : [];
       const recordedApplications = recordedPaymentApplications(p, cust, bills, payments, promotions);
+      const paymentInvoice = String(p.billNumber ?? '').trim();
       transactions.push({
         kind: 'payment',
         id: p.id,
         date: p.date,
         sortAt: p.createdAt || `${p.date}T12:00:00`,
-        type: 'Payment',
+        type: paymentInvoice ? `Payment(${paymentInvoice})` : 'Payment',
+        billNumber: paymentInvoice || undefined,
         details: [
           paymentSettlementSummary(p),
-          p.billNumber ? `Bill #${p.billNumber}` : null,
+          paymentInvoice ? `Bill #${paymentInvoice}` : null,
           p.note,
           invoiceActorPhrase(users, p.recordedBy),
         ]
@@ -5778,6 +5782,18 @@ app.delete('/api/promotion-rules/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to delete promotion rule' });
+  }
+});
+
+app.get('/api/history', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const rows = await readActivityHistory();
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read history' });
   }
 });
 

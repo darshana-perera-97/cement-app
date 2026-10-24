@@ -67,6 +67,11 @@ export const DASHBOARD_NAV = [
     accessKey: 'requests',
   },
   {
+    to: '/dashboard/history',
+    label: 'History',
+    icon: 'history',
+  },
+  {
     to: '/dashboard/reports',
     label: 'Reports',
     icon: 'report',
