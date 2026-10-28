@@ -973,6 +973,109 @@ export function buildCustomerInvoiceRows(
   return rows;
 }
 
+/**
+ * Bills (and opening balances) that were fully paid after the customer's credit window.
+ * Credit window is bill date + `overdueDays` (default 14), or the opening-balance due date.
+ */
+export function buildOverduePaymentRows(
+  customers = [],
+  bills = [],
+  payments = [],
+  promotions = [],
+  returnsRows = [],
+) {
+  const rows = [];
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const safeBills = Array.isArray(bills) ? bills : [];
+  const safePayments = Array.isArray(payments) ? payments : [];
+  const registeredNk = new Set();
+
+  const pushLateSettlement = (row) => {
+    const settledDate = String(row.settledDate ?? '').slice(0, 10);
+    const dueDate = String(row.dueDate ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(settledDate) || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return;
+    if (settledDate <= dueDate) return;
+    const amount = Math.round((Number(row.amount) || 0) * 100) / 100;
+    if (amount <= 0.009) return;
+    rows.push({
+      id: String(row.id ?? '').trim() || `${row.customerName}-${settledDate}-${rows.length}`,
+      settledDate,
+      customerName: String(row.customerName ?? '').trim() || '—',
+      description: String(row.description ?? '').trim() || 'Credit bill',
+      amount,
+      billDate: String(row.billDate ?? '').slice(0, 10),
+      dueDate,
+      settlementDays: row.settlementDays,
+      daysToSettle: row.daysToSettle,
+      daysPastCredit: daysBetweenYmd(dueDate, settledDate),
+      isOpeningBalance: Boolean(row.isOpeningBalance),
+    });
+  };
+
+  for (const cust of safeCustomers) {
+    const nk = normalizeCustomerName(cust.name);
+    if (nk) registeredNk.add(nk);
+    const invoices = buildCustomerInvoiceRows(cust, safeBills, safePayments, promotions, returnsRows);
+    for (const inv of invoices) {
+      if (inv.isReturnCheque || inv.status !== 'settled') continue;
+      pushLateSettlement({
+        id: inv.id,
+        settledDate: inv.settledDate,
+        dueDate: inv.dueDate,
+        amount: inv.billTotal,
+        customerName: cust.name,
+        description: inv.details,
+        billDate: inv.billDate,
+        settlementDays: inv.settlementDays,
+        daysToSettle: inv.daysToSettle,
+        isOpeningBalance: inv.isOpeningBalance,
+      });
+    }
+  }
+
+  const orphanByNk = new Map();
+  for (const bill of safeBills) {
+    const nk = normalizeCustomerName(bill.customerName);
+    if (!nk || registeredNk.has(nk)) continue;
+    if (!orphanByNk.has(nk)) orphanByNk.set(nk, []);
+    orphanByNk.get(nk).push(bill);
+  }
+
+  for (const [nk, obills] of orphanByNk) {
+    const custPayments = safePayments.filter((p) => normalizeCustomerName(p.customerName) === nk);
+    const settledByBillId = buildSettledDateByBillId(obills, custPayments, 0, '', promotions);
+    const settlementDays = DEFAULT_OVERDUE_DAYS;
+    for (const bill of obills) {
+      const id = String(bill.id ?? '').trim();
+      const billDate = String(bill.date ?? '').slice(0, 10);
+      const settledDate = id ? settledByBillId.get(id) || '' : '';
+      pushLateSettlement({
+        id,
+        settledDate,
+        dueDate: addDaysToYmd(billDate, settlementDays),
+        amount: payableBillTotal(bill, promotions, returnsRows),
+        customerName: bill.customerName,
+        description: billDetailsLine(bill),
+        billDate,
+        settlementDays,
+        daysToSettle: /^\d{4}-\d{2}-\d{2}$/.test(settledDate)
+          ? daysBetweenYmd(billDate, settledDate)
+          : null,
+        isOpeningBalance: false,
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    const bySettled = b.settledDate.localeCompare(a.settledDate);
+    if (bySettled !== 0) return bySettled;
+    const byName = a.customerName.localeCompare(b.customerName);
+    if (byName !== 0) return byName;
+    return b.amount - a.amount;
+  });
+  return rows;
+}
+
 function roundAlignMoney(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }

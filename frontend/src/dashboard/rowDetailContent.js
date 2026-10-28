@@ -117,6 +117,11 @@ export function getRowDetailMeta(variant, row) {
         title: row.isOpeningBalance ? 'Overdue opening balance' : 'Overdue bill',
         subtitle: row.customerName || null,
       };
+    case 'overduePayment':
+      return {
+        title: row.isOpeningBalance ? 'Late opening balance' : 'Late settlement',
+        subtitle: row.customerName || null,
+      };
     case 'pendingBill':
       return {
         title: row.isReturnCheque
@@ -212,6 +217,8 @@ export function RowDetailContent({ variant, row }) {
       return <LedgerDayDetailContent row={row} />;
     case 'overdueBill':
       return <OverdueBillDetailContent row={row} />;
+    case 'overduePayment':
+      return <OverduePaymentDetailContent row={row} />;
     case 'pendingBill':
       return <PendingBillDetailContent row={row} />;
     case 'bankDaily':
@@ -549,7 +556,7 @@ function CustomerDetailContent({ row }) {
         <SummaryField label="Shop owner" value={displayText(row.ownerName)} />
         <SummaryField label="Owner birthday" value={displayText(row.ownerBirthday)} />
         <SummaryField
-          label="Due date"
+          label="Opening balance due date"
           value={displayText(row.dueDate)}
           valueClassName={overdue ? 'font-semibold text-rose-800' : ''}
         />
@@ -1286,6 +1293,41 @@ function daysFromBillDateForRow(row) {
   const today = new Date();
   const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   return Math.max(0, Math.round((todayMid - bill) / (24 * 60 * 60 * 1000)));
+}
+
+function OverduePaymentDetailContent({ row }) {
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2" />
+        <SummaryField label="Settled date" value={displayText(row.settledDate)} />
+        <SummaryField label="Bill date" value={displayText(row.billDate)} />
+        <SummaryField label="Credit due date" value={displayText(row.dueDate)} />
+        <SummaryField
+          label="Days to settle"
+          value={row.daysToSettle ?? '—'}
+          valueClassName="tabular-nums"
+        />
+        <SummaryField
+          label="Overdue days"
+          value={row.daysPastCredit ?? '—'}
+          valueClassName="font-semibold text-rose-700 tabular-nums"
+        />
+        <SummaryField
+          label="Credit days"
+          value={row.settlementDays ?? '—'}
+          valueClassName="tabular-nums"
+        />
+        <SummaryField
+          label="Amount"
+          value={formatMoney(row.amount)}
+          className="col-span-2 bg-amber-50 ring-amber-100"
+          valueClassName="font-semibold tabular-nums"
+        />
+      </SummaryGrid>
+      {row.description ? <NoteBlock label="Description" value={row.description} /> : null}
+    </>
+  );
 }
 
 function OverdueBillDetailContent({ row }) {

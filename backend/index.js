@@ -149,6 +149,7 @@ function enrichCustomerBalance(customer, bills, payments, overdueDates = {}, pro
   );
   return {
     ...customer,
+    creditLimit: toNonNegMoney(customer.creditLimit),
     remainingAmount: amountToPay,
     overpaymentAmount,
     overdueDays: getOverdueDaysForCustomer(overdueDates, customer.id),
@@ -4284,6 +4285,7 @@ app.patch('/api/customers/:id', async (req, res) => {
     const hasOverdueNotifyWeekday = body.overdueNotifyWeekday !== undefined;
     const hasOverdueNotifyTime = body.overdueNotifyTime !== undefined;
     const hasMonthlyTargetBags = body.monthlyTargetBags !== undefined;
+    const hasCreditLimit = body.creditLimit !== undefined;
     const hasCollectorUserId = body.collectorUserId !== undefined;
     const hasTaxInvoicesEnabled = body.taxInvoicesEnabled !== undefined;
     const hasPurchaserTin = body.purchaserTin !== undefined;
@@ -4306,6 +4308,7 @@ app.patch('/api/customers/:id', async (req, res) => {
       !hasOverdueNotifyWeekday &&
       !hasOverdueNotifyTime &&
       !hasMonthlyTargetBags &&
+      !hasCreditLimit &&
       !hasCollectorUserId &&
       !hasTaxInvoicesEnabled &&
       !hasPurchaserTin &&
@@ -4318,7 +4321,7 @@ app.patch('/api/customers/:id', async (req, res) => {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    if (hasMonthlyTargetBags || hasCollectorUserId || hasOverdueNotifyEnabled || hasOverdueNotifyWeekday || hasOverdueNotifyTime || hasTaxInvoicesEnabled || hasPurchaserTin || hasPurchaserTaxName || hasPurchaserTaxAddress || hasPurchaserTaxPhone || hasPlaceOfSupply || hasTaxAdditionalInfo) {
+    if (hasMonthlyTargetBags || hasCreditLimit || hasCollectorUserId || hasOverdueNotifyEnabled || hasOverdueNotifyWeekday || hasOverdueNotifyTime || hasTaxInvoicesEnabled || hasPurchaserTin || hasPurchaserTaxName || hasPurchaserTaxAddress || hasPurchaserTaxPhone || hasPlaceOfSupply || hasTaxAdditionalInfo) {
       const auth = await requireManagerOrAdmin(req, res);
       if (!auth) return;
     }
@@ -4435,6 +4438,15 @@ app.patch('/api/customers/:id', async (req, res) => {
           return res.status(400).json({ error: 'overdueNotifyTime must be HH:MM (24-hour)' });
         }
         cust.overdueNotifyTime = t;
+      }
+    }
+
+    if (hasCreditLimit) {
+      const nextLimit = toNonNegMoney(body.creditLimit);
+      if (nextLimit <= 0) {
+        delete cust.creditLimit;
+      } else {
+        cust.creditLimit = nextLimit;
       }
     }
 

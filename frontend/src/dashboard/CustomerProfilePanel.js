@@ -1,3 +1,5 @@
+import { creditLimitLkr, creditLimitOverage } from './creditLimit';
+
 function formatTargetMonthLabel(monthLabel) {
   const raw = String(monthLabel ?? '').trim();
   const match = raw.match(/^(\d{4})-(\d{2})$/);
@@ -106,6 +108,14 @@ export default function CustomerProfilePanel({
   onEditTarget = null,
 }) {
   const overdueDays = customer?.overdueDays ?? defaultOverdueDays;
+  const creditLimit = creditLimitLkr(customer);
+  const creditAlert = creditLimitOverage(customer, amountToPay);
+  const metricCols =
+    overpayment > 0 && creditLimit > 0
+      ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'
+      : overpayment > 0 || creditLimit > 0
+        ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+        : 'grid-cols-2 sm:grid-cols-4';
 
   let statusBadge = null;
   if (overdue) {
@@ -202,9 +212,7 @@ export default function CustomerProfilePanel({
       </div>
 
       <div
-        className={`grid gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-2.5 ${
-          overpayment > 0 ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'
-        }`}
+        className={`grid gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-2.5 ${metricCols}`}
       >
         {overpayment > 0 ? (
           <MetricCell label="Overpayment" value={formatMoney(overpayment)} valueClassName="text-emerald-800" />
@@ -231,6 +239,18 @@ export default function CustomerProfilePanel({
           valueClassName={overdue && amountToPay > 0 ? 'text-rose-800' : ''}
           title="Current amount to collect"
         />
+        {creditLimit > 0 ? (
+          <MetricCell
+            label="Credit limit"
+            value={formatMoney(creditLimit)}
+            valueClassName={creditAlert ? 'text-rose-800' : ''}
+            title={
+              creditAlert
+                ? `${formatMoney(creditAlert.overBy)} above the credit limit`
+                : 'Maximum amount this customer may owe. 0 means no limit is set.'
+            }
+          />
+        ) : null}
       </div>
     </section>
   );

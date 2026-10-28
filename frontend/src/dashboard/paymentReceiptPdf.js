@@ -400,19 +400,19 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
     y = drawSectionTitle(doc, cheques.length === 1 ? 'CHEQUE DETAILS' : 'CHEQUES', y);
     autoTable(doc, {
       startY: y,
-      head: [['Cheque No', 'Bank', 'Date', 'Amount(Rs:)']],
+      head: [['Bank', 'Cheque No', 'Realise date', 'Amount(Rs:)']],
       body: cheques.map((c) => [
-        display(c.chequeNumber),
         display(c.chequeBank),
+        display(c.chequeNumber),
         formatDisplayDate(c.chequeDate),
         formatAmount(c.amount),
       ]),
       ...gridTableOptions(),
       columnStyles: {
-        0: { cellWidth: contentWidth * 0.24, halign: 'center' },
-        1: { cellWidth: contentWidth * 0.28, halign: 'center' },
-        2: { cellWidth: contentWidth * 0.22, halign: 'center' },
-        3: { cellWidth: contentWidth * 0.26, halign: 'right' },
+        0: { cellWidth: contentWidth * 0.30, halign: 'center' },
+        1: { cellWidth: contentWidth * 0.22, halign: 'center' },
+        2: { cellWidth: contentWidth * 0.24, halign: 'center' },
+        3: { cellWidth: contentWidth * 0.24, halign: 'right' },
       },
     });
     y = (doc.lastAutoTable?.finalY || y) + 3.6;
@@ -444,19 +444,21 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
     y = drawSectionTitle(doc, onlineTransfers.length === 1 ? 'TRANSFER DETAILS' : 'ONLINE TRANSFERS', y);
     autoTable(doc, {
       startY: y,
-      head: [['Ref No', 'Amount(Rs:)', 'Bank', 'Acc No']],
+      head: [['Ref No', 'Transfer date', 'Amount(Rs:)', 'Bank', 'Acc No']],
       body: onlineTransfers.map((t) => [
         display(t.reference),
+        formatDisplayDate(t.transferDate),
         formatAmount(t.amount),
         display(bankNameFromSnap(t.bankAccount)),
         display(accountNoFromSnap(t.bankAccount)),
       ]),
       ...gridTableOptions(),
       columnStyles: {
-        0: { cellWidth: contentWidth * 0.24, halign: 'center' },
-        1: { cellWidth: contentWidth * 0.26, halign: 'right' },
-        2: { cellWidth: contentWidth * 0.24, halign: 'center' },
-        3: { cellWidth: contentWidth * 0.26, halign: 'center' },
+        0: { cellWidth: contentWidth * 0.18, halign: 'center' },
+        1: { cellWidth: contentWidth * 0.2, halign: 'center' },
+        2: { cellWidth: contentWidth * 0.22, halign: 'right' },
+        3: { cellWidth: contentWidth * 0.2, halign: 'center' },
+        4: { cellWidth: contentWidth * 0.2, halign: 'center' },
       },
     });
     y = (doc.lastAutoTable?.finalY || y) + 3.6;

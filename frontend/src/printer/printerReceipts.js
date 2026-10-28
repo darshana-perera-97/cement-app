@@ -276,8 +276,8 @@ export function buildPaymentReceiptLines(payment, shop) {
     lines.push({ text: cheques.length === 1 ? 'Cheque details' : 'Cheques', bold: true });
     for (const c of cheques) {
       const bits = [
-        c.chequeNumber ? `#${c.chequeNumber}` : null,
         c.chequeBank || null,
+        c.chequeNumber ? `#${c.chequeNumber}` : null,
         c.chequeDate ? formatDate(c.chequeDate) : null,
       ].filter(Boolean);
       lines.push({
@@ -309,6 +309,7 @@ export function buildPaymentReceiptLines(payment, shop) {
     for (const t of onlineTransfers) {
       const bits = [
         t.reference ? `#${t.reference}` : null,
+        t.transferDate ? formatDate(t.transferDate) : null,
         bankNameFromSnap(t.bankAccount) || null,
         accountNoFromSnap(t.bankAccount) || null,
       ].filter(Boolean);

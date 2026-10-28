@@ -33,6 +33,7 @@ import { CollectorSelectField, useCollectors } from './useCollectors';
 import { usePrinter } from '../printer/PrinterProvider';
 import { useCollectorCollectionClosed } from './collectionDayClose';
 import { COLLECTOR_CASH_PRINT_TODAY_ONLY, collectorMayPrintCashCollection } from './paymentReceipt';
+import { creditLimitOverage } from './creditLimit';
 
 const apiBase = getApiBase();
 
@@ -78,6 +79,7 @@ const emptyCustomerForm = () => ({
   overdueNotifyEnabled: true,
   overdueNotifyWeekday: '',
   overdueNotifyTime: '',
+  creditLimit: '0',
 });
 
 function customerToForm(c) {
@@ -101,6 +103,7 @@ function customerToForm(c) {
     overdueNotifyWeekday:
       c.overdueNotifyWeekday === 0 || c.overdueNotifyWeekday ? String(c.overdueNotifyWeekday) : '',
     overdueNotifyTime: c.overdueNotifyTime ?? '',
+    creditLimit: c.creditLimit === 0 || c.creditLimit ? String(c.creditLimit) : '0',
   };
 }
 
@@ -263,6 +266,7 @@ export default function CustomerTransactionsPage() {
         updatedBy: username,
       };
       if (canEditDetails()) {
+        payload.creditLimit = customerForm.creditLimit === '' ? 0 : customerForm.creditLimit;
         payload.monthlyTargetBags = customerForm.monthlyTargetBags;
         payload.collectorUserId = customerForm.collectorUserId.trim();
         payload.overdueNotifyEnabled = Boolean(customerForm.overdueNotifyEnabled);
@@ -349,6 +353,7 @@ export default function CustomerTransactionsPage() {
   const overdue = Boolean(customer?.dueDate && customer.dueDate < today);
   const overpayment = Math.max(0, Number(customer?.overpaymentAmount) || 0);
   const amountToPay = Math.max(0, Number(customer?.remainingAmount) || 0);
+  const creditAlert = customer ? creditLimitOverage(customer, amountToPay) : null;
   const dueHint = customer?.dueDate ? dueDateHint(customer.dueDate, today) : null;
   const allPaid = amountToPay === 0 && overpayment === 0;
 
@@ -381,8 +386,8 @@ export default function CustomerTransactionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      <div className="flex flex-wrap items-start justify-end gap-x-6 gap-y-3">
+        <div className="mr-auto min-w-0">
           <Link
             to="/dashboard/customers"
             className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:text-indigo-800"
@@ -403,9 +408,10 @@ export default function CustomerTransactionsPage() {
           )}
           <p className="mt-1 text-sm text-slate-500">Credit sales, payments, and account summary.</p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        <div className="flex max-w-full shrink-0 flex-col items-end gap-2">
           {customer ? (
             <>
+              <div className="flex flex-wrap justify-end gap-2">
               {canEditDetails() ? (
                 <button
                   type="button"
@@ -429,6 +435,8 @@ export default function CustomerTransactionsPage() {
               >
                 Tax
               </button>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setLedgerOpen(true)}
@@ -469,6 +477,7 @@ export default function CustomerTransactionsPage() {
               >
                 Record payment
               </button>
+              </div>
             </>
           ) : null}
         </div>
@@ -487,6 +496,20 @@ export default function CustomerTransactionsPage() {
       ) : null}
 
       {loading && !customer ? <CustomerHeaderSkeleton /> : null}
+
+      {creditAlert ? (
+        <section
+          role="status"
+          aria-label="Credit limit exceeded"
+          className="rounded-2xl bg-rose-50 px-4 py-3.5 ring-1 ring-rose-200"
+        >
+          <p className="text-sm font-bold text-rose-900">Credit limit exceeded</p>
+          <p className="mt-1 text-sm leading-relaxed text-rose-800">
+            Amount to pay is {money(creditAlert.owed)}, which is {money(creditAlert.overBy)} above the{' '}
+            {money(creditAlert.limit)} credit limit.
+          </p>
+        </section>
+      ) : null}
 
       {customer ? (
         <CustomerProfilePanel
@@ -747,8 +770,8 @@ export default function CustomerTransactionsPage() {
               Edit customer details
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Updates contact info, shop owner details, payment due date, bill overdue window, and opening
-              balance. Logged in as {getUsername() || '—'}.
+              Updates contact info, shop owner details, opening balance due date, bill overdue window, credit
+              limit, and opening balance. Logged in as {getUsername() || '—'}.
             </p>
             <form className="mt-5 space-y-4" onSubmit={saveCustomerDetails}>
               {customerSaveError ? (
@@ -836,7 +859,7 @@ export default function CustomerTransactionsPage() {
                 </span>
               </label>
               <label className="block text-sm font-medium text-slate-600">
-                Payment due date
+                Opening balance due date
                 <input
                   type="date"
                   required
@@ -861,7 +884,7 @@ export default function CustomerTransactionsPage() {
                   Days after each bill date before unpaid credit sales appear as overdue (default {DEFAULT_OVERDUE_DAYS}).
                 </span>
               </label>
-              <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+              <label className="block text-sm font-medium text-slate-600">
                 Opening balance (LKR)
                 <input
                   type="number"
@@ -873,6 +896,21 @@ export default function CustomerTransactionsPage() {
                   className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
                   placeholder="0.00"
                 />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                Credit limit (LKR)
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={customerForm.creditLimit}
+                  onChange={(e) => handleCustomerFormChange('creditLimit', e.target.value)}
+                  className="mt-1 w-full rounded-xl border-0 bg-slate-100 px-3 py-2.5 text-sm tabular-nums ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/35"
+                  placeholder="0.00"
+                />
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  0 means no credit limit. A warning shows when the amount to pay is above this limit.
+                </span>
               </label>
               {canEditDetails() ? (
                 <CollectorSelectField

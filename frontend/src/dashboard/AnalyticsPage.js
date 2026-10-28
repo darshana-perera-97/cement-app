@@ -43,6 +43,7 @@ import {
   collectUpcomingOwnerBirthdays,
   formatBirthdayMonthDay,
 } from './ownerBirthday';
+import { customersOverCreditLimit } from './creditLimit';
 import {
   buildCashBookSourceEntries,
   buildCashBookLedgerRows,
@@ -279,6 +280,49 @@ function CakeIcon({ className = 'h-6 w-6' }) {
       />
       <path d="M5.5 17.2h13c.3 0 .5.2.5.5s-.2.5-.5.5h-13c-.3 0-.5-.2-.5-.5s.2-.5.5-.5z" fill="#fff7ed" opacity="0.7" />
     </svg>
+  );
+}
+
+function CreditLimitAlertsBanner({ items }) {
+  if (!items.length) return null;
+  const countLabel = items.length === 1 ? '1 customer owes' : `${items.length} customers owe`;
+
+  return (
+    <section
+      aria-label="Customers over credit limit"
+      className="overflow-hidden rounded-2xl bg-rose-50 shadow-sm ring-1 ring-rose-200"
+    >
+      <div className="border-b border-rose-100 px-4 py-3.5 sm:px-5">
+        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-rose-700">Credit limits</p>
+        <h2 className="text-lg font-bold tracking-tight text-slate-900">Credit limit exceeded</h2>
+        <p className="mt-0.5 text-sm text-rose-800">
+          {countLabel} more than the credit limit set on their account.
+        </p>
+      </div>
+      <ul className="divide-y divide-rose-100">
+        {items.map((item) => (
+          <li key={item.id}>
+            <Link
+              to={`/dashboard/customers/${encodeURIComponent(item.id)}`}
+              className="flex flex-col gap-1 px-4 py-3 transition hover:bg-rose-100/60 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
+                {item.location ? <p className="truncate text-xs text-slate-500">{item.location}</p> : null}
+              </div>
+              <p className="shrink-0 text-sm tabular-nums text-rose-900">
+                <span className="font-semibold">{formatLkrExact(item.owed)}</span>
+                <span className="text-rose-700"> owed</span>
+                <span className="text-rose-400"> · </span>
+                <span>limit {formatLkrExact(item.limit)}</span>
+                <span className="text-rose-400"> · </span>
+                <span className="font-semibold">{formatLkrExact(item.overBy)} over</span>
+              </p>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -767,6 +811,8 @@ export default function AnalyticsPage() {
     [customers],
   );
 
+  const creditLimitAlerts = useMemo(() => customersOverCreditLimit(customers), [customers]);
+
   const brandColorByKey = useMemo(() => {
     const map = {};
     brands.forEach((b, i) => {
@@ -985,6 +1031,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
+      <CreditLimitAlertsBanner items={creditLimitAlerts} />
       <UpcomingOwnerBirthdaysBanner items={upcomingOwnerBirthdays} />
       <div className="grid gap-6 lg:grid-cols-3">
         <Card
