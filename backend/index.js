@@ -309,6 +309,8 @@ const {
   suggestNextDamageInvoiceNumber,
   invoiceNumberTaken,
   sumItemReturnForBill,
+  sumItemReturnBagsByBrand,
+  sumDamageBagsByBrand,
 } = require('./models/returnsStore');
 const {
   getPaymentCheques,
@@ -1800,12 +1802,18 @@ async function validateBillAgainstPooledStock(
     excludeRequestId ? pendingRows.filter((r) => r.id !== excludeRequestId) : pendingRows,
     keys,
   );
+  // Match live stock: sellable returns come back; damage moves bags out of sellable stock.
+  const returnsRows = await readReturns();
+  const returned = sumItemReturnBagsByBrand(returnsRows, keys);
+  const damaged = sumDamageBagsByBrand(returnsRows, keys);
   for (const k of keys) {
     const available = Math.max(
       0,
       toNonNegNumber(loaded[k]) -
         toNonNegNumber(soldSoFar[k]) -
         toNonNegNumber(promoOut[k]) -
+        toNonNegNumber(damaged[k]) +
+        toNonNegNumber(returned[k]) -
         toNonNegNumber(pending[k]),
     );
     const need = toNonNegNumber(billBagFields[bagsField(k)]);
