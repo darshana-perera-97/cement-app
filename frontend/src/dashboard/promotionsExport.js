@@ -773,7 +773,7 @@ export function buildFreeBagUnloadCostReport(promotions, brands = [], options = 
       totalCost: line.unitCost == null ? null : roundMoney2(line.unitCost * line.freeBags),
     }))
     .sort((a, b) => {
-      const byDate = String(b.date).localeCompare(String(a.date));
+      const byDate = String(a.date).localeCompare(String(b.date));
       if (byDate !== 0) return byDate;
       const byShop = String(a.shop).localeCompare(String(b.shop), undefined, { sensitivity: 'base' });
       if (byShop !== 0) return byShop;
