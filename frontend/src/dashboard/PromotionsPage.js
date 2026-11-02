@@ -24,7 +24,9 @@ import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { formatBrandLabel } from './brandTheme';
 import { buildCustomerInvoiceRows } from './pendingBills';
 import {
+  buildFreeBagUnloadCostReport,
   buildShopWisePromotionReport,
+  downloadFreeBagUnloadCosts,
   downloadPromotionRules,
   downloadShopWisePromotions,
   downloadSpecialPromotions,
@@ -153,6 +155,17 @@ function money(n) {
     currency: 'LKR',
     maximumFractionDigits: 2,
   }).format(Number(n) || 0);
+}
+
+function billsForShop(billList, customerId, customerName) {
+  const list = Array.isArray(billList) ? billList : [];
+  if (!customerId) return list;
+  const nameKey = String(customerName).trim().toLowerCase().replace(/\s+/g, ' ');
+  return list.filter((bill) => {
+    if (String(bill.customerId ?? '').trim() === customerId) return true;
+    const billName = String(bill.customerName ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return Boolean(nameKey) && billName === nameKey;
+  });
 }
 
 function totalFreeBags(row, brands) {
@@ -295,9 +308,13 @@ function SpecialPromotionsPanel() {
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [downloadTypes, setDownloadTypes] = useState(() => PROMO_TYPES.map((type) => type.id));
   const [shopDownloadOpen, setShopDownloadOpen] = useState(false);
+  const [shopSearch, setShopSearch] = useState('');
   const [shopDateFrom, setShopDateFrom] = useState('');
   const [shopDateTo, setShopDateTo] = useState('');
+  const [shopCustomerId, setShopCustomerId] = useState('');
   const [shopItemKeys, setShopItemKeys] = useState([]);
+  const [listDownloadKind, setListDownloadKind] = useState('shop');
+  const [costDownloadBusy, setCostDownloadBusy] = useState(false);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -381,9 +398,9 @@ function SpecialPromotionsPanel() {
   }, []);
 
   useEffect(() => {
-    if (!modalOpen) return;
+    if (!modalOpen && !shopDownloadOpen) return;
     loadBills();
-  }, [modalOpen, loadBills]);
+  }, [modalOpen, shopDownloadOpen, loadBills]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === form.customerId),
@@ -638,17 +655,44 @@ function SpecialPromotionsPanel() {
     setDownloadTypes(allDownloadTypesSelected ? [] : availableDownloadTypes.map((type) => type.id));
   };
 
-  const openShopDownload = () => {
+  const openListDownload = (kind) => {
+    setListDownloadKind(kind);
+    setShopSearch(search);
     setShopDateFrom(dateFrom);
     setShopDateTo(dateTo);
+    setShopCustomerId(customerFilter);
     setShopItemKeys(brands.map((brand) => brand.key));
     setShopDownloadOpen(true);
   };
 
+  const openShopDownload = () => openListDownload('shop');
+  const openCostDownload = () => openListDownload('cost');
+
   const shopDatesInvalid = Boolean(shopDateFrom && shopDateTo && shopDateFrom > shopDateTo);
+  const shopCustomerName = customers.find((customer) => customer.id === shopCustomerId)?.name || '';
+  const isCostDownload = listDownloadKind === 'cost';
+  const shopSourceRows = useMemo(() => {
+    if (!shopDownloadOpen) return [];
+    return rows.filter((row) => {
+      if (shopCustomerId && row.customerId !== shopCustomerId) return false;
+      return rowMatchesQuery(shopSearch, [
+        row.date,
+        row.customerName,
+        row.customerId,
+        row.billNumber,
+        row.invoiceNumber,
+        row.reason,
+        promoTypeLabel(promoType(row)),
+      ]);
+    });
+  }, [shopDownloadOpen, rows, shopCustomerId, shopSearch]);
+  const shopBills = useMemo(
+    () => billsForShop(bills, shopCustomerId, shopCustomerName),
+    [bills, shopCustomerId, shopCustomerName],
+  );
   const shopItemCounts = useMemo(() => {
     if (!shopDownloadOpen || shopDatesInvalid) return { counts: {}, totalBags: 0 };
-    const report = buildShopWisePromotionReport(rows, brands, {
+    const report = buildShopWisePromotionReport(shopSourceRows, brands, {
       dateFrom: shopDateFrom,
       dateTo: shopDateTo,
       allItems: true,
@@ -661,29 +705,46 @@ function SpecialPromotionsPanel() {
       }
     }
     return { counts, totalBags: report.totalBags };
-  }, [shopDownloadOpen, shopDatesInvalid, rows, brands, shopDateFrom, shopDateTo]);
+  }, [shopDownloadOpen, shopDatesInvalid, shopSourceRows, brands, shopDateFrom, shopDateTo]);
 
   const availableShopItems = brands.filter((brand) => (shopItemCounts.counts[brand.key] || 0) > 0);
   const allShopItemsSelected =
     availableShopItems.length > 0 && availableShopItems.every((brand) => shopItemKeys.includes(brand.key));
   const shopReport = useMemo(() => {
     if (!shopDownloadOpen || shopDatesInvalid) return null;
-    return buildShopWisePromotionReport(rows, brands, {
+    return buildShopWisePromotionReport(shopSourceRows, brands, {
       dateFrom: shopDateFrom,
       dateTo: shopDateTo,
       itemKeys: shopItemKeys,
       allItems: allShopItemsSelected,
+      bills: shopBills,
     });
   }, [
     shopDownloadOpen,
     shopDatesInvalid,
-    rows,
+    shopSourceRows,
     brands,
+    shopBills,
     shopDateFrom,
     shopDateTo,
     shopItemKeys,
     allShopItemsSelected,
   ]);
+
+  const costFreeRows = useMemo(() => {
+    if (!shopDownloadOpen || !isCostDownload || shopDatesInvalid) return [];
+    return shopSourceRows.filter(
+      (row) => promoType(row) === 'free_bags' && inDateRange(row.date, shopDateFrom, shopDateTo),
+    );
+  }, [shopDownloadOpen, isCostDownload, shopDatesInvalid, shopSourceRows, shopDateFrom, shopDateTo]);
+  const costBrands = useMemo(
+    () => brands.filter((brand) => shopItemKeys.includes(brand.key)),
+    [brands, shopItemKeys],
+  );
+  const costReport = useMemo(() => {
+    if (!shopDownloadOpen || !isCostDownload || shopDatesInvalid) return null;
+    return buildFreeBagUnloadCostReport(costFreeRows, costBrands, { bills: shopBills });
+  }, [shopDownloadOpen, isCostDownload, shopDatesInvalid, costFreeRows, costBrands, shopBills]);
 
   const toggleShopItem = (itemKey) => {
     setShopItemKeys((current) =>
@@ -697,13 +758,47 @@ function SpecialPromotionsPanel() {
 
   const confirmShopDownload = () => {
     if (!shopReport || shopReport.totalBags <= 0 || shopDatesInvalid) return;
-    downloadShopWisePromotions(rows, brands, {
+    downloadShopWisePromotions(shopSourceRows, brands, {
       dateFrom: shopDateFrom,
       dateTo: shopDateTo,
+      customer: shopCustomerName,
+      search: shopSearch,
       itemKeys: shopItemKeys,
       allItems: allShopItemsSelected,
+      bills: shopBills,
     });
     setShopDownloadOpen(false);
+  };
+
+  const hasFreeBagRows = rows.some((row) => promoType(row) === 'free_bags');
+
+  const confirmCostDownload = async () => {
+    if (!isCostDownload || shopDatesInvalid || costDownloadBusy) return;
+    if (!costReport || costReport.totals.freeBags <= 0) return;
+    setCostDownloadBusy(true);
+    try {
+      const res = await fetch(`${apiBase}/api/bills`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || 'Could not load unloads for free bag costs.');
+        return;
+      }
+      const billList = Array.isArray(data) ? data : [];
+      setBills(billList);
+      downloadFreeBagUnloadCosts(costFreeRows, costBrands, {
+        bills: billsForShop(billList, shopCustomerId, shopCustomerName),
+        dateFrom: shopDateFrom,
+        dateTo: shopDateTo,
+        customer: shopCustomerName,
+        search: shopSearch,
+        itemLabel: shopReport?.itemLabel || '',
+      });
+      setShopDownloadOpen(false);
+    } catch {
+      alert('Could not reach the server.');
+    } finally {
+      setCostDownloadBusy(false);
+    }
   };
 
   const confirmDownload = () => {
@@ -757,7 +852,7 @@ function SpecialPromotionsPanel() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-slate-500">Record promotions: free bags, invoice discounts, or target rewards.</p>
-        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
           <button
             type="button"
             onClick={openDownload}
@@ -773,6 +868,15 @@ function SpecialPromotionsPanel() {
             className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             Shop wise list
+          </button>
+          <button
+            type="button"
+            onClick={openCostDownload}
+            disabled={loading || !hasFreeBagRows}
+            title="Choose the same filters as the shop wise list, then download the free bag cost PDF and Excel."
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            Free bag cost
           </button>
           <button
             type="button"
@@ -1235,13 +1339,39 @@ function SpecialPromotionsPanel() {
           />
           <div className={`${modalPanelClass} max-h-[90vh]`}>
             <h2 id="promo-shop-download-title" className="text-lg font-bold text-slate-900">
-              Shop wise list
+              {isCostDownload ? 'Free bag cost' : 'Shop wise list'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Free bags by shop and bag type. Choose a date range and the items to include. PDF and Excel download
-              together.
+              {isCostDownload
+                ? 'Same search, customer, dates, and items as the shop wise list. The PDF lists each unload’s free bags and their cost. PDF and Excel download together.'
+                : 'Free bags by shop and bag type, plus the total bags each shop purchased in the same dates. PDF and Excel download together.'}
             </p>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+                Search
+                <input
+                  type="search"
+                  value={shopSearch}
+                  onChange={(e) => setShopSearch(e.target.value)}
+                  placeholder="Customer, bill #, reason…"
+                  className={filterControl}
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600 sm:col-span-2">
+                Customer
+                <select
+                  value={shopCustomerId}
+                  onChange={(e) => setShopCustomerId(e.target.value)}
+                  className={filterControl}
+                >
+                  <option value="">All customers</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="block text-sm font-medium text-slate-600">
                 From date
                 <input
@@ -1326,18 +1456,34 @@ function SpecialPromotionsPanel() {
             <p className="mt-3 text-xs text-slate-500">
               {shopDatesInvalid
                 ? 'From date must be on or before the to date.'
-                : shopReport
-                  ? `${shopReport.shopCount} shop${shopReport.shopCount === 1 ? '' : 's'} · ${shopReport.totalBags} free bag${shopReport.totalBags === 1 ? '' : 's'}`
-                  : 'No free bags in this date range.'}
+                : billsLoading
+                  ? isCostDownload
+                    ? 'Loading unload costs…'
+                    : 'Loading purchased bags…'
+                  : isCostDownload
+                    ? costReport && costReport.totals.freeBags > 0
+                      ? `${costReport.rows.length} unload line${costReport.rows.length === 1 ? '' : 's'} · ${costReport.totals.freeBags} free bag${costReport.totals.freeBags === 1 ? '' : 's'} · Total cost ${money(costReport.totals.totalCost)}`
+                      : 'No free bags in this date range.'
+                    : shopReport
+                      ? `${shopReport.shopCount} shop${shopReport.shopCount === 1 ? '' : 's'} · ${shopReport.totalPurchasedBags || 0} purchased bag${(shopReport.totalPurchasedBags || 0) === 1 ? '' : 's'} · ${shopReport.totalBags} free bag${shopReport.totalBags === 1 ? '' : 's'}`
+                      : 'No free bags in this date range.'}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={confirmShopDownload}
-                disabled={shopDatesInvalid || !shopReport || shopReport.totalBags <= 0}
+                onClick={isCostDownload ? confirmCostDownload : confirmShopDownload}
+                disabled={
+                  isCostDownload
+                    ? shopDatesInvalid ||
+                      billsLoading ||
+                      costDownloadBusy ||
+                      !costReport ||
+                      costReport.totals.freeBags <= 0
+                    : shopDatesInvalid || billsLoading || !shopReport || shopReport.totalBags <= 0
+                }
                 className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Download PDF + Excel
+                {isCostDownload && costDownloadBusy ? 'Preparing…' : 'Download PDF + Excel'}
               </button>
               <button
                 type="button"

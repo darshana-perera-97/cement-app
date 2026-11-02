@@ -182,6 +182,29 @@ export function buildShopGroupedDistributionRows(rows) {
   return result;
 }
 
+/** Flat calculator rows, oldest date first, with no shop subtotals. */
+export function buildDateSortedDistributionRows(rows) {
+  return [...(rows || [])]
+    .sort((a, b) => {
+      const byDate = String(a.date ?? '').localeCompare(String(b.date ?? ''));
+      if (byDate !== 0) return byDate;
+      const byShop = String(a.shop ?? '').localeCompare(String(b.shop ?? ''));
+      if (byShop !== 0) return byShop;
+      const byStock = String(a.stockId ?? '').localeCompare(String(b.stockId ?? ''));
+      if (byStock !== 0) return byStock;
+      return String(a.brandLabel ?? '').localeCompare(String(b.brandLabel ?? ''));
+    })
+    .map((row) => {
+      const { differencePerBag, totalDifference } = computeSpecialPriceFields(row);
+      return {
+        type: 'data',
+        ...row,
+        differencePerBag,
+        totalDifference,
+      };
+    });
+}
+
 function drawSectionTitle(doc, title, subtitle, startY, contentW) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
@@ -412,10 +435,12 @@ export function downloadIncentiveCostPdf(costRows, options = {}) {
 
 /**
  * Build an A4 landscape PDF with only the Incentive calculator table (filtered rows).
- * @param {Array} distributionRows — Incentive calculator rows (ungrouped; shop totals added automatically)
+ * @param {Array} distributionRows — Incentive calculator rows (ungrouped; shop totals added automatically unless groupByShop is false)
+ * @param {{ groupByShop?: boolean }} [options] — groupByShop false sorts by date ascending and skips shop totals
  */
 export function downloadIncentiveCalculatorPdf(distributionRows, options = {}) {
-  const { generatedAt = new Date(), dateFrom = '', dateTo = '' } = options;
+  const { generatedAt = new Date(), dateFrom = '', dateTo = '', groupByShop = true } = options;
+  const byDate = groupByShop === false;
 
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -429,7 +454,7 @@ export function downloadIncentiveCalculatorPdf(distributionRows, options = {}) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(15, 23, 42);
-  doc.text('Special Price Calculator', MARGIN, 16);
+  doc.text(byDate ? 'Special Price Calculator — by date' : 'Special Price Calculator', MARGIN, 16);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -450,14 +475,16 @@ export function downloadIncentiveCalculatorPdf(distributionRows, options = {}) {
 
   y = drawSectionTitle(
     doc,
-    'Special Price Calculator',
-    '',
+    byDate ? 'Special Price Calculator — by date' : 'Special Price Calculator',
+    byDate ? 'Sorted by date, oldest first. Shops are listed in that order, without shop totals.' : '',
     y + 2,
     contentW,
   );
   drawIncentiveCalculatorTable(
     doc,
-    buildShopGroupedDistributionRows(distributionRows || []),
+    byDate
+      ? buildDateSortedDistributionRows(distributionRows || [])
+      : buildShopGroupedDistributionRows(distributionRows || []),
     y + 2,
     contentW,
   );
@@ -467,7 +494,9 @@ export function downloadIncentiveCalculatorPdf(distributionRows, options = {}) {
   const rangeSlug =
     dateFrom && dateTo ? `${dateFrom}_to_${dateTo}` : dateFrom || dateTo || 'all-dates';
   const safeDate = generatedAt.toISOString().slice(0, 10);
-  doc.save(`special-price-calculator-${rangeSlug}-${safeDate}.pdf`);
+  doc.save(
+    `${byDate ? 'special-price-calculator-by-date' : 'special-price-calculator'}-${rangeSlug}-${safeDate}.pdf`,
+  );
 }
 
 /**

@@ -1488,6 +1488,13 @@ export default function IncentivePage() {
     downloadIncentiveCalculatorPdf(filteredSpecialPriceDistributionRows, specialPriceExportOptions);
   }, [filteredSpecialPriceDistributionRows, specialPriceExportOptions]);
 
+  const handleDownloadCalculatorByDatePdf = useCallback(() => {
+    downloadIncentiveCalculatorPdf(filteredSpecialPriceDistributionRows, {
+      ...specialPriceExportOptions,
+      groupByShop: false,
+    });
+  }, [filteredSpecialPriceDistributionRows, specialPriceExportOptions]);
+
   const handleDownloadForCompany = useCallback(() => {
     downloadIncentiveCompanyReport(
       filteredSpecialPriceDistributionRows,
@@ -2010,6 +2017,14 @@ export default function IncentivePage() {
             onClick={handleDownloadCalculatorPdf}
           >
             Download PDF
+          </button>
+          <button
+            type="button"
+            className={downloadPdfButtonClass}
+            disabled={loading || filteredSpecialPriceDistributionRows.length === 0}
+            onClick={handleDownloadCalculatorByDatePdf}
+          >
+            Download by date
           </button>
           <button
             type="button"

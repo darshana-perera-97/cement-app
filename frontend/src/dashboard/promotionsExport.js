@@ -306,8 +306,8 @@ export function downloadSpecialPromotions(rows, brands = [], options = {}) {
   window.setTimeout(() => downloadSpecialPromotionsExcel(rows, brands, options), 200);
 }
 
-const SHOP_PDF_HEAD = [['Shop name', 'Bag type', 'Free bags']];
-const SHOP_EXCEL_HEAD = ['Shop name', 'Bag type', 'Free bags'];
+const SHOP_PDF_HEAD = [['Shop name', 'Bag type', 'Purchased bags', 'Free bags']];
+const SHOP_EXCEL_HEAD = ['Shop name', 'Bag type', 'Purchased bags', 'Free bags'];
 
 function dateInRange(dateStr, from, to) {
   if (!from && !to) return true;
@@ -321,6 +321,57 @@ function brandBags(record, brand) {
   if (!record || !brand) return 0;
   const field = brand.bagsField || `${brand.key}Bags`;
   return Number(record[field]) || 0;
+}
+
+function normalizeShopName(name) {
+  return String(name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Bags each shop bought on bills in the same date range and item selection.
+ * Bills are matched to the shop by name, the same way sales reports match them.
+ * A customer id is used only when the bill name does not match.
+ */
+function purchasedBagsIndex(bills, brands, options = {}) {
+  const dateFrom = String(options.dateFrom ?? '');
+  const dateTo = String(options.dateTo ?? '');
+  const brandList = Array.isArray(brands) ? brands : [];
+  const selectedKeys = new Set(
+    Array.isArray(options.itemKeys) ? options.itemKeys : brandList.map((brand) => brand.key),
+  );
+  const everyBrandSelected =
+    brandList.length === 0 || brandList.every((brand) => selectedKeys.has(brand.key));
+  const allItems = typeof options.allItems === 'boolean' ? options.allItems : everyBrandSelected;
+  const byName = new Map();
+  const byId = new Map();
+
+  for (const bill of Array.isArray(bills) ? bills : []) {
+    const billDate = String(bill?.date ?? '').slice(0, 10);
+    if (!dateInRange(billDate, dateFrom, dateTo)) continue;
+    let bags = 0;
+    for (const brand of brandList) {
+      if (!allItems && !selectedKeys.has(brand.key)) continue;
+      bags += brandBags(bill, brand);
+    }
+    if (bags <= 0) continue;
+    const name = normalizeShopName(bill.customerName);
+    const id = String(bill.customerId ?? '').trim();
+    if (name) byName.set(name, (byName.get(name) || 0) + bags);
+    if (id) byId.set(id, (byId.get(id) || 0) + bags);
+  }
+
+  return { byName, byId };
+}
+
+function purchasedBagsForShop(index, shop, shopId) {
+  const byName = index.byName.get(normalizeShopName(shop)) || 0;
+  if (byName > 0) return byName;
+  const id = String(shopId ?? '').trim();
+  if (id && index.byId.has(id)) return index.byId.get(id);
+  return 0;
 }
 
 function shopItemSlug(itemKeys, itemLabel) {
@@ -342,11 +393,12 @@ function shopItemSlug(itemKeys, itemLabel) {
  * Free bags grouped by shop and bag type.
  * @param {Array} rows
  * @param {Array} brands
- * @param {{ dateFrom?: string, dateTo?: string, itemKeys?: string[], allItems?: boolean, itemLabel?: string }} [options]
+ * @param {{ dateFrom?: string, dateTo?: string, itemKeys?: string[], allItems?: boolean, itemLabel?: string, bills?: Array }} [options]
  */
 export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
   const dateFrom = String(options.dateFrom ?? '');
   const dateTo = String(options.dateTo ?? '');
+  const purchasedIndex = purchasedBagsIndex(options.bills, brands, options);
   const brandList = Array.isArray(brands) ? brands : [];
   const selectedKeys = new Set(
     Array.isArray(options.itemKeys) ? options.itemKeys : brandList.map((brand) => brand.key),
@@ -393,8 +445,10 @@ export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
 
   const lines = [];
   let totalBags = 0;
+  let totalPurchasedBags = 0;
   for (const group of shopGroups) {
     const shopBags = group.items.reduce((sum, item) => sum + item.bags, 0);
+    const purchasedBags = purchasedBagsForShop(purchasedIndex, group.shop, group.shopId);
     group.items.forEach((item, index) => {
       lines.push({
         type: 'detail',
@@ -404,6 +458,7 @@ export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
         item: item.label,
         itemKeys: [item.key],
         bags: item.bags,
+        purchasedBags,
       });
     });
     if (group.items.length > 1) {
@@ -415,9 +470,11 @@ export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
         item: '',
         itemKeys: [],
         bags: shopBags,
+        purchasedBags,
       });
     }
     totalBags += shopBags;
+    totalPurchasedBags += purchasedBags;
   }
 
   const usedItemKeys = new Set(lines.flatMap((line) => line.itemKeys || []));
@@ -433,6 +490,7 @@ export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
     lines,
     shopCount: shopGroups.length,
     totalBags,
+    totalPurchasedBags,
     itemLabel,
     dateFrom,
     dateTo,
@@ -441,14 +499,21 @@ export function buildShopWisePromotionReport(rows, brands = [], options = {}) {
 
 function shopPdfBody(lines) {
   return lines.map((line) => {
+    const purchased = String(line.purchasedBags ?? 0);
     if (line.type === 'shopTotal') {
-      return [`${line.shop} total`, '', String(line.bags)];
+      return [`${line.shop} total`, '', purchased, String(line.bags)];
     }
     const bags = String(line.bags);
     const item = display(line.item);
-    if (line.shopRowSpan > 0) {
-      return [{ content: line.shop, rowSpan: line.shopRowSpan, styles: { valign: 'middle' } }, item, bags];
+    if (line.shopRowSpan > 1) {
+      return [
+        { content: line.shop, rowSpan: line.shopRowSpan, styles: { valign: 'middle' } },
+        item,
+        { content: purchased, rowSpan: line.shopRowSpan, styles: { valign: 'middle', halign: 'right' } },
+        bags,
+      ];
     }
+    if (line.shopRowSpan === 1) return [line.shop, item, purchased, bags];
     return [item, bags];
   });
 }
@@ -473,15 +538,19 @@ function downloadShopWisePromotionsPdf(report, options = {}) {
       dateFrom: report.dateFrom,
       dateTo: report.dateTo,
       itemLabel: report.itemLabel,
-      hideCustomer: true,
     },
-    `${report.shopCount} shop${report.shopCount === 1 ? '' : 's'} · Free bags ${report.totalBags}`,
+    `${report.shopCount} shop${report.shopCount === 1 ? '' : 's'} · Purchased bags ${report.totalPurchasedBags || 0} · Free bags ${report.totalBags}`,
   );
 
   autoTable(doc, {
     head: SHOP_PDF_HEAD,
-    body: lines.length > 0 ? shopPdfBody(lines) : [['-', '-', '-']],
-    foot: [[`Total (${report.shopCount} shop${report.shopCount === 1 ? '' : 's'})`, '', String(report.totalBags)]],
+    body: lines.length > 0 ? shopPdfBody(lines) : [['-', '-', '-', '-']],
+    foot: [[
+      `Total (${report.shopCount} shop${report.shopCount === 1 ? '' : 's'})`,
+      '',
+      String(report.totalPurchasedBags || 0),
+      String(report.totalBags),
+    ]],
     startY,
     margin: { top: 16, left: MARGIN, right: MARGIN, bottom: 16 },
     styles: { fontSize: 10, cellPadding: 2.2, overflow: 'linebreak', valign: 'middle' },
@@ -490,6 +559,7 @@ function downloadShopWisePromotionsPdf(report, options = {}) {
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
       2: { halign: 'right' },
+      3: { halign: 'right' },
     },
     showHead: 'everyPage',
     didParseCell(data) {
@@ -510,8 +580,9 @@ function downloadShopWisePromotionsExcel(report, options = {}) {
   const lines = Array.isArray(report?.lines) ? report.lines : [];
   const { generatedAt = new Date() } = options;
   const body = lines.map((line) => {
-    if (line.type === 'shopTotal') return [`${line.shop} total`, '', line.bags];
-    return [line.shopRowSpan > 0 ? line.shop : '', line.item, line.bags];
+    const purchased = line.shopRowSpan > 0 || line.type === 'shopTotal' ? line.purchasedBags ?? 0 : '';
+    if (line.type === 'shopTotal') return [`${line.shop} total`, '', purchased, line.bags];
+    return [line.shopRowSpan > 0 ? line.shop : '', line.item, purchased, line.bags];
   });
   const sheetData = [
     ['Special Promotions — shop wise'],
@@ -520,7 +591,8 @@ function downloadShopWisePromotionsExcel(report, options = {}) {
         dateFrom: report.dateFrom,
         dateTo: report.dateTo,
         itemLabel: report.itemLabel,
-        hideCustomer: true,
+        customer: options.customer,
+        search: options.search,
       }),
     ],
     [`Generated: ${generatedAt.toISOString()}`],
@@ -528,7 +600,12 @@ function downloadShopWisePromotionsExcel(report, options = {}) {
     SHOP_EXCEL_HEAD,
     ...body,
     [],
-    [`Total (${report.shopCount} shop${report.shopCount === 1 ? '' : 's'})`, '', report.totalBags],
+    [
+      `Total (${report.shopCount} shop${report.shopCount === 1 ? '' : 's'})`,
+      '',
+      report.totalPurchasedBags || 0,
+      report.totalBags,
+    ],
   ];
 
   const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
@@ -536,14 +613,19 @@ function downloadShopWisePromotionsExcel(report, options = {}) {
   const dataStart = 5;
   lines.forEach((line, index) => {
     if (line.type === 'detail' && line.shopRowSpan > 1) {
+      const endRow = dataStart + index + line.shopRowSpan - 1;
       merges.push({
         s: { r: dataStart + index, c: 0 },
-        e: { r: dataStart + index + line.shopRowSpan - 1, c: 0 },
+        e: { r: endRow, c: 0 },
+      });
+      merges.push({
+        s: { r: dataStart + index, c: 2 },
+        e: { r: endRow, c: 2 },
       });
     }
   });
   if (merges.length > 0) worksheet['!merges'] = merges;
-  worksheet['!cols'] = [{ wch: 32 }, { wch: 42 }, { wch: 14 }];
+  worksheet['!cols'] = [{ wch: 32 }, { wch: 36 }, { wch: 18 }, { wch: 14 }];
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Shop wise');
   XLSX.writeFile(workbook, `${shopWiseFileBase(report, { ...options, generatedAt })}.xlsx`);
@@ -554,6 +636,269 @@ export function downloadShopWisePromotions(rows, brands = [], options = {}) {
   const report = buildShopWisePromotionReport(rows, brands, options);
   downloadShopWisePromotionsPdf(report, options);
   window.setTimeout(() => downloadShopWisePromotionsExcel(report, options), 200);
+}
+
+const FREE_BAG_COST_PDF_HEAD = [[
+  'Date',
+  'Shop name',
+  'Bag type',
+  'Bag amount',
+  'Number of free bags',
+  'Cost for free single bag',
+  'Total cost for all free bags',
+]];
+const FREE_BAG_COST_EXCEL_HEAD = [
+  'Date',
+  'Shop name',
+  'Bag type',
+  'Bag amount',
+  'Number of free bags',
+  'Cost for free single bag',
+  'Total cost for all free bags',
+];
+
+function roundMoney2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/** Free-bag issues store a short bill number; match it to an invoice suffix (26OCT_012 ↔ 12 / 012). */
+function invoiceMatchesBillNumber(invoiceNumber, billNumber) {
+  const inv = String(invoiceNumber ?? '').trim();
+  const num = String(billNumber ?? '').trim();
+  if (!inv || !num) return false;
+  if (inv.toLowerCase() === num.toLowerCase()) return true;
+  const suffix = inv.match(/(\d+)$/);
+  if (!suffix || !/^\d+$/.test(num)) return false;
+  return parseInt(suffix[1], 10) === parseInt(num, 10);
+}
+
+function unitPriceOnBill(bill, brand) {
+  const field = brand?.unitPriceField || `${brand?.key}UnitPrice`;
+  const raw = bill?.[field];
+  if (raw == null || raw === '' || !Number.isFinite(Number(raw))) return null;
+  return roundMoney2(raw);
+}
+
+function findUnloadForFreeBags(lines, promo, brand) {
+  const shopKey = normalizeShopName(promo?.customerName);
+  const customerId = String(promo?.customerId ?? '').trim();
+  const date = String(promo?.date ?? '').slice(0, 10);
+  const billNumber = String(promo?.billNumber ?? promo?.invoiceNumber ?? '').trim();
+  const brandLines = lines.filter((line) => line.brandKey === brand.key);
+  const named = shopKey ? brandLines.filter((line) => line.shopKey === shopKey) : [];
+  const pool =
+    named.length > 0 ? named : brandLines.filter((line) => customerId && line.customerId === customerId);
+
+  if (billNumber) {
+    const byInvoice = pool.find((line) => invoiceMatchesBillNumber(line.invoiceNumber, billNumber));
+    if (byInvoice) return byInvoice;
+  }
+  return pool.find((line) => line.date === date) || null;
+}
+
+/**
+ * One row per shop unload that received free bags.
+ * The single-bag cost is the unit price on that unload. Total cost is that price times the free bags.
+ * A free bag issue with no matching unload is still listed, with the cost left blank.
+ * @param {Array} promotions
+ * @param {Array} brands
+ * @param {{ bills?: Array }} [options]
+ */
+export function buildFreeBagUnloadCostReport(promotions, brands = [], options = {}) {
+  const brandList = Array.isArray(brands) ? brands : [];
+  const lines = [];
+
+  for (const bill of Array.isArray(options.bills) ? options.bills : []) {
+    const date = String(bill?.date ?? '').slice(0, 10);
+    const shop = String(bill?.customerName ?? '').trim() || '—';
+    const shopKey = normalizeShopName(shop);
+    const customerId = String(bill?.customerId ?? '').trim();
+    const invoiceNumber = String(bill?.invoiceNumber ?? '').trim();
+    for (const brand of brandList) {
+      const bagAmount = brandBags(bill, brand);
+      if (bagAmount <= 0) continue;
+      lines.push({
+        date,
+        shop,
+        shopKey,
+        customerId,
+        invoiceNumber,
+        bagType: formatBrandLabel(brand) || brand.label || brand.key,
+        brandKey: brand.key,
+        bagAmount,
+        freeBags: 0,
+        unitCost: unitPriceOnBill(bill, brand),
+        matched: true,
+      });
+    }
+  }
+
+  const unmatched = [];
+  for (const promo of Array.isArray(promotions) ? promotions : []) {
+    if (promoType(promo) !== 'free_bags') continue;
+    const shop = String(promo?.customerName ?? '').trim() || '—';
+    const date = String(promo?.date ?? '').slice(0, 10);
+    for (const brand of brandList) {
+      const freeBags = brandBags(promo, brand);
+      if (freeBags <= 0) continue;
+      const match = findUnloadForFreeBags(lines, promo, brand);
+      if (match) {
+        match.freeBags += freeBags;
+        continue;
+      }
+      unmatched.push({
+        date,
+        shop,
+        shopKey: normalizeShopName(shop),
+        customerId: String(promo?.customerId ?? '').trim(),
+        invoiceNumber: String(promo?.billNumber ?? promo?.invoiceNumber ?? '').trim(),
+        bagType: formatBrandLabel(brand) || brand.label || brand.key,
+        brandKey: brand.key,
+        bagAmount: null,
+        freeBags,
+        unitCost: null,
+        matched: false,
+      });
+    }
+  }
+
+  const rows = [...lines.filter((line) => line.freeBags > 0), ...unmatched]
+    .map((line) => ({
+      date: line.date,
+      shop: line.shop,
+      bagType: line.bagType,
+      bagAmount: line.bagAmount,
+      freeBags: line.freeBags,
+      unitCost: line.unitCost,
+      totalCost: line.unitCost == null ? null : roundMoney2(line.unitCost * line.freeBags),
+    }))
+    .sort((a, b) => {
+      const byDate = String(b.date).localeCompare(String(a.date));
+      if (byDate !== 0) return byDate;
+      const byShop = String(a.shop).localeCompare(String(b.shop), undefined, { sensitivity: 'base' });
+      if (byShop !== 0) return byShop;
+      return String(a.bagType).localeCompare(String(b.bagType), undefined, { sensitivity: 'base' });
+    });
+
+  const totals = rows.reduce(
+    (acc, row) => ({
+      bagAmount: acc.bagAmount + (Number(row.bagAmount) || 0),
+      freeBags: acc.freeBags + (Number(row.freeBags) || 0),
+      totalCost: roundMoney2(acc.totalCost + (Number(row.totalCost) || 0)),
+    }),
+    { bagAmount: 0, freeBags: 0, totalCost: 0 },
+  );
+
+  return { rows, totals };
+}
+
+function freeBagCostFileBase(options = {}) {
+  const { rangeSlug, safeDate } = fileSlug(options);
+  return `special-promotions-free-bag-cost-${rangeSlug}-${safeDate}`;
+}
+
+function freeBagCostSummary(report) {
+  const count = report.rows.length;
+  return `${count} unload line${count === 1 ? '' : 's'} · ${report.totals.freeBags} free bag${report.totals.freeBags === 1 ? '' : 's'} · Total cost ${formatLkr(report.totals.totalCost)} LKR`;
+}
+
+function downloadFreeBagUnloadCostsPdf(report, options = {}) {
+  const rows = Array.isArray(report?.rows) ? report.rows : [];
+  const totals = report?.totals || { bagAmount: 0, freeBags: 0, totalCost: 0 };
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const startY = drawTitle(
+    doc,
+    'Special Promotions — free bag cost',
+    { ...options, hideCustomer: false },
+    freeBagCostSummary(report),
+  );
+
+  autoTable(doc, {
+    head: FREE_BAG_COST_PDF_HEAD,
+    body:
+      rows.length > 0
+        ? rows.map((row) => [
+            display(row.date),
+            display(row.shop),
+            display(row.bagType),
+            row.bagAmount == null ? '-' : String(row.bagAmount),
+            String(row.freeBags),
+            row.unitCost == null ? '-' : formatLkr(row.unitCost),
+            row.totalCost == null ? '-' : formatLkr(row.totalCost),
+          ])
+        : [['-', '-', '-', '-', '-', '-', '-']],
+    foot: [[
+      `Total (${rows.length})`,
+      '',
+      '',
+      String(totals.bagAmount),
+      String(totals.freeBags),
+      '',
+      formatLkr(totals.totalCost),
+    ]],
+    startY,
+    margin: { top: 16, left: MARGIN, right: MARGIN, bottom: 16 },
+    styles: { fontSize: 8, cellPadding: 1.8, overflow: 'linebreak', valign: 'middle' },
+    headStyles: { fillColor: [71, 85, 105], textColor: 255, fontStyle: 'bold' },
+    footStyles: { fillColor: [226, 232, 240], textColor: [15, 23, 42], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      3: { halign: 'right' },
+      4: { halign: 'right' },
+      5: { halign: 'right' },
+      6: { halign: 'right' },
+    },
+    showHead: 'everyPage',
+  });
+
+  addPageFooters(doc, 'A4 landscape');
+  doc.save(`${freeBagCostFileBase(options)}.pdf`);
+}
+
+function downloadFreeBagUnloadCostsExcel(report, options = {}) {
+  const rows = Array.isArray(report?.rows) ? report.rows : [];
+  const totals = report?.totals || { bagAmount: 0, freeBags: 0, totalCost: 0 };
+  const { generatedAt = new Date() } = options;
+  const sheetData = [
+    ['Special Promotions — free bag cost'],
+    [filterLine(options)],
+    [`Generated: ${generatedAt.toISOString()}`],
+    ['Cost for one free bag is the unit price on the matching shop unload. Total cost is that price times the free bags.'],
+    [],
+    FREE_BAG_COST_EXCEL_HEAD,
+    ...rows.map((row) => [
+      String(row.date ?? '').slice(0, 10),
+      String(row.shop ?? '').trim(),
+      String(row.bagType ?? '').trim(),
+      row.bagAmount == null ? '' : row.bagAmount,
+      row.freeBags,
+      row.unitCost == null ? '' : row.unitCost,
+      row.totalCost == null ? '' : row.totalCost,
+    ]),
+    [],
+    ['Total', '', '', totals.bagAmount, totals.freeBags, '', totals.totalCost],
+  ];
+
+  const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+  worksheet['!cols'] = [
+    { wch: 12 },
+    { wch: 28 },
+    { wch: 28 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 26 },
+    { wch: 30 },
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Free bag cost');
+  XLSX.writeFile(workbook, `${freeBagCostFileBase({ ...options, generatedAt })}.xlsx`);
+}
+
+/** Download free-bag cost per unload as PDF and Excel. */
+export function downloadFreeBagUnloadCosts(promotions, brands = [], options = {}) {
+  const report = buildFreeBagUnloadCostReport(promotions, brands, options);
+  downloadFreeBagUnloadCostsPdf(report, options);
+  window.setTimeout(() => downloadFreeBagUnloadCostsExcel(report, options), 200);
 }
 
 function ruleBody(items) {
