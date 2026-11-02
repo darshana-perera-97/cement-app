@@ -7,6 +7,7 @@ import { LoadingSpinner, modalPanelClass, modalPanelClassMd, scrollTableWrap, st
 import RowDetailModal from './RowDetailModal';
 import CollectorCommissionSection from './CollectorCommissionSection';
 import CompanyProfitSection from './CompanyProfitSection';
+import MonthEndBalancesSection from './MonthEndBalancesSection';
 import { useBagProducts } from './BagProductsContext';
 
 const apiBase = getApiBase();
@@ -944,6 +945,8 @@ export default function ShopPage() {
           </button>
         </div>
       </section>
+
+      <MonthEndBalancesSection shopName={shop.shopName} />
 
       <section className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

@@ -16,6 +16,7 @@ export default function UpdateStoresModal({
   allowedShopIds = null,
   userLocation = null,
   locationError = '',
+  initialShopId = '',
   onClose,
   onSaved,
 }) {
@@ -56,12 +57,12 @@ export default function UpdateStoresModal({
 
   useEffect(() => {
     if (!open) return;
-    setShopId('');
+    setShopId(initialShopId || '');
     setSearch('');
     setDetail(null);
     setStockDraft({});
     setError(null);
-  }, [open]);
+  }, [open, initialShopId]);
 
   useEffect(() => {
     if (!open || !shopId) {
@@ -279,7 +280,7 @@ function formatUpdatedAt(iso) {
   });
 }
 
-export function ShopStockViewModal({ open, shop, stockRow = null, onClose }) {
+export function ShopStockViewModal({ open, shop, stockRow = null, onClose, onWayToShop }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -360,7 +361,16 @@ export function ShopStockViewModal({ open, shop, stockRow = null, onClose }) {
             ))}
           </ul>
         )}
-        <div className="mt-5 flex justify-end">
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {onWayToShop ? (
+            <button
+              type="button"
+              onClick={onWayToShop}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Way to shop
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -369,6 +379,11 @@ export function ShopStockViewModal({ open, shop, stockRow = null, onClose }) {
             Close
           </button>
         </div>
+        {onWayToShop ? (
+          <p className="mt-3 text-xs text-slate-500">
+            Way to shop opens Google Maps with the driving route from your current location.
+          </p>
+        ) : null}
       </div>
     </div>,
     document.body,

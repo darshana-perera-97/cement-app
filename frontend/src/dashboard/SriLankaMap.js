@@ -163,13 +163,14 @@ function fieldPersonTooltip(person) {
 function userLocationIcon(L) {
   return L.divIcon({
     className: 'map-user-icon',
-    iconSize: [0, 0],
-    iconAnchor: [0, 0],
-    html: `<div style="transform:translate(-50%,-50%);pointer-events:none;">
-      <span style="position:relative;display:block;width:18px;height:18px;">
-        <span style="position:absolute;inset:0;border-radius:999px;background:#2563eb;opacity:.28;animation:map-user-pulse 1.6s ease-out infinite;"></span>
-        <span style="position:absolute;inset:3px;border-radius:999px;background:#2563eb;border:2px solid #fff;box-shadow:0 2px 8px rgba(37,99,235,.45);"></span>
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+    html: `<div class="map-user-pin">
+      <span class="map-user-dot">
+        <span class="map-user-pulse"></span>
+        <span class="map-user-core"></span>
       </span>
+      <span class="map-user-label">You are here</span>
     </div>`,
   });
 }
@@ -379,8 +380,9 @@ export default function SriLankaMap({
         window.L.marker([userLat, userLng], {
           icon: userLocationIcon(window.L),
           keyboard: false,
-          zIndexOffset: 800,
-        }).bindTooltip('You are here', { direction: 'right', offset: [10, 0] }),
+          interactive: false,
+          zIndexOffset: 1000,
+        }),
       );
     }
     (Array.isArray(fieldPeople) ? fieldPeople : []).forEach((person) => {
@@ -438,7 +440,53 @@ export default function SriLankaMap({
       <style>{`
         @keyframes map-user-pulse {
           0% { transform: scale(1); opacity: .35; }
-          100% { transform: scale(2.2); opacity: 0; }
+          100% { transform: scale(2.4); opacity: 0; }
+        }
+        .map-user-icon {
+          background: transparent !important;
+          border: none !important;
+          overflow: visible !important;
+        }
+        .map-user-pin {
+          position: relative;
+          width: 18px;
+          height: 18px;
+          pointer-events: none;
+        }
+        .map-user-dot {
+          position: relative;
+          display: block;
+          width: 18px;
+          height: 18px;
+        }
+        .map-user-pulse {
+          position: absolute;
+          inset: 0;
+          border-radius: 999px;
+          background: #2563eb;
+          opacity: 0.28;
+          animation: map-user-pulse 1.6s ease-out infinite;
+        }
+        .map-user-core {
+          position: absolute;
+          inset: 3px;
+          border-radius: 999px;
+          background: #2563eb;
+          border: 2px solid #fff;
+          box-shadow: 0 2px 8px rgba(37, 99, 235, 0.45);
+        }
+        .map-user-label {
+          position: absolute;
+          left: 24px;
+          top: 50%;
+          transform: translateY(-50%);
+          white-space: nowrap;
+          border-radius: 999px;
+          background: #1d4ed8;
+          color: #fff;
+          padding: 3px 8px;
+          font: 700 11px/1.2 system-ui, sans-serif;
+          box-shadow: 0 4px 12px rgba(29, 78, 216, 0.35);
         }
         .map-shop-icon {
           background: transparent !important;

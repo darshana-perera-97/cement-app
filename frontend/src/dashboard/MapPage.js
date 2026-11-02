@@ -7,6 +7,7 @@ import { useStockUpdateEnabled } from '../stockUpdateSettings';
 import SriLankaMap, { isInSriLanka } from './SriLankaMap';
 import { parseGoogleMapsLocation } from './parseGoogleMapsLocation';
 import UpdateStoresModal, { ShopStockViewModal } from './UpdateStoresModal';
+import { distanceMeters, formatDistance } from './geoDistance';
 import { LoadingSpinner, ModalBackdrop, modalPanelClassMd } from './tableToolbar';
 
 const apiBase = getApiBase();
@@ -74,6 +75,101 @@ async function saveMapShops(nextShops) {
     throw new Error(data.error || 'Could not save shops');
   }
   return Array.isArray(data) ? data : nextShops;
+}
+
+function googleMapsDirectionsUrl(origin, destination) {
+  const lat = Number(destination?.lat);
+  const lng = Number(destination?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+  const params = new URLSearchParams({
+    api: '1',
+    destination: `${lat},${lng}`,
+    travelmode: 'driving',
+  });
+  const originLat = Number(origin?.lat);
+  const originLng = Number(origin?.lng);
+  if (Number.isFinite(originLat) && Number.isFinite(originLng)) {
+    params.set('origin', `${originLat},${originLng}`);
+  }
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function openGoogleMapsDirections(origin, destination) {
+  const url = googleMapsDirectionsUrl(origin, destination);
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function shopCanBeUpdated(shop, allowedShopIds) {
+  if (!shop?.id) return false;
+  if (!Array.isArray(allowedShopIds)) return true;
+  return allowedShopIds.includes(shop.id);
+}
+
+function ShopActionsModal({ open, shop, userLocation, locationError, canUpdateStock, onClose, onUpdateStock }) {
+  if (!open || !shop) return null;
+  const distanceM =
+    userLocation && shop
+      ? distanceMeters(userLocation.lat, userLocation.lng, shop.lat, shop.lng)
+      : null;
+  const distanceLabel = distanceM != null && Number.isFinite(distanceM) ? formatDistance(distanceM) : '';
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[2000] flex items-end justify-center p-0 sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shop-actions-title"
+    >
+      <ModalBackdrop onClose={onClose} />
+      <div className={`${modalPanelClassMd} z-[2001]`}>
+        <h2 id="shop-actions-title" className="text-lg font-bold text-slate-900">
+          {shop.name}
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">{shop.location || 'Sri Lanka'}</p>
+        <p className="mt-2 text-sm text-slate-600">
+          {distanceLabel
+            ? `${distanceLabel} from you`
+            : locationError || 'Allow location so the route starts from where you are.'}
+        </p>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          {canUpdateStock ? (
+            <button
+              type="button"
+              onClick={onUpdateStock}
+              className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+            >
+              Update stock
+            </button>
+          ) : (
+            <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600 ring-1 ring-slate-100 sm:col-span-2">
+              This shop is not assigned to you, so stock cannot be updated here.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => openGoogleMapsDirections(userLocation, shop)}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            Way to shop
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Way to shop opens Google Maps with the driving route from your current location.
+        </p>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 const LOCATION_MODES = [
@@ -329,7 +425,7 @@ function ShopFormModal({ open, customers, existingShops, initialPoint, onClose, 
   );
 }
 
-function MapEditor({ shops, customers, onClose, onSaved }) {
+function MapEditor({ shops, customers, userLocation, onClose, onSaved }) {
   const [drafts, setDrafts] = useState(shops);
   const [selectedId, setSelectedId] = useState('');
   const [formOpen, setFormOpen] = useState(false);
@@ -497,6 +593,7 @@ function MapEditor({ shops, customers, onClose, onSaved }) {
           selectedId={selectedId}
           placing={!formOpen}
           layoutKey={`${formOpen ? 'form' : 'map'}-${placing ? '1' : '0'}-${saveError ? '1' : '0'}`}
+          userLocation={userLocation}
           onSelect={(shop) => {
             setSelectedId(shop.id);
           }}
@@ -570,6 +667,8 @@ export default function MapPage() {
   const canViewMap = isAdmin() || (stockUpdateEnabled && canAccessMap());
   const canUpdateStores = !canEditMap && stockUpdateEnabled && (isCollector() || isDsr());
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateShopId, setUpdateShopId] = useState('');
+  const [shopActionsOpen, setShopActionsOpen] = useState(false);
   const [userLocation, setUserLocation] = useState(null);
   const [locationError, setLocationError] = useState('');
   const [followUser, setFollowUser] = useState(false);
@@ -654,8 +753,8 @@ export default function MapPage() {
   }, [canEditMap]);
 
   useEffect(() => {
-    if (!canUpdateStores || typeof navigator === 'undefined' || !navigator.geolocation) {
-      setLocationError(canUpdateStores ? 'Location is not available in this browser.' : '');
+    if (!canViewMap || typeof navigator === 'undefined' || !navigator.geolocation) {
+      setLocationError(canViewMap ? 'Location is not available in this browser.' : '');
       return undefined;
     }
     setLocationError('');
@@ -675,12 +774,17 @@ export default function MapPage() {
         setLocationError('');
       },
       (err) => {
-        setLocationError(err?.message || 'Allow location access to update shop stock.');
+        setLocationError(
+          err?.message ||
+            (canUpdateStores
+              ? 'Allow location access to update shop stock.'
+              : 'Allow location access to show where you are.'),
+        );
       },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
     );
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [canUpdateStores]);
+  }, [canViewMap, canUpdateStores]);
 
   useEffect(() => {
     if (!userLocation || !followUser) return undefined;
@@ -750,6 +854,7 @@ export default function MapPage() {
         <MapEditor
           shops={shops}
           customers={customers}
+          userLocation={userLocation}
           onClose={() => setEditing(false)}
         onSaved={(next) => {
           setShops(next);
@@ -763,8 +868,8 @@ export default function MapPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-sm text-slate-500">
           {canEditMap
-            ? 'Sri Lanka map of your shops. Collector avatars and lorries show here from their live location. Hover a shop pin for the last stock update.'
-            : 'Sri Lanka map of your shops. Your location is shown on the map. Use Update Stores to record shop stock.'}
+            ? 'Sri Lanka map of your shops. Your spot is marked You are here. Collector avatars and lorries show from their live location. Hover a shop pin for the last stock update.'
+            : 'Sri Lanka map of your shops. Your spot is marked You are here. Tap a shop to update stock or open the way there in Google Maps.'}
         </p>
         {canEditMap ? (
           <button
@@ -791,10 +896,17 @@ export default function MapPage() {
             onSelect={(shop) => {
               setSelectedId(shop.id);
               setSelectedFieldId('');
-              if (canEditMap) setAdminStockOpen(true);
+              setFollowUser(false);
+              if (canEditMap) {
+                setShopActionsOpen(false);
+                setAdminStockOpen(true);
+              } else {
+                setAdminStockOpen(false);
+                setShopActionsOpen(true);
+              }
             }}
-            userLocation={canUpdateStores ? userLocation : null}
-            followUser={canUpdateStores && followUser}
+            userLocation={userLocation}
+            followUser={followUser}
             stockByShopId={stockByShopId}
             showStockHover={canEditMap}
             staleDays={staleDays}
@@ -807,6 +919,7 @@ export default function MapPage() {
                     setSelectedFieldId(person.id);
                     setSelectedId('');
                     setAdminStockOpen(false);
+                    setShopActionsOpen(false);
                   }
                 : undefined
             }
@@ -836,10 +949,30 @@ export default function MapPage() {
               <LoadingSpinner size="sm" label="Loading shops…" />
             </div>
           ) : null}
+          {userLocation ? (
+            <button
+              type="button"
+              onClick={() => setFollowUser(true)}
+              className="absolute bottom-4 left-4 z-[500] inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-blue-700 shadow-lg ring-1 ring-slate-200 hover:bg-blue-50"
+            >
+              <span className="relative inline-flex h-3 w-3">
+                <span className="absolute inset-0 rounded-full bg-blue-500 opacity-40" />
+                <span className="absolute inset-0.5 rounded-full border border-white bg-blue-600" />
+              </span>
+              You are here
+            </button>
+          ) : locationError ? (
+            <p className="absolute bottom-4 left-4 z-[500] max-w-xs rounded-xl bg-white/95 px-3 py-2 text-xs text-slate-600 shadow-md ring-1 ring-slate-200">
+              {locationError}
+            </p>
+          ) : null}
           {canUpdateStores ? (
             <button
               type="button"
-              onClick={() => setUpdateOpen(true)}
+              onClick={() => {
+                setUpdateShopId('');
+                setUpdateOpen(true);
+              }}
               className="absolute bottom-4 right-4 z-[500] rounded-full bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500"
             >
               Update Stores
@@ -853,8 +986,27 @@ export default function MapPage() {
           shop={selected}
           stockRow={selected ? stockByShopId[selected.id] : null}
           onClose={() => setAdminStockOpen(false)}
+          onWayToShop={
+            selected
+              ? () => openGoogleMapsDirections(userLocation, selected)
+              : undefined
+          }
         />
       ) : null}
+      <ShopActionsModal
+        open={shopActionsOpen && !canEditMap}
+        shop={selected}
+        userLocation={userLocation}
+        locationError={locationError}
+        canUpdateStock={canUpdateStores && shopCanBeUpdated(selected, allowedShopIds)}
+        onClose={() => setShopActionsOpen(false)}
+        onUpdateStock={() => {
+          if (!selected?.id) return;
+          setUpdateShopId(selected.id);
+          setShopActionsOpen(false);
+          setUpdateOpen(true);
+        }}
+      />
       {canUpdateStores ? (
         <UpdateStoresModal
           open={updateOpen}
@@ -862,7 +1014,11 @@ export default function MapPage() {
           allowedShopIds={allowedShopIds}
           userLocation={userLocation}
           locationError={locationError}
-          onClose={() => setUpdateOpen(false)}
+          initialShopId={updateShopId}
+          onClose={() => {
+            setUpdateOpen(false);
+            setUpdateShopId('');
+          }}
           onSaved={(saved) => {
             if (!saved?.shopId) {
               loadShopStocks();
