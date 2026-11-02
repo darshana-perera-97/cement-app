@@ -63,6 +63,7 @@ const EMPTY_INCENTIVE_FILTERS = {
   shop: '',
   brand: '',
   stockId: '',
+  priceChange: '',
 };
 
 const EMPTY_DOOR_STOCK_FILTERS = {
@@ -242,6 +243,7 @@ function countActiveIncentiveFilters(filters, { includeShop = true } = {}) {
   if (includeShop && filters.shop) count += 1;
   if (filters.brand) count += 1;
   if (String(filters.stockId ?? '').trim()) count += 1;
+  if (filters.priceChange === 'deduct' || filters.priceChange === 'increase') count += 1;
   return count;
 }
 
@@ -272,8 +274,22 @@ function filterLoadIncentiveRows(rows, filters) {
   });
 }
 
+function matchesPriceChange(row, priceChange) {
+  if (priceChange !== 'deduct' && priceChange !== 'increase') return true;
+  const { differencePerBag } = computeSpecialPriceFields(row);
+  if (differencePerBag == null || !Number.isFinite(Number(differencePerBag))) return false;
+  if (priceChange === 'deduct') return differencePerBag < 0;
+  return differencePerBag > 0;
+}
+
+function priceChangeFilterLabel(priceChange) {
+  if (priceChange === 'deduct') return 'Price deduct';
+  if (priceChange === 'increase') return 'Price increase';
+  return '';
+}
+
 function filterDistributionRows(rows, filters, customerLocationMap) {
-  const { search, dateFrom, dateTo, shop, brand, stockId } = filters;
+  const { search, dateFrom, dateTo, shop, brand, stockId, priceChange } = filters;
   const stockIdQuery = String(stockId ?? '').trim().toLowerCase();
 
   return rows.filter((r) => {
@@ -281,6 +297,7 @@ function filterDistributionRows(rows, filters, customerLocationMap) {
     if (shop && r.shop !== shop) return false;
     if (brand && r.brandKey !== brand) return false;
     if (stockIdQuery && !String(r.stockId ?? '').toLowerCase().includes(stockIdQuery)) return false;
+    if (!matchesPriceChange(r, priceChange)) return false;
 
     const location = resolveLocation(r.shop, customerLocationMap);
     return rowMatchesQuery(search, [
@@ -316,6 +333,7 @@ function DistributionFilterModal({
   shopOptions,
   brands,
   showShopFilter = true,
+  showPriceChangeFilter = false,
   onApply,
   onClear,
   onClose,
@@ -422,6 +440,20 @@ function DistributionFilterModal({
               />
             </label>
           </div>
+          {showPriceChangeFilter ? (
+            <label className="block text-sm font-medium text-slate-600">
+              Price change
+              <select
+                value={draft.priceChange || ''}
+                onChange={(e) => setDraft((prev) => ({ ...prev, priceChange: e.target.value }))}
+                className={filterControl}
+              >
+                <option value="">All</option>
+                <option value="deduct">Price deduct (sold below cut-off)</option>
+                <option value="increase">Price increase (sold above cut-off)</option>
+              </select>
+            </label>
+          ) : null}
           <div className="flex flex-wrap gap-2 pt-1">
             <button
               type="submit"
@@ -1391,6 +1423,7 @@ export default function IncentivePage() {
           brandByKey[specialPriceFilters.brand]?.label ||
           specialPriceFilters.brand
         : '',
+      priceChangeLabel: priceChangeFilterLabel(specialPriceFilters.priceChange),
     }),
     [specialPriceFilters, brandByKey],
   );
@@ -2640,11 +2673,12 @@ export default function IncentivePage() {
         brands={brands}
         open={specialPriceFilterOpen}
         title="Filter Special Price Calculator"
-        description="Narrow rows by date, shop, bag type, stock ID, or free-text search."
+        description="Narrow rows by date, shop, bag type, stock ID, price deduct or increase, or free-text search."
         titleId="special-price-filter-modal-title"
         draft={specialPriceFilterDraft}
         setDraft={setSpecialPriceFilterDraft}
         shopOptions={incentiveShopOptions}
+        showPriceChangeFilter
         onApply={applySpecialPriceFilters}
         onClear={clearSpecialPriceFilters}
         onClose={closeSpecialPriceFilterPopup}

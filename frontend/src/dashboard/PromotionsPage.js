@@ -23,7 +23,12 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { formatBrandLabel } from './brandTheme';
 import { buildCustomerInvoiceRows } from './pendingBills';
-import { downloadPromotionRules, downloadSpecialPromotions } from './promotionsExport';
+import {
+  buildShopWisePromotionReport,
+  downloadPromotionRules,
+  downloadShopWisePromotions,
+  downloadSpecialPromotions,
+} from './promotionsExport';
 
 const apiBase = getApiBase();
 
@@ -289,6 +294,10 @@ function SpecialPromotionsPanel() {
   const [promoTab, setPromoTab] = useState('free_bags');
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [downloadTypes, setDownloadTypes] = useState(() => PROMO_TYPES.map((type) => type.id));
+  const [shopDownloadOpen, setShopDownloadOpen] = useState(false);
+  const [shopDateFrom, setShopDateFrom] = useState('');
+  const [shopDateTo, setShopDateTo] = useState('');
+  const [shopItemKeys, setShopItemKeys] = useState([]);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -629,6 +638,74 @@ function SpecialPromotionsPanel() {
     setDownloadTypes(allDownloadTypesSelected ? [] : availableDownloadTypes.map((type) => type.id));
   };
 
+  const openShopDownload = () => {
+    setShopDateFrom(dateFrom);
+    setShopDateTo(dateTo);
+    setShopItemKeys(brands.map((brand) => brand.key));
+    setShopDownloadOpen(true);
+  };
+
+  const shopDatesInvalid = Boolean(shopDateFrom && shopDateTo && shopDateFrom > shopDateTo);
+  const shopItemCounts = useMemo(() => {
+    if (!shopDownloadOpen || shopDatesInvalid) return { counts: {}, totalBags: 0 };
+    const report = buildShopWisePromotionReport(rows, brands, {
+      dateFrom: shopDateFrom,
+      dateTo: shopDateTo,
+      allItems: true,
+    });
+    const counts = {};
+    for (const line of report.lines) {
+      if (line.type !== 'detail') continue;
+      for (const key of line.itemKeys) {
+        counts[key] = (counts[key] || 0) + line.bags;
+      }
+    }
+    return { counts, totalBags: report.totalBags };
+  }, [shopDownloadOpen, shopDatesInvalid, rows, brands, shopDateFrom, shopDateTo]);
+
+  const availableShopItems = brands.filter((brand) => (shopItemCounts.counts[brand.key] || 0) > 0);
+  const allShopItemsSelected =
+    availableShopItems.length > 0 && availableShopItems.every((brand) => shopItemKeys.includes(brand.key));
+  const shopReport = useMemo(() => {
+    if (!shopDownloadOpen || shopDatesInvalid) return null;
+    return buildShopWisePromotionReport(rows, brands, {
+      dateFrom: shopDateFrom,
+      dateTo: shopDateTo,
+      itemKeys: shopItemKeys,
+      allItems: allShopItemsSelected,
+    });
+  }, [
+    shopDownloadOpen,
+    shopDatesInvalid,
+    rows,
+    brands,
+    shopDateFrom,
+    shopDateTo,
+    shopItemKeys,
+    allShopItemsSelected,
+  ]);
+
+  const toggleShopItem = (itemKey) => {
+    setShopItemKeys((current) =>
+      current.includes(itemKey) ? current.filter((key) => key !== itemKey) : [...current, itemKey],
+    );
+  };
+
+  const toggleAllShopItems = () => {
+    setShopItemKeys(allShopItemsSelected ? [] : brands.map((brand) => brand.key));
+  };
+
+  const confirmShopDownload = () => {
+    if (!shopReport || shopReport.totalBags <= 0 || shopDatesInvalid) return;
+    downloadShopWisePromotions(rows, brands, {
+      dateFrom: shopDateFrom,
+      dateTo: shopDateTo,
+      itemKeys: shopItemKeys,
+      allItems: allShopItemsSelected,
+    });
+    setShopDownloadOpen(false);
+  };
+
   const confirmDownload = () => {
     if (downloadRows.length === 0) return;
     const selected = availableDownloadTypes.filter((type) => downloadTypes.includes(type.id));
@@ -688,6 +765,14 @@ function SpecialPromotionsPanel() {
             className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             Download (PDF + Excel)
+          </button>
+          <button
+            type="button"
+            onClick={openShopDownload}
+            disabled={loading || rows.length === 0}
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            Shop wise list
           </button>
           <button
             type="button"
@@ -1131,6 +1216,137 @@ function SpecialPromotionsPanel() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {shopDownloadOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="promo-shop-download-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            aria-label="Close"
+            onClick={() => setShopDownloadOpen(false)}
+          />
+          <div className={`${modalPanelClass} max-h-[90vh]`}>
+            <h2 id="promo-shop-download-title" className="text-lg font-bold text-slate-900">
+              Shop wise list
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Free bags by shop and bag type. Choose a date range and the items to include. PDF and Excel download
+              together.
+            </p>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-medium text-slate-600">
+                From date
+                <input
+                  type="date"
+                  value={shopDateFrom}
+                  onChange={(e) => setShopDateFrom(e.target.value)}
+                  className={filterControl}
+                />
+              </label>
+              <label className="block text-sm font-medium text-slate-600">
+                To date
+                <input
+                  type="date"
+                  value={shopDateTo}
+                  min={shopDateFrom || undefined}
+                  onChange={(e) => setShopDateTo(e.target.value)}
+                  className={filterControl}
+                />
+              </label>
+            </div>
+            {shopDatesInvalid ? (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-100">
+                From date must be on or before the to date.
+              </p>
+            ) : null}
+            <p className="mt-4 text-sm font-medium text-slate-600">Items</p>
+            <div className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1">
+              <label
+                className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm ring-1 ${
+                  availableShopItems.length === 0
+                    ? 'cursor-not-allowed bg-slate-50 text-slate-400 ring-slate-100'
+                    : allShopItemsSelected
+                      ? 'cursor-pointer bg-indigo-50 text-indigo-900 ring-indigo-200'
+                      : 'cursor-pointer bg-white text-slate-800 ring-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={allShopItemsSelected}
+                    disabled={availableShopItems.length === 0}
+                    onChange={toggleAllShopItems}
+                    className="rounded text-indigo-600 focus:ring-indigo-500/40"
+                  />
+                  <span className="font-medium">All items</span>
+                </span>
+                <span className="shrink-0 tabular-nums text-xs text-slate-500">
+                  {shopItemCounts.totalBags}
+                </span>
+              </label>
+              {brands.map((brand) => {
+                const count = shopItemCounts.counts[brand.key] || 0;
+                const selected = shopItemKeys.includes(brand.key);
+                return (
+                  <label
+                    key={brand.key}
+                    className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm ring-1 ${
+                      count === 0
+                        ? 'cursor-not-allowed bg-slate-50 text-slate-400 ring-slate-100'
+                        : selected
+                          ? 'cursor-pointer bg-indigo-50 text-indigo-900 ring-indigo-200'
+                          : 'cursor-pointer bg-white text-slate-800 ring-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={selected && count > 0}
+                        disabled={count === 0}
+                        onChange={() => toggleShopItem(brand.key)}
+                        className="rounded text-indigo-600 focus:ring-indigo-500/40"
+                      />
+                      <span className="font-medium">{formatBrandLabel(brand) || brand.label}</span>
+                    </span>
+                    <span className="shrink-0 tabular-nums text-xs text-slate-500">
+                      {count}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              {shopDatesInvalid
+                ? 'From date must be on or before the to date.'
+                : shopReport
+                  ? `${shopReport.shopCount} shop${shopReport.shopCount === 1 ? '' : 's'} · ${shopReport.totalBags} free bag${shopReport.totalBags === 1 ? '' : 's'}`
+                  : 'No free bags in this date range.'}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={confirmShopDownload}
+                disabled={shopDatesInvalid || !shopReport || shopReport.totalBags <= 0}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-500/25 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download PDF + Excel
+              </button>
+              <button
+                type="button"
+                onClick={() => setShopDownloadOpen(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

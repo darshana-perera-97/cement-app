@@ -34,6 +34,7 @@ function formatFilterLine(options = {}) {
     shop = '',
     brandLabel = '',
     stockId = '',
+    priceChangeLabel = '',
   } = options;
   const parts = [];
   if (dateFrom || dateTo) {
@@ -45,6 +46,7 @@ function formatFilterLine(options = {}) {
   if (String(shop ?? '').trim()) parts.push(`Shop: ${String(shop).trim()}`);
   if (String(brandLabel ?? '').trim()) parts.push(`Bag type: ${String(brandLabel).trim()}`);
   if (String(stockId ?? '').trim()) parts.push(`Stock ID: ${String(stockId).trim()}`);
+  if (String(priceChangeLabel ?? '').trim()) parts.push(String(priceChangeLabel).trim());
   return parts.join(' · ');
 }
 

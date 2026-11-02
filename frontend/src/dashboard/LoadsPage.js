@@ -31,6 +31,7 @@ import {
   modalPanelClass4xl,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
+import LoadDetailsModal from './LoadDetailsModal';
 import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
 
 const apiBase = getApiBase();
@@ -231,6 +232,7 @@ export default function LoadsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [formStep, setFormStep] = useState(1);
   const [form, setForm] = useState(() => emptyForm([]));
   const [saving, setSaving] = useState(false);
@@ -693,13 +695,22 @@ export default function LoadsPage() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-slate-500">Track stock loads, vehicles, bags, and costs per brand.</p>
-        <button
-          type="button"
-          onClick={openModal}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
-        >
-          Add a Stock
-        </button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <button
+            type="button"
+            onClick={() => setDetailsOpen(true)}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-slate-50 sm:w-auto"
+          >
+            Load details
+          </button>
+          <button
+            type="button"
+            onClick={openModal}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] sm:w-auto"
+          >
+            Add a Stock
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -1378,6 +1389,13 @@ export default function LoadsPage() {
           </div>
         </div>
       ) : null}
+
+      <LoadDetailsModal
+        open={detailsOpen}
+        loads={rows}
+        brands={brands}
+        onClose={() => setDetailsOpen(false)}
+      />
 
       <RowDetailModal
         open={!!detailRow}
