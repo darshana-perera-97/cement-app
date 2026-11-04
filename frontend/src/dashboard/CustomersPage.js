@@ -104,6 +104,19 @@ function todayYmdLocal() {
   return `${y}-${m}-${day}`;
 }
 
+function amountToPayOf(row) {
+  return Math.max(0, Number(row?.remainingAmount) || 0);
+}
+
+/** Past due date only counts while something is still owed. */
+function isCustomerOverdue(row, today) {
+  return amountToPayOf(row) > 0 && Boolean(row?.dueDate && row.dueDate < today);
+}
+
+function isCustomerSettled(row) {
+  return amountToPayOf(row) === 0;
+}
+
 export default function CustomersPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
@@ -141,7 +154,7 @@ export default function CustomersPage() {
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
-      const overdue = r.dueDate && r.dueDate < today;
+      const overdue = isCustomerOverdue(r, today);
       if (dueFilter === 'overdue' && !overdue) return false;
       if (dueFilter === 'current' && overdue) return false;
       return rowMatchesQuery(search, [
@@ -316,7 +329,8 @@ export default function CustomersPage() {
           </p>
         ) : (
           pagedRows.map((r) => {
-            const overdue = r.dueDate && r.dueDate < today;
+            const overdue = isCustomerOverdue(r, today);
+            const settled = isCustomerSettled(r);
             return (
               <MobileRowCard
                 key={r.id}
@@ -331,6 +345,10 @@ export default function CustomersPage() {
                   overdue ? (
                     <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
                       Overdue
+                    </span>
+                  ) : settled ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800">
+                      Settled
                     </span>
                   ) : null
                 }
@@ -388,7 +406,8 @@ export default function CustomersPage() {
               </tr>
             ) : (
               pagedRows.map((r) => {
-                const overdue = r.dueDate && r.dueDate < today;
+                const overdue = isCustomerOverdue(r, today);
+                const settled = isCustomerSettled(r);
                 return (
                   <tr
                     key={r.id}
@@ -416,12 +435,21 @@ export default function CustomersPage() {
                         progressPct={r.monthlyTargetProgressPct}
                       />
                     </td>
-                    <td
-                      className={`px-4 py-3 text-right font-semibold tabular-nums ${
-                        overdue ? 'text-rose-800' : 'text-slate-900'
-                      }`}
-                    >
-                      {money(r.remainingAmount)}
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        {settled ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800">
+                            Settled
+                          </span>
+                        ) : null}
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            overdue ? 'text-rose-800' : 'text-slate-900'
+                          }`}
+                        >
+                          {money(r.remainingAmount)}
+                        </span>
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-center">
                       <button

@@ -350,12 +350,12 @@ export default function CustomerTransactionsPage() {
 
   const summary = useMemo(() => summarizeTransactions(activityTransactions), [activityTransactions]);
 
-  const overdue = Boolean(customer?.dueDate && customer.dueDate < today);
   const overpayment = Math.max(0, Number(customer?.overpaymentAmount) || 0);
   const amountToPay = Math.max(0, Number(customer?.remainingAmount) || 0);
+  const overdue = amountToPay > 0 && Boolean(customer?.dueDate && customer.dueDate < today);
   const creditAlert = customer ? creditLimitOverage(customer, amountToPay) : null;
-  const dueHint = customer?.dueDate ? dueDateHint(customer.dueDate, today) : null;
-  const allPaid = amountToPay === 0 && overpayment === 0;
+  const dueHint = amountToPay > 0 && customer?.dueDate ? dueDateHint(customer.dueDate, today) : null;
+  const allPaid = amountToPay === 0;
 
   const filteredTransactions = useMemo(() => {
     return activityTransactions

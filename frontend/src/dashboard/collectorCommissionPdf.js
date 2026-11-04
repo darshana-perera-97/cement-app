@@ -4,15 +4,15 @@ import { COLLECTION_DAY_BUCKETS } from './collectionsReport';
 
 const MARGIN = 14;
 
-function formatLkr(n) {
+function formatLkr(n, fractionDigits = 2) {
   return new Intl.NumberFormat(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
   }).format(Number(n) || 0);
 }
 
-function moneyCell(n) {
-  return `LKR ${formatLkr(n)}`;
+function moneyCell(n, fractionDigits = 2) {
+  return `LKR ${formatLkr(n, fractionDigits)}`;
 }
 
 const TABLE_OPTS = {
@@ -209,7 +209,7 @@ export function downloadCollectionsReportPdf(data) {
   const summaryHead = ['Days to settle', 'Lines', 'Collection amount'];
   const summaryBody = COLLECTION_DAY_BUCKETS.map((b) => {
     const s = bucketSummary[b.key] || {};
-    return [b.label, String(s.lineCount || 0), moneyCell(s.amount || 0)];
+    return [b.label, String(s.lineCount || 0), moneyCell(s.amount || 0, 0)];
   });
 
   autoTable(doc, {
@@ -243,17 +243,17 @@ export function downloadCollectionsReportPdf(data) {
   ];
   const body =
     rows.length === 0
-      ? [['—', '—', '—', '—', moneyCell(0), '—', '—', '—', moneyCell(0), '—']]
+      ? [['—', '—', '—', '—', moneyCell(0, 0), '—', '—', '—', moneyCell(0, 0), '—']]
       : rows.map((r) => [
           r.date,
           r.invoiceNumber,
           r.shopName,
           r.bagType,
-          moneyCell(r.amount),
+          moneyCell(r.amount, 0),
           r.billDate || '—',
           r.settledDate || '—',
           String(r.daysToSettle ?? '—'),
-          moneyCell(r.billAmount),
+          moneyCell(r.billAmount, 0),
           r.collectorName || '—',
         ]);
 
@@ -262,7 +262,7 @@ export function downloadCollectionsReportPdf(data) {
     head: [head],
     body,
     foot: rows.length
-      ? [[`Total (${rows.length})`, '', '', '', moneyCell(totals.amount), '', '', '', '', '']]
+      ? [[`Total (${rows.length})`, '', '', '', moneyCell(totals.amount, 0), '', '', '', '', '']]
       : undefined,
     ...TABLE_OPTS,
     columnStyles: {

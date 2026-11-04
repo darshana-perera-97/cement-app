@@ -26,6 +26,39 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+/** Nearest rupee. Collection lines are shown in whole rupees. */
+function roundRupee(n) {
+  return Math.round(Number(n) || 0);
+}
+
+/**
+ * Split an amount into whole rupees that add up to the nearest rupee.
+ * Shares follow the weights; any leftover rupee goes to the largest fractional part.
+ */
+function splitWholeRupees(amount, weights) {
+  const target = roundRupee(amount);
+  const ws = (Array.isArray(weights) ? weights : []).map((w) => Math.max(0, Number(w) || 0));
+  if (ws.length === 0) return [];
+  if (target === 0) return ws.map(() => 0);
+  const sumW = ws.reduce((s, w) => s + w, 0);
+  if (!(sumW > 0)) {
+    const out = ws.map(() => 0);
+    out[out.length - 1] = target;
+    return out;
+  }
+  const base = ws.map((w) => Math.floor((target * w) / sumW + 1e-9));
+  let left = target - base.reduce((s, n) => s + n, 0);
+  if (left > 0) {
+    const order = ws
+      .map((w, i) => ({ i, frac: (target * w) / sumW - base[i] }))
+      .sort((a, b) => b.frac - a.frac || a.i - b.i);
+    for (let k = 0; k < left && k < order.length; k += 1) {
+      base[order[k].i] += 1;
+    }
+  }
+  return base;
+}
+
 function daysBetweenYmd(fromYmd, toYmd) {
   if (!fromYmd || !toYmd || fromYmd.length < 10 || toYmd.length < 10) return 0;
   const t0 = new Date(
@@ -87,19 +120,16 @@ function paymentSettleSlices(payment, paymentDate) {
 }
 
 function splitAmountAcrossSlices(amount, slices) {
-  const collected = round2(amount);
+  const collected = roundRupee(amount);
   if (collected <= 0 || !Array.isArray(slices) || slices.length === 0) return [];
-  const total = round2(slices.reduce((s, sl) => s + sl.amount, 0));
+  const total = slices.reduce((s, sl) => s + (Number(sl.amount) || 0), 0);
   if (total <= 0) return [{ amount: collected, settleDate: slices[0].settleDate }];
-  let remaining = collected;
+  const shares = splitWholeRupees(
+    collected,
+    slices.map((sl) => sl.amount),
+  );
   return slices
-    .map((slice, i) => {
-      const isLast = i === slices.length - 1;
-      const raw = isLast ? remaining : round2((collected * slice.amount) / total);
-      const share = round2(Math.max(0, Math.min(remaining, raw)));
-      remaining = round2(remaining - share);
-      return { amount: share, settleDate: slice.settleDate };
-    })
+    .map((slice, i) => ({ amount: shares[i], settleDate: slice.settleDate }))
     .filter((s) => s.amount > 0);
 }
 
@@ -220,7 +250,7 @@ export function buildSettledCollectionsRows(
     const paymentSlices = paymentSettleSlices(payment, paymentDate);
     let amountSlices = splitAmountAcrossSlices(alloc.amount, paymentSlices);
     if (amountSlices.length === 0) {
-      amountSlices = [{ amount: round2(alloc.amount), settleDate: paymentDate }];
+      amountSlices = [{ amount: roundRupee(alloc.amount), settleDate: paymentDate }];
     }
 
     for (const amountSlice of amountSlices) {
@@ -285,7 +315,7 @@ export function buildSettledCollectionsRows(
       });
     }
 
-    const leftover = round2(credit - allocated);
+    const leftover = roundRupee(credit - allocated);
     if (leftover > 0) {
       rowSeq += 1;
       const row = {
@@ -330,7 +360,7 @@ export function buildSettledCollectionsRows(
 }
 
 function prorateCollectionAcrossBrands(bill, collectedAmount) {
-  const collected = round2(collectedAmount);
+  const collected = roundRupee(collectedAmount);
   if (collected <= 0) return [];
   const brands = getCachedBrands();
   const brandLines = [];
@@ -355,22 +385,19 @@ function prorateCollectionAcrossBrands(bill, collectedAmount) {
       },
     ];
   }
-  let remaining = collected;
-  return brandLines.map((line, i) => {
-    const isLast = i === brandLines.length - 1;
-    const rawShare =
-      isLast || billAmount <= 0
-        ? remaining
-        : round2((collected * line.lineAmount) / billAmount);
-    const share = round2(Math.max(0, Math.min(remaining, rawShare)));
-    remaining = round2(remaining - share);
-    return {
-      brandKey: line.brandKey,
-      bagType: line.bagType,
-      bagCount: line.bagCount,
-      amount: share,
-    };
-  });
+  const shares =
+    billAmount <= 0
+      ? brandLines.map((_, i) => (i === 0 ? collected : 0))
+      : splitWholeRupees(
+          collected,
+          brandLines.map((line) => line.lineAmount),
+        );
+  return brandLines.map((line, i) => ({
+    brandKey: line.brandKey,
+    bagType: line.bagType,
+    bagCount: line.bagCount,
+    amount: shares[i] || 0,
+  }));
 }
 
 /**
@@ -399,17 +426,17 @@ function appendReturnedChequeCommissionReversals(rows, baseRows, payments, { fro
       if (chequeAmount <= 0 || reversible <= 0) continue;
       const returnDate = String(c.chequeReturnedAt || p.date || '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) continue;
-      const deduct = round2(Math.min(chequeAmount, reversible));
+      const deduct = roundRupee(Math.min(chequeAmount, reversible));
       reversible = round2(reversible - deduct);
       if (from && to && !inDateRange(returnDate, from, to)) continue;
-      let left = deduct;
+      const shares = splitWholeRupees(
+        deduct,
+        slices.map((row) => row.amount),
+      );
       for (let index = 0; index < slices.length; index += 1) {
         const row = slices[index];
-        const isLast = index === slices.length - 1;
-        const raw = isLast ? left : round2((deduct * (Number(row.amount) || 0)) / baseTotal);
-        const amt = round2(Math.max(0, Math.min(left, raw)));
-        left = round2(left - amt);
-        if (amt <= 0.009) continue;
+        const amt = shares[index] || 0;
+        if (amt <= 0) continue;
         seq += 1;
         rows.push({
           ...row,
@@ -419,7 +446,7 @@ function appendReturnedChequeCommissionReversals(rows, baseRows, payments, { fro
           bagType: 'Return cheque',
           brandKey: '',
           bagCount: 0,
-          amount: round2(-amt),
+          amount: -amt,
           settledDate: returnDate,
           isPartial: false,
           isReturnDeduction: true,
@@ -472,7 +499,7 @@ export function buildCollectorCollectionRows(
       const paymentSlices = paymentSettleSlices(payment || {}, paymentDate);
       let amountSlices = splitAmountAcrossSlices(alloc.amount, paymentSlices);
       if (amountSlices.length === 0) {
-        amountSlices = [{ amount: round2(alloc.amount), settleDate: paymentDate }];
+        amountSlices = [{ amount: roundRupee(alloc.amount), settleDate: paymentDate }];
       }
 
       for (const amountSlice of amountSlices) {

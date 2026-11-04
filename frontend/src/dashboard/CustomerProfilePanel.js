@@ -118,16 +118,16 @@ export default function CustomerProfilePanel({
         : 'grid-cols-2 sm:grid-cols-4';
 
   let statusBadge = null;
-  if (overdue) {
-    statusBadge = (
-      <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
-        Overdue
-      </span>
-    );
-  } else if (allPaid) {
+  if (amountToPay <= 0 || allPaid) {
     statusBadge = (
       <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800">
         Settled
+      </span>
+    );
+  } else if (overdue) {
+    statusBadge = (
+      <span className="rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-800">
+        Overdue
       </span>
     );
   } else if (amountToPay > 0) {

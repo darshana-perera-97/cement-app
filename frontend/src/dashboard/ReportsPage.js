@@ -237,6 +237,15 @@ function money(n) {
   }).format(Number(n) || 0);
 }
 
+function moneyRupee(n) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'LKR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(n) || 0));
+}
+
 function formatAmountFixed2(n) {
   return new Intl.NumberFormat(undefined, {
     minimumFractionDigits: 2,
@@ -3677,7 +3686,7 @@ export default function ReportsPage() {
                     <td className={`whitespace-nowrap px-4 py-3 font-medium ${stickyFirstTd}`}>{bucket.label}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{s.lineCount || 0}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold">
-                      {money(s.amount || 0)}
+                      {moneyRupee(s.amount || 0)}
                     </td>
                   </tr>
                 );
@@ -3689,7 +3698,7 @@ export default function ReportsPage() {
                 <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                   {settledCollectionsRows.length}
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(settledCollectionsTotal)}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(settledCollectionsTotal)}</td>
               </tr>
             </tfoot>
           </table>
@@ -3749,13 +3758,13 @@ export default function ReportsPage() {
                           '—'
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(r.amount)}</td>
                       <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate || '—'}</td>
                       <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate || '—'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                         {r.daysToSettle != null ? r.daysToSettle : '—'}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{money(r.billAmount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(r.billAmount)}</td>
                       {!collectorReportsView ? (
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.collectorName || '—'}</td>
                       ) : null}

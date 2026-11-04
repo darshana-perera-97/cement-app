@@ -501,21 +501,21 @@ function BillDetailContent({ row }) {
 
 function CustomerDetailContent({ row }) {
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = row.dueDate && row.dueDate < today;
   const overpayment = Math.max(0, Number(row.overpaymentAmount) || 0);
   const amountToPay = Math.max(0, Number(row.remainingAmount) || 0);
-  const settled = amountToPay === 0 && overpayment === 0;
+  const overdue = amountToPay > 0 && Boolean(row.dueDate && row.dueDate < today);
+  const settled = amountToPay === 0;
 
   return (
     <>
       <div className="mt-4 space-y-2">
-        {overdue ? (
-          <span className="inline-flex rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-rose-800">
-            Overdue
-          </span>
-        ) : settled ? (
+        {settled ? (
           <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-emerald-800">
             Settled
+          </span>
+        ) : overdue ? (
+          <span className="inline-flex rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-rose-800">
+            Overdue
           </span>
         ) : amountToPay > 0 ? (
           <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-900">
