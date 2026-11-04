@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { COLLECTION_DAY_BUCKETS } from './collectionsReport';
+import { ALL_COLLECTION_DAY_BUCKETS, COLLECTION_DAY_BUCKETS } from './collectionsReport';
 
 const MARGIN = 14;
 
@@ -235,9 +235,9 @@ export function downloadCollectionsReportPdf(data) {
     'Shop',
     'Bag type',
     'Amount',
+    'Days',
     'Bill date',
     'Settled',
-    'Days',
     'Bill amount',
     'Collected by',
   ];
@@ -250,9 +250,9 @@ export function downloadCollectionsReportPdf(data) {
           r.shopName,
           r.bagType,
           moneyCell(r.amount, 0),
+          String(r.daysToSettle ?? '—'),
           r.billDate || '—',
           r.settledDate || '—',
-          String(r.daysToSettle ?? '—'),
           moneyCell(r.billAmount, 0),
           r.collectorName || '—',
         ]);
@@ -267,10 +267,101 @@ export function downloadCollectionsReportPdf(data) {
     ...TABLE_OPTS,
     columnStyles: {
       4: { halign: 'right' },
+      5: { halign: 'right' },
       8: { halign: 'right' },
     },
   });
 
   addPageFooters(doc);
   doc.save(`settled-collections-${periodLabel.replace(/\s+/g, '-')}.pdf`);
+}
+
+export function downloadAllCollectionsReportPdf(data) {
+  const {
+    periodLabel = '',
+    collectorName = 'All staff',
+    rows = [],
+    bucketSummary = {},
+    totals = { amount: 0 },
+    generatedAt = new Date(),
+  } = data;
+
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.text('All Collections Report', MARGIN, 16);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Generated: ${generatedAt.toLocaleString()}`, MARGIN, 22);
+  doc.text(`Period: ${periodLabel}`, MARGIN, 27);
+  doc.text(`Collected by: ${collectorName}`, MARGIN, 32);
+  doc.setTextColor(0, 0, 0);
+
+  const summaryHead = ['Days from billed date', 'Lines', 'Collection amount'];
+  const summaryBody = ALL_COLLECTION_DAY_BUCKETS.map((bucket) => {
+    const band = bucketSummary[bucket.key] || {};
+    return [bucket.label, String(band.lineCount || 0), moneyCell(band.amount || 0)];
+  });
+
+  autoTable(doc, {
+    startY: 38,
+    head: [summaryHead],
+    body: summaryBody,
+    ...TABLE_OPTS,
+    columnStyles: {
+      1: { halign: 'right' },
+      2: { halign: 'right' },
+    },
+  });
+
+  let startY = doc.lastAutoTable.finalY + 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Detail', MARGIN, startY);
+  startY += 4;
+
+  const head = ['Date', 'Shop', 'Invoice #', 'Billed date', 'Days', 'Whole amount', 'Settled', 'Amount'];
+
+  const settledLabel = (row) => (row.billSettled == null ? '—' : row.billSettled ? 'Settled' : 'Not settled');
+
+  const body =
+    rows.length === 0
+      ? [['—', '—', '—', '—', '—', '—', '—', moneyCell(0)]]
+      : rows.map((r) => [
+          r.when || r.date,
+          r.shopName,
+          r.invoiceNumber,
+          r.billDate || '—',
+          r.daysFromBill != null ? String(r.daysFromBill) : '—',
+          r.billAmount != null ? moneyCell(r.billAmount) : '—',
+          settledLabel(r),
+          moneyCell(r.amount),
+        ]);
+
+  const foot = rows.length
+    ? [[`Total (${rows.length})`, '', '', '', '', '', '', moneyCell(totals.amount)]]
+    : undefined;
+
+  autoTable(doc, {
+    startY,
+    head: [head],
+    body,
+    foot,
+    ...TABLE_OPTS,
+    columnStyles: {
+      4: { halign: 'right' },
+      5: { halign: 'right' },
+      7: { halign: 'right' },
+    },
+  });
+
+  addPageFooters(doc);
+  doc.save(`all-collections-${periodLabel.replace(/\s+/g, '-')}.pdf`);
 }

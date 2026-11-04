@@ -41,12 +41,15 @@ import { downloadReportsPdf } from './reportsPdf';
 import { downloadRefReport } from './reportsRefExport';
 import { downloadStockDistributionPdf } from './stockDistributionPdf';
 import {
+  ALL_COLLECTION_DAY_BUCKETS,
+  buildAllCollectionsRows,
   buildBillSettledDateLookup,
   buildSettledCollectionsRows,
+  summarizeAllCollectionsByDays,
   summarizeCollectionsByBucket,
   COLLECTION_DAY_BUCKETS,
 } from './collectionsReport';
-import { downloadCollectionsReportPdf } from './collectorCommissionPdf';
+import { downloadAllCollectionsReportPdf, downloadCollectionsReportPdf } from './collectorCommissionPdf';
 import { paymentInvoiceNumberLabel } from './paymentReceipt';
 import PrintCollectionsSummaryModal from './PrintCollectionsSummaryModal';
 
@@ -1873,6 +1876,62 @@ export default function ReportsPage() {
     [collectionsMonth],
   );
 
+  const allCollectionsRows = useMemo(
+    () =>
+      buildAllCollectionsRows(payments, {
+        from: collectionsMonthRange.from,
+        to: collectionsMonthRange.to,
+        recordedByKeys: settledCollectionsRecordedByKeys,
+        staff: collectionStaff,
+        settledByBillId: billSettledDateLookup,
+      }),
+    [
+      payments,
+      collectionsMonthRange,
+      settledCollectionsRecordedByKeys,
+      collectionStaff,
+      billSettledDateLookup,
+    ],
+  );
+
+  const allCollectionsTotal = useMemo(
+    () => allCollectionsRows.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+    [allCollectionsRows],
+  );
+
+  const allCollectionsDaySummary = useMemo(
+    () => summarizeAllCollectionsByDays(allCollectionsRows),
+    [allCollectionsRows],
+  );
+
+  const allCollectionsDaySummaryTotal = useMemo(
+    () =>
+      ALL_COLLECTION_DAY_BUCKETS.reduce(
+        (acc, bucket) => {
+          const band = allCollectionsDaySummary[bucket.key] || {};
+          return {
+            lineCount: acc.lineCount + (band.lineCount || 0),
+            amount: acc.amount + (Number(band.amount) || 0),
+          };
+        },
+        { lineCount: 0, amount: 0 },
+      ),
+    [allCollectionsDaySummary],
+  );
+
+  const allCollectionsPagination = useTablePagination(allCollectionsRows.length, [
+    collectionsMonth,
+    collectionsCollectorId,
+  ]);
+  const pagedAllCollectionsRows = useMemo(
+    () =>
+      allCollectionsRows.slice(
+        allCollectionsPagination.offset,
+        allCollectionsPagination.offset + allCollectionsPagination.pageSize,
+      ),
+    [allCollectionsRows, allCollectionsPagination.offset, allCollectionsPagination.pageSize],
+  );
+
   const settledCollectionsRows = useMemo(
     () =>
       buildSettledCollectionsRows(customers, bills, billSettledDateLookup, payments, {
@@ -1935,6 +1994,17 @@ export default function ReportsPage() {
     if (!collectionsCollectorId) return 'All staff';
     return staffUserLabel(selectedCollectionStaff) || '—';
   }, [collectorReportsView, collectorDisplayName, collectionsCollectorId, selectedCollectionStaff]);
+
+  const handleDownloadAllCollectionsPdf = () => {
+    downloadAllCollectionsReportPdf({
+      periodLabel: collectionsMonthLabel,
+      collectorName: collectionsCollectorLabel,
+      rows: allCollectionsRows,
+      bucketSummary: allCollectionsDaySummary,
+      totals: { amount: allCollectionsTotal },
+      generatedAt: new Date(),
+    });
+  };
 
   const handleDownloadSettledCollectionsPdf = () => {
     downloadCollectionsReportPdf({
@@ -2693,7 +2763,7 @@ export default function ReportsPage() {
         totals: dailyReportTotals,
         userRows: adminDailyReportView && !dailyReportUserId ? dailyReportUserRows : [],
         shopRows: dailyReportShopRows,
-        cashRows: collectorReportsView ? dailyReportCashRows : [],
+        cashRows: dailyReportCashRows,
         chequeRows: dailyReportChequeRows,
         chequeTotal: dailyReportChequeTotal,
         cdmRows: dailyReportCdmRows,
@@ -2701,13 +2771,12 @@ export default function ReportsPage() {
         bankTransferRows: dailyReportBankTransferRows,
         bankTransferTotal: dailyReportBankTransferTotal,
         showRecordedBy: showDailyReportRecordedBy,
-        showInvoiceNumber: collectorReportsView,
+        showInvoiceNumber: true,
       },
       { dateSlug: dailyReportDate },
     );
   }, [
     dailyReportDate,
-    collectorReportsView,
     adminDailyReportView,
     dailyReportUserLabel,
     dailyReportUserId,
@@ -2765,9 +2834,9 @@ export default function ReportsPage() {
         <h1 className="text-lg font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
           {collectorReportsView
-            ? 'Daily collections, company unloading, monthly bills, cement bags per shop, and settled collections for your assigned shops.'
+            ? 'Daily collections, all collections, company unloading, monthly bills, cement bags per shop, and settled collections for your assigned shops.'
             : showDailyCollectionsReport
-              ? 'Daily collections and the company unloading report, plus monthly summaries and downloadable reports.'
+              ? 'Daily collections, all collections, and the company unloading report, plus monthly summaries and downloadable reports.'
               : 'Company unloading report, monthly summaries, balances, and downloadable reports.'}
         </p>
       </div>
@@ -3032,6 +3101,7 @@ export default function ReportsPage() {
                       title={r.shop}
                       subtitle={r.location || '—'}
                       fields={[
+                        { label: 'Cash invoice #', value: r.cashInvoiceNumbers || '—' },
                         { label: 'Cash', value: money(r.cashCollected) },
                         { label: 'Cheque', value: money(r.chequeCollected) },
                         { label: 'CDM', value: money(r.cdmCollected) },
@@ -3048,6 +3118,7 @@ export default function ReportsPage() {
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
                       <th className="whitespace-nowrap px-4 py-3">Location</th>
+                      <th className="whitespace-nowrap px-4 py-3">Cash invoice #</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Cash</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Cheque</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">CDM</th>
@@ -3058,7 +3129,7 @@ export default function ReportsPage() {
                   <tbody>
                     {dailyReportShopRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                        <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                           No collections{adminDailyReportView && dailyReportUserId ? ` for ${dailyReportUserLabel}` : ''}{' '}
                     on {dailyReportDate}.
                         </td>
@@ -3070,6 +3141,7 @@ export default function ReportsPage() {
                             {r.shop}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.cashInvoiceNumbers || '—'}</td>
                           <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cashCollected < 0 ? 'font-semibold text-rose-800' : 'text-sky-800'}`}>
                             {r.cashCollected !== 0 ? money(r.cashCollected) : '—'}
                           </td>
@@ -3092,7 +3164,7 @@ export default function ReportsPage() {
                   {dailyReportShopRows.length > 0 ? (
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
-                        <td className="px-4 py-3" colSpan={2}>
+                        <td className="px-4 py-3" colSpan={3}>
                           Total ({dailyReportShopRows.length} shop
                           {dailyReportShopRows.length === 1 ? '' : 's'})
                         </td>
@@ -3110,6 +3182,73 @@ export default function ReportsPage() {
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-emerald-700">
                           {money(dailyReportTotals.collections)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+
+              <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cash list</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Cash collected on {dailyReportDate}
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+              </p>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportCashRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No cash on this day.
+                  </p>
+                ) : (
+                  dailyReportCashRows.map((r) => (
+                    <MobileRowCard
+                      key={r.id}
+                      title={r.customerName}
+                      fields={[
+                        { label: 'Invoice #', value: r.invoiceNumber },
+                        { label: 'Amount', value: money(r.amount) },
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[640px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportCashRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-4 py-8 text-center text-slate-500">
+                          No cash on this day.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportCashRows.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.invoiceNumber}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-sky-800">
+                            {money(r.amount)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportCashRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={2}>
+                          Total ({dailyReportCashRows.length} payment
+                          {dailyReportCashRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
+                          {money(dailyReportTotals.cash)}
                         </td>
                       </tr>
                     </tfoot>
@@ -3136,6 +3275,7 @@ export default function ReportsPage() {
                       fields={[
                         { label: 'Amount', value: money(r.amount) },
                         { label: 'Cheque #', value: r.chequeNumber },
+                        { label: 'Invoice #', value: r.invoiceNumber },
                         { label: 'Bill #', value: r.billNumber },
                         {
                           label: 'Deposited',
@@ -3155,6 +3295,7 @@ export default function ReportsPage() {
                       <th className="whitespace-nowrap px-4 py-3">Cheque date</th>
                       <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Cheque #</th>
+                      <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
                       <th className="whitespace-nowrap px-4 py-3">Deposited</th>
                       {showDailyReportRecordedBy ? (
@@ -3166,7 +3307,7 @@ export default function ReportsPage() {
                     {dailyReportChequeRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={showDailyReportRecordedBy ? 7 : 6}
+                          colSpan={showDailyReportRecordedBy ? 8 : 7}
                           className="px-4 py-8 text-center text-slate-500"
                         >
                           No cheques on this day.
@@ -3192,6 +3333,7 @@ export default function ReportsPage() {
                             {money(r.amount)}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.chequeNumber}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.invoiceNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-sm">
                             {r.isReturnDeduction ? (
@@ -3219,7 +3361,7 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
                           {money(dailyReportChequeTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 4 : 3} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -3246,6 +3388,7 @@ export default function ReportsPage() {
                         { label: 'Amount', value: money(r.amount) },
                         { label: 'Deposit date', value: r.cdmDate },
                         { label: 'Bank account', value: r.bankAccount },
+                        { label: 'Invoice #', value: r.invoiceNumber },
                         { label: 'Bill #', value: r.billNumber },
                         { label: 'Approval', value: r.approval },
                         ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
@@ -3263,6 +3406,7 @@ export default function ReportsPage() {
                       <th className="whitespace-nowrap px-4 py-3">Deposit date</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">CDM #</th>
                       <th className="px-4 py-3">Bank account</th>
+                      <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
                       <th className="whitespace-nowrap px-4 py-3">Approval</th>
                       {showDailyReportRecordedBy ? (
@@ -3274,7 +3418,7 @@ export default function ReportsPage() {
                     {dailyReportCdmRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={showDailyReportRecordedBy ? 8 : 7}
+                          colSpan={showDailyReportRecordedBy ? 9 : 8}
                           className="px-4 py-8 text-center text-slate-500"
                         >
                           No CDM deposits on this day.
@@ -3290,6 +3434,7 @@ export default function ReportsPage() {
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.cdmDate}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.cdmNumber}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.invoiceNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
                           <td className={`whitespace-nowrap px-4 py-3 text-sm ${approvalStatusClass(r.approval)}`}>
                             {r.approval}
@@ -3311,7 +3456,7 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
                           {money(dailyReportCdmTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 6 : 5} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 7 : 6} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -3338,6 +3483,7 @@ export default function ReportsPage() {
                         { label: 'Amount', value: money(r.amount) },
                         { label: 'Transfer date', value: r.transferDate },
                         { label: 'Bank account', value: r.bankAccount },
+                        { label: 'Invoice #', value: r.invoiceNumber },
                         { label: 'Bill #', value: r.billNumber },
                         { label: 'Approval', value: r.approval },
                         ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy }] : []),
@@ -3355,6 +3501,7 @@ export default function ReportsPage() {
                       <th className="whitespace-nowrap px-4 py-3">Transfer date</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Reference #</th>
                       <th className="px-4 py-3">Bank account</th>
+                      <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
                       <th className="whitespace-nowrap px-4 py-3 font-mono">Bill #</th>
                       <th className="whitespace-nowrap px-4 py-3">Approval</th>
                       {showDailyReportRecordedBy ? (
@@ -3366,7 +3513,7 @@ export default function ReportsPage() {
                     {dailyReportBankTransferRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={showDailyReportRecordedBy ? 8 : 7}
+                          colSpan={showDailyReportRecordedBy ? 9 : 8}
                           className="px-4 py-8 text-center text-slate-500"
                         >
                           No bank transfers on this day.
@@ -3382,6 +3529,7 @@ export default function ReportsPage() {
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.transferDate}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm">{r.reference}</td>
                           <td className="px-4 py-3 text-sm text-slate-600">{r.bankAccount}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.invoiceNumber}</td>
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-sm tabular-nums">{r.billNumber}</td>
                           <td className={`whitespace-nowrap px-4 py-3 text-sm ${approvalStatusClass(r.approval)}`}>
                             {r.approval}
@@ -3403,7 +3551,7 @@ export default function ReportsPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
                           {money(dailyReportBankTransferTotal)}
                         </td>
-                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 6 : 5} />
+                        <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 7 : 6} />
                       </tr>
                     </tfoot>
                   ) : null}
@@ -3624,11 +3772,233 @@ export default function ReportsPage() {
       </Card>
 
       <Card
+        title="All collections"
+        subtitle={
+          collectorReportsView
+            ? `Every payment you recorded in ${collectionsMonthLabel}. Amount is the full receipt. Cheques returned in this month are shown as deductions.`
+            : `Every payment recorded by the selected collector, manager, or admin in ${collectionsMonthLabel}. Amount is the full receipt. Cheques returned in this month are shown as deductions.`
+        }
+      >
+        <TableFiltersBar>
+          <label className={filterLabelNarrow}>
+            Collected in month
+            <input
+              type="month"
+              value={collectionsMonth}
+              onChange={(e) => setCollectionsMonth(e.target.value || currentMonthValue())}
+              className={filterControl}
+            />
+          </label>
+          {!collectorReportsView ? (
+            <label className={filterLabel}>
+              Collected by
+              <select
+                value={collectionsCollectorId}
+                onChange={(e) => setCollectionsCollectorId(e.target.value)}
+                className={filterControl}
+              >
+                <option value="">All staff</option>
+                {collectionStaff.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {staffUserLabel(c)}
+                    {c.role ? ` · ${c.role}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleDownloadAllCollectionsPdf}
+            disabled={loading || !!error || allCollectionsRows.length === 0}
+            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Download PDF
+          </button>
+        </TableFiltersBar>
+
+        <div className="mt-5 overflow-hidden rounded-[20px] bg-white shadow-lg shadow-slate-200/40 ring-1 ring-slate-100">
+          <table className="w-full table-fixed data-table border-separate border-spacing-0 text-left text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50/95">
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="w-[40%] px-4 py-3">Days from billed date</th>
+                <th className="w-[20%] px-4 py-3 text-right">Lines</th>
+                <th className="w-[40%] px-4 py-3 text-right">Collection amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {ALL_COLLECTION_DAY_BUCKETS.map((bucket) => {
+                const band = allCollectionsDaySummary[bucket.key] || {};
+                return (
+                  <tr key={bucket.key} className="bg-white">
+                    <td className="px-4 py-3 font-medium">{bucket.label}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{band.lineCount || 0}</td>
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold">
+                      {money(band.amount || 0)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-indigo-950">
+                <td className="px-4 py-3">Total</td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {allCollectionsDaySummaryTotal.lineCount}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {money(allCollectionsDaySummaryTotal.amount)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div className="mt-5 space-y-3 sm:hidden">
+          {loading ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              <LoadingSpinner />
+            </p>
+          ) : allCollectionsRows.length === 0 ? (
+            <p className="rounded-[20px] bg-white px-4 py-8 text-center text-sm text-slate-500 shadow-md ring-1 ring-slate-100">
+              No collections for {collectionsCollectorLabel} in {collectionsMonthLabel}.
+            </p>
+          ) : (
+            <>
+              {pagedAllCollectionsRows.map((r) => (
+                <MobileRowCard
+                  key={r.rowKey}
+                  title={r.shopName}
+                  subtitle={r.when || r.date}
+                  badge={r.isReturnDeduction ? 'Return cheque' : null}
+                  fields={[
+                    { label: 'Invoice #', value: r.invoiceNumber },
+                    { label: 'Billed date', value: r.billDate || '—' },
+                    { label: 'Days', value: r.daysFromBill != null ? r.daysFromBill : '—' },
+                    { label: 'Whole amount', value: r.billAmount != null ? money(r.billAmount) : '—' },
+                    {
+                      label: 'Settled',
+                      value: r.billSettled == null ? '—' : r.billSettled ? 'Settled' : 'Not settled',
+                    },
+                    { label: 'Amount', value: money(r.amount) },
+                  ]}
+                />
+              ))}
+              <div className="flex items-center justify-between gap-3 rounded-2xl bg-indigo-50 px-4 py-3 text-sm font-semibold text-slate-900 ring-1 ring-indigo-100">
+                <span>
+                  Total ({allCollectionsRows.length} line
+                  {allCollectionsRows.length === 1 ? '' : 's'})
+                </span>
+                <span className="tabular-nums text-indigo-900">{money(allCollectionsTotal)}</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className={`mt-5 hidden sm:block ${scrollTableWrap}`}>
+          <table className="w-full min-w-[860px] data-table border-separate border-spacing-0 text-left text-sm">
+            <thead className={stickyThead}>
+              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
+                <th className="whitespace-nowrap px-4 py-3">Shop name</th>
+                <th className="whitespace-nowrap px-4 py-3">Invoice #</th>
+                <th className="whitespace-nowrap px-4 py-3">Billed date</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Whole amount</th>
+                <th className="whitespace-nowrap px-4 py-3">Settled</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-800">
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                    <LoadingSpinner />
+                  </td>
+                </tr>
+              ) : allCollectionsRows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                    No collections for {collectionsCollectorLabel} in {collectionsMonthLabel}.
+                  </td>
+                </tr>
+              ) : (
+                pagedAllCollectionsRows.map((r) => (
+                  <tr key={r.rowKey} className="border-t border-slate-100 hover:bg-slate-50/80">
+                    <td className={`whitespace-nowrap px-4 py-3 tabular-nums text-slate-600 ${stickyFirstTd}`}>
+                      {r.when || r.date}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{r.shopName}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">{r.invoiceNumber}</td>
+                    <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
+                      {r.billDate || '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">
+                      {r.daysFromBill != null ? r.daysFromBill : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">
+                      {r.billAmount != null ? money(r.billAmount) : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {r.billSettled == null ? (
+                        '—'
+                      ) : (
+                        <span
+                          className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            r.billSettled
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-900'
+                          }`}
+                        >
+                          {r.billSettled ? 'Settled' : 'Not settled'}
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className={`whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold ${
+                        r.amount < 0 ? 'text-rose-700' : 'text-slate-900'
+                      }`}
+                    >
+                      {money(r.amount)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {!loading && allCollectionsRows.length > 0 ? (
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-slate-900">
+                  <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={7}>
+                    Total ({allCollectionsRows.length} line
+                    {allCollectionsRows.length === 1 ? '' : 's'})
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    {money(allCollectionsTotal)}
+                  </td>
+                </tr>
+              </tfoot>
+            ) : null}
+          </table>
+        </div>
+        {!loading && allCollectionsRows.length > 0 ? (
+          <TablePaginationBar
+            className="mt-4"
+            page={allCollectionsPagination.page}
+            totalPages={allCollectionsPagination.totalPages}
+            pageSize={allCollectionsPagination.pageSize}
+            totalCount={allCollectionsRows.length}
+            onPageChange={allCollectionsPagination.setPage}
+            onPageSizeChange={allCollectionsPagination.setPageSize}
+          />
+        ) : null}
+      </Card>
+
+      <Card
         title="Settled collections"
         subtitle={
           collectorReportsView
-            ? `Payments you collected in ${collectionsMonthLabel}`
-            : `Payments collected by the selected collector, manager, or admin in ${collectionsMonthLabel}`
+            ? `Payments you collected in ${collectionsMonthLabel}. Each line’s Amount is added to the band that contains its Days. Day 30 counts in both 22–30 and 30–35.`
+            : `Payments collected by the selected collector, manager, or admin in ${collectionsMonthLabel}. Each line’s Amount is added to the band that contains its Days. Day 30 counts in both 22–30 and 30–35.`
         }
       >
         <TableFiltersBar>
@@ -3669,13 +4039,13 @@ export default function ReportsPage() {
           </button>
         </TableFiltersBar>
 
-        <div className={`mt-5 ${scrollTableWrap}`}>
-          <table className="w-full min-w-[720px] data-table border-separate border-spacing-0 text-left text-sm">
-            <thead className={stickyThead}>
+        <div className="mt-5 overflow-hidden rounded-[20px] bg-white shadow-lg shadow-slate-200/40 ring-1 ring-slate-100">
+          <table className="w-full table-fixed data-table border-separate border-spacing-0 text-left text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50/95">
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Days to settle</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">Lines</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">Collection amount</th>
+                <th className="w-[40%] px-4 py-3">Days to settle</th>
+                <th className="w-[20%] px-4 py-3 text-right">Lines</th>
+                <th className="w-[40%] px-4 py-3 text-right">Collection amount</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -3683,9 +4053,9 @@ export default function ReportsPage() {
                 const s = settledCollectionsBucketSummary[bucket.key] || {};
                 return (
                   <tr key={bucket.key} className="bg-white">
-                    <td className={`whitespace-nowrap px-4 py-3 font-medium ${stickyFirstTd}`}>{bucket.label}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{s.lineCount || 0}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums font-semibold">
+                    <td className="px-4 py-3 font-medium">{bucket.label}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{s.lineCount || 0}</td>
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold">
                       {moneyRupee(s.amount || 0)}
                     </td>
                   </tr>
@@ -3695,10 +4065,10 @@ export default function ReportsPage() {
             <tfoot>
               <tr className="border-t-2 border-slate-200 bg-indigo-50/60 font-semibold text-indigo-950">
                 <td className="px-4 py-3">Total</td>
-                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                <td className="px-4 py-3 text-right tabular-nums">
                   {settledCollectionsRows.length}
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(settledCollectionsTotal)}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{moneyRupee(settledCollectionsTotal)}</td>
               </tr>
             </tfoot>
           </table>
@@ -3713,9 +4083,9 @@ export default function ReportsPage() {
                 <th className="whitespace-nowrap px-4 py-3">Shop name</th>
                 <th className="whitespace-nowrap px-4 py-3">Bag type</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
                 <th className="whitespace-nowrap px-4 py-3">Bill date</th>
                 <th className="whitespace-nowrap px-4 py-3">Settled date</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">Days</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Bill amount</th>
                 {!collectorReportsView ? (
                   <th className="whitespace-nowrap px-4 py-3">Collected by</th>
@@ -3759,11 +4129,11 @@ export default function ReportsPage() {
                         )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(r.amount)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate || '—'}</td>
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate || '—'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                         {r.daysToSettle != null ? r.daysToSettle : '—'}
                       </td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.billDate || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{r.settledDate || '—'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{moneyRupee(r.billAmount)}</td>
                       {!collectorReportsView ? (
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.collectorName || '—'}</td>

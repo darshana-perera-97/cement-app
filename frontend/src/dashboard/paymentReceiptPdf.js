@@ -11,7 +11,13 @@ import {
   getPaymentOnlineTransfers,
   onlineTransferPortion,
 } from './paymentCheques';
-import { getPaymentReceiptInvoices } from './paymentReceipt';
+import {
+  getPaymentReceiptInvoices,
+  invoiceAmountWithPriorBalance,
+  isReturnChequeEffect,
+  receiptInvoiceTitle,
+} from './paymentReceipt';
+import { customerOutstandingForPaymentReceipt } from '../paymentReceiptSettings';
 import { collectedByPrintLabel } from './collectorPrintName';
 
 const MARGIN = 8;
@@ -160,19 +166,6 @@ function accountNoFromSnap(snap) {
     return String(snap.accountNumber ?? '').trim();
   }
   return '';
-}
-
-function invoiceTitle(inv) {
-  const num = String(inv.invoiceNumber ?? '').trim();
-  if (num) return num.toLowerCase() === 'opening' ? 'Opening balance' : `Invoice ${num}`;
-  const details = String(inv.details ?? '').trim();
-  const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
-  if (invMatch) {
-    const extracted = invMatch[1].trim();
-    if (extracted.toLowerCase() === 'opening') return 'Opening balance';
-    return `Invoice ${extracted}`;
-  }
-  return 'Invoice';
 }
 
 function gridTableOptions() {
@@ -465,22 +458,44 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   }
 
   if (invoices.length > 0) {
-    y = drawSectionTitle(doc, 'INVOICES', y);
+    const onlyReturnCheque = invoices.every((inv) => isReturnChequeEffect(inv));
+    y = drawSectionTitle(doc, onlyReturnCheque ? 'RETURN CHEQUE' : 'INVOICES', y);
     autoTable(doc, {
       startY: y,
-      head: [['Invoice', 'Date', 'Invoice Amt', 'Remaining']],
+      head: [[onlyReturnCheque ? 'Return cheque' : 'Invoice', 'Date', 'Invoice Amt (Before)', 'Remaining']],
       body: invoices.map((inv) => [
-        invoiceTitle(inv),
+        receiptInvoiceTitle(inv, { onlyReturnCheque }),
         formatDisplayDate(inv.date),
-        inv.billTotal > 0 ? formatAmount(inv.billTotal) : '—',
+        inv.billTotal > 0 ? invoiceAmountWithPriorBalance(inv, formatAmount) : '—',
         inv.remainingAfter == null ? '—' : formatAmount(inv.remainingAfter),
       ]),
       ...gridTableOptions(),
       columnStyles: {
-        0: { cellWidth: contentWidth * 0.28, halign: 'left' },
-        1: { cellWidth: contentWidth * 0.22, halign: 'center' },
-        2: { cellWidth: contentWidth * 0.25, halign: 'right' },
-        3: { cellWidth: contentWidth * 0.25, halign: 'right' },
+        0: { cellWidth: contentWidth * 0.24, halign: 'left' },
+        1: { cellWidth: contentWidth * 0.18, halign: 'center' },
+        2: { cellWidth: contentWidth * 0.36, halign: 'right' },
+        3: { cellWidth: contentWidth * 0.22, halign: 'right' },
+      },
+    });
+    y = (doc.lastAutoTable?.finalY || y) + 3.6;
+  }
+
+  const outstandingRaw = opts.customerOutstanding;
+  const outstanding =
+    outstandingRaw == null || outstandingRaw === '' ? null : Number(outstandingRaw);
+  if (Number.isFinite(outstanding)) {
+    autoTable(doc, {
+      startY: y,
+      body: [
+        [
+          { content: 'Total outstanding', styles: { halign: 'left', fontStyle: 'bold' } },
+          { content: formatAmount(Math.max(0, outstanding)), styles: { halign: 'right', fontStyle: 'bold' } },
+        ],
+      ],
+      ...gridTableOptions(),
+      columnStyles: {
+        0: { cellWidth: contentWidth * 0.62, halign: 'left' },
+        1: { cellWidth: contentWidth * 0.38, halign: 'right' },
       },
     });
     y = (doc.lastAutoTable?.finalY || y) + 3.6;
@@ -545,15 +560,22 @@ export function buildPaymentReceiptPdf(payment, opts = {}) {
   return { doc, filename: receiptFilename(payment) };
 }
 
-export function downloadPaymentReceiptPdf(payment, opts = {}) {
-  const built = buildPaymentReceiptPdf(payment, opts);
+async function withCustomerOutstanding(payment, opts = {}) {
+  if (opts.customerOutstanding != null && opts.customerOutstanding !== '') return opts;
+  const customerOutstanding = await customerOutstandingForPaymentReceipt(payment);
+  if (customerOutstanding == null) return opts;
+  return { ...opts, customerOutstanding };
+}
+
+export async function downloadPaymentReceiptPdf(payment, opts = {}) {
+  const built = buildPaymentReceiptPdf(payment, await withCustomerOutstanding(payment, opts));
   if (!built) return;
   built.doc.save(built.filename);
 }
 
 /** Create a blob URL for in-app preview. Caller must revoke with URL.revokeObjectURL. */
-export function paymentReceiptPdfBlobUrl(payment, opts = {}) {
-  const built = buildPaymentReceiptPdf(payment, opts);
+export async function paymentReceiptPdfBlobUrl(payment, opts = {}) {
+  const built = buildPaymentReceiptPdf(payment, await withCustomerOutstanding(payment, opts));
   if (!built) return null;
   const blob = built.doc.output('blob');
   return { url: URL.createObjectURL(blob), filename: built.filename };

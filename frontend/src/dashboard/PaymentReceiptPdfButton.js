@@ -54,7 +54,7 @@ export default function PaymentReceiptPdfButton({ payment }) {
     setBusy(true);
     try {
       const shop = await loadShopDetailsForPdf();
-      const preview = paymentReceiptPdfBlobUrl(payment, shop);
+      const preview = await paymentReceiptPdfBlobUrl(payment, shop);
       if (!preview) return;
       if (previewUrlRef.current) {
         URL.revokeObjectURL(previewUrlRef.current);

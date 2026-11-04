@@ -78,6 +78,10 @@ const {
   isStockItemUnloadPriceEnabled,
 } = require('./models/stockItemUnloadPriceSettingsStore');
 const {
+  readPaymentReceiptSettings,
+  writePaymentReceiptSettings,
+} = require('./models/paymentReceiptSettingsStore');
+const {
   isSmtpConfigured,
   sendDataBackupEmail,
   startBackupScheduler,
@@ -444,6 +448,8 @@ const {
   promotionType,
   isFreeBagPromotion,
   promotionCreditAmount,
+  nextCreditNoteNumber,
+  assignMissingTargetCreditNoteNumbers,
   computeInvoiceDiscountAmount,
 } = require('./models/promotionsStore');
 const {
@@ -704,6 +710,33 @@ app.put('/api/stock-item-unload-price-settings', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save stock item unload price settings' });
+  }
+});
+
+app.get('/api/payment-receipt-settings', async (req, res) => {
+  try {
+    const settings = await readPaymentReceiptSettings();
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load payment receipt settings' });
+  }
+});
+
+app.put('/api/payment-receipt-settings', async (req, res) => {
+  const auth = getAuthFromRequest(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Sign in again as admin to change payment receipt settings' });
+  }
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can change payment receipt settings' });
+  }
+  try {
+    const settings = await writePaymentReceiptSettings(req.body || {});
+    res.json(settings);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save payment receipt settings' });
   }
 });
 
@@ -5515,6 +5548,13 @@ async function buildPromotionPayload(body, meta = {}) {
 app.get('/api/promotions', async (req, res) => {
   try {
     const rows = await readPromotions();
+    if (assignMissingTargetCreditNoteNumbers(rows)) {
+      try {
+        await writePromotions(rows);
+      } catch (err) {
+        console.error('credit note number backfill', err);
+      }
+    }
     const sorted = [...rows].sort((a, b) => {
       const da = String(a.date || '');
       const db = String(b.date || '');
@@ -5549,6 +5589,10 @@ app.post('/api/promotions', async (req, res) => {
     };
 
     const promos = await readPromotions();
+    assignMissingTargetCreditNoteNumbers(promos);
+    if (promotionType(row) === PROMOTION_TYPES.TARGET_PROMOTION && !String(row.creditNoteNumber ?? '').trim()) {
+      row.creditNoteNumber = nextCreditNoteNumber(promos);
+    }
     promos.push(row);
     await writePromotions(promos);
 
@@ -5599,6 +5643,7 @@ app.patch('/api/promotions/:id', async (req, res) => {
     }
 
     const promos = await readPromotions();
+    assignMissingTargetCreditNoteNumbers(promos);
     const idx = promos.findIndex((p) => p.id === id);
     if (idx < 0) {
       return res.status(404).json({ error: 'Promotion not found' });
@@ -5620,6 +5665,10 @@ app.patch('/api/promotions/:id', async (req, res) => {
       updatedBy,
       updatedAt: new Date().toISOString(),
     };
+    if (promotionType(row) === PROMOTION_TYPES.TARGET_PROMOTION) {
+      row.creditNoteNumber =
+        String(existing.creditNoteNumber ?? '').trim() || nextCreditNoteNumber(promos);
+    }
 
     promos[idx] = row;
     await writePromotions(promos);

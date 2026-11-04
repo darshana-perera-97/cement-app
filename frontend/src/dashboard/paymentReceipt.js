@@ -76,8 +76,9 @@ function invoiceEffectFromRow(row) {
     row.settled === true ||
     (remainingAfter != null && remainingAfter <= 0.009) ||
     (billTotal > 0 && appliedAmount >= billTotal - 0.009);
+  const billId = String(row.billId ?? row.id ?? '').trim();
   return {
-    billId: String(row.billId ?? row.id ?? '').trim(),
+    billId,
     invoiceNumber: String(row.invoiceNumber ?? '').trim(),
     date: String(row.billDate ?? row.date ?? '').trim(),
     details: String(row.details ?? '').trim(),
@@ -86,7 +87,81 @@ function invoiceEffectFromRow(row) {
     remainingAfter,
     settled,
     taggedOnly: Boolean(row.taggedOnly),
+    isReturnCheque:
+      Boolean(row.isReturnCheque) || billId.startsWith('return-cheque:'),
   };
+}
+
+/** A settled return cheque, not a sales invoice. */
+export function isReturnChequeEffect(inv) {
+  if (!inv || typeof inv !== 'object') return false;
+  if (inv.isReturnCheque) return true;
+  const billId = String(inv.billId ?? inv.id ?? '').trim();
+  if (billId.startsWith('return-cheque:')) return true;
+  const details = String(inv.details ?? '').trim().toLowerCase();
+  if (details === 'return cheque' || details.startsWith('return cheque')) return true;
+  const num = String(inv.invoiceNumber ?? '').trim().toLowerCase();
+  return num === 'return cheque' || num.startsWith('return cheque ') || num.startsWith('return #');
+}
+
+/** "Return cheque #123", or "Return cheque" when the cheque has no number. */
+export function returnChequeSettleLabel(invoiceNumber) {
+  const raw = String(invoiceNumber ?? '').trim();
+  if (!raw || /^return cheque$/i.test(raw)) return 'Return cheque';
+  let num = raw
+    .replace(/^return cheque\s*/i, '')
+    .replace(/^return\s*#\s*/i, '')
+    .replace(/^rc\s+/i, '')
+    .trim()
+    .replace(/^#/, '')
+    .trim();
+  if (!num || /^return cheque$/i.test(num)) return 'Return cheque';
+  return `Return cheque #${num}`;
+}
+
+/** Title on a printed receipt. Names a return cheque only when the receipt settles nothing else. */
+export function receiptInvoiceTitle(inv, { onlyReturnCheque = false } = {}) {
+  if (isReturnChequeEffect(inv)) {
+    if (onlyReturnCheque) return returnChequeSettleLabel(inv?.invoiceNumber);
+    const labeled = returnChequeSettleLabel(inv?.invoiceNumber);
+    if (labeled === 'Return cheque') return 'Return cheque';
+    return `#${labeled.slice('Return cheque #'.length)}`;
+  }
+  const num = String(inv?.invoiceNumber ?? '').trim();
+  if (num) return num.toLowerCase() === 'opening' ? 'Opening balance' : `Invoice ${num}`;
+  const details = String(inv?.details ?? '').trim();
+  const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
+  if (invMatch) {
+    const extracted = invMatch[1].trim();
+    if (extracted.toLowerCase() === 'opening') return 'Opening balance';
+    return `Invoice ${extracted}`;
+  }
+  return 'Invoice';
+}
+
+/**
+ * Outstanding on the invoice immediately before this payment was applied.
+ * Remaining after the payment, plus the amount this receipt applied.
+ */
+export function remainingBeforePayment(inv) {
+  if (!inv || inv.taggedOnly) return null;
+  const applied = roundMoney(inv.appliedAmount);
+  if (inv.remainingAfter == null || inv.remainingAfter === '') {
+    const total = roundMoney(inv.billTotal);
+    return total > 0 ? total : null;
+  }
+  const after = Math.round(Math.max(0, Number(inv.remainingAfter) || 0) * 100) / 100;
+  return Math.round((after + applied) * 100) / 100;
+}
+
+/** Invoice total, with the pre-payment balance in brackets: "125,000.00 (40,000.00)". */
+export function invoiceAmountWithPriorBalance(inv, formatAmount) {
+  const total = roundMoney(inv?.billTotal);
+  if (!(total > 0) || typeof formatAmount !== 'function') return '';
+  const amount = formatAmount(total);
+  const before = remainingBeforePayment(inv);
+  if (before == null) return amount;
+  return `${amount} (${formatAmount(before)})`;
 }
 
 /** Invoices this payment settled or applied to — for receipts and payment details. */
@@ -113,22 +188,66 @@ export function getPaymentReceiptInvoices(payment) {
   );
 }
 
-/** Comma-separated bill invoice numbers this payment was applied to. */
-export function paymentInvoiceNumberLabel(payment) {
-  const labels = [];
-  const seen = new Set();
+function invoiceEffectLabel(inv) {
+  if (isReturnChequeEffect(inv)) {
+    const labeled = returnChequeSettleLabel(inv?.invoiceNumber);
+    if (labeled === 'Return cheque') return 'Return cheque';
+    return `#${labeled.slice('Return cheque #'.length)}`;
+  }
+  let label = String(inv?.invoiceNumber ?? '').trim();
+  if (!label) {
+    const details = String(inv?.details ?? '').trim();
+    const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
+    if (invMatch) label = invMatch[1].trim();
+  }
+  if (!label) return '';
+  return label.toLowerCase() === 'opening' ? 'Opening' : label;
+}
+
+/** One entry per invoice this payment was applied to, with the amount applied. */
+export function paymentInvoiceLines(payment) {
+  const lines = [];
+  const seen = new Map();
   for (const inv of getPaymentReceiptInvoices(payment)) {
-    let label = String(inv.invoiceNumber ?? '').trim();
-    if (!label) {
-      const details = String(inv.details ?? '').trim();
-      const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
-      if (invMatch) label = invMatch[1].trim();
-    }
+    const label = invoiceEffectLabel(inv);
     if (!label) continue;
     const key = label.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    labels.push(key === 'opening' ? 'Opening' : label);
+    const appliedAmount = roundMoney(inv.appliedAmount);
+    const billDate = String(inv.date ?? '').slice(0, 10);
+    const billAmount = roundMoney(inv.billTotal);
+    const billId = String(inv.billId ?? '').trim();
+    const returnCheque = isReturnChequeEffect(inv);
+    const existing = seen.get(key);
+    if (existing) {
+      existing.appliedAmount = roundMoney(existing.appliedAmount + appliedAmount);
+      if (returnCheque) existing.isReturnCheque = true;
+      if (!existing.billId && billId) existing.billId = billId;
+      if (!existing.billDate && /^\d{4}-\d{2}-\d{2}$/.test(billDate)) existing.billDate = billDate;
+      if (!(existing.billAmount > 0) && billAmount > 0) existing.billAmount = billAmount;
+      continue;
+    }
+    const line = {
+      invoiceNumber: label,
+      appliedAmount,
+      billId,
+      billDate: /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : '',
+      billAmount,
+      isReturnCheque: returnCheque,
+    };
+    seen.set(key, line);
+    lines.push(line);
   }
-  return labels.join(', ');
+  if (lines.length > 0 && lines.every((line) => line.isReturnCheque)) {
+    for (const line of lines) {
+      line.invoiceNumber = returnChequeSettleLabel(line.invoiceNumber);
+    }
+  }
+  return lines;
+}
+
+/** Comma-separated bill invoice numbers this payment was applied to. */
+export function paymentInvoiceNumberLabel(payment) {
+  return paymentInvoiceLines(payment)
+    .map((line) => line.invoiceNumber)
+    .join(', ');
 }

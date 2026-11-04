@@ -36,6 +36,7 @@ const ENTITY_RULES = [
   ['/api/stock-update-settings', 'stock update settings'],
   ['/api/collector-unload-price-settings', 'collector unload price settings'],
   ['/api/stock-item-unload-price-settings', 'unload price settings'],
+  ['/api/payment-receipt-settings', 'payment receipt settings'],
   ['/api/backup/settings', 'backup settings'],
   ['/api/backup/email', 'data backup'],
   ['/api/collection-day-close', 'collection day'],

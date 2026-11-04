@@ -1,5 +1,12 @@
 import { formatReportItemLabel, getCachedBrands } from './brandTheme';
-import { getPaymentCheques } from './paymentCheques';
+import {
+  cashPortion,
+  cdmPortion,
+  chequePortion,
+  getPaymentCheques,
+  onlineTransferPortion,
+} from './paymentCheques';
+import { paymentInvoiceLines, returnChequeSettleLabel } from './paymentReceipt';
 import {
   buildBillSettledDateLookup,
   chequeRealizeYmd,
@@ -181,6 +188,23 @@ function paymentMatchesRecordedByKeys(payment, recordedByKeys) {
   return recordedByKeys.includes(by);
 }
 
+function returnOnlyPaymentIds(allocs) {
+  const byPayment = new Map();
+  for (const alloc of allocs || []) {
+    const pid = String(alloc?.paymentId ?? '').trim();
+    if (!pid) continue;
+    if (!byPayment.has(pid)) byPayment.set(pid, []);
+    byPayment.get(pid).push(alloc);
+  }
+  const ids = new Set();
+  for (const [pid, list] of byPayment) {
+    if (list.length > 0 && list.every((alloc) => alloc.bill?.isReturnCheque || alloc.isReturnCheque)) {
+      ids.add(pid);
+    }
+  }
+  return ids;
+}
+
 function recorderDisplayName(recordedBy, staff = []) {
   const raw = String(recordedBy ?? '').trim();
   if (!raw) return '—';
@@ -223,6 +247,9 @@ export function buildSettledCollectionsRows(
   const rows = [];
   const commissionBase = [];
   let rowSeq = 0;
+  const returnChequeOnlyPayments = returnOnlyPaymentIds(
+    [...allocsByPaymentId.values()].flat(),
+  );
 
   const pushShareRows = ({ payment, alloc, shopName, collectorName }) => {
     const paymentDate = String(alloc.paymentDate || payment?.date || '').slice(0, 10);
@@ -232,7 +259,11 @@ export function buildSettledCollectionsRows(
     const bill = alloc.bill;
     const billId = String(bill?.id ?? '').trim();
     const billDate = String(bill?.date ?? '').slice(0, 10);
-    const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+    const rawInvoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+    const mentionReturnCheque =
+      Boolean(bill?.isReturnCheque) &&
+      returnChequeOnlyPayments.has(String(alloc.paymentId ?? '').trim());
+    const invoiceNumber = mentionReturnCheque ? returnChequeSettleLabel(rawInvoiceNumber) : rawInvoiceNumber;
     const billAmount = round2(bill?.totalAmount);
     const settledDate = billId ? settledLookup.get(billId) || '' : '';
     const paymentSlices = paymentSettleSlices(payment, paymentDate);
@@ -255,11 +286,11 @@ export function buildSettledCollectionsRows(
           paymentId: alloc.paymentId,
           billId,
           date: paymentDate,
-          invoiceNumber: bill?.isReturnCheque ? `Return cheque ${invoiceNumber}` : invoiceNumber,
+          invoiceNumber,
           shopName,
-          bagType: bill?.isReturnCheque ? 'Return cheque' : share.bagType,
-          brandKey: bill?.isReturnCheque ? '' : share.brandKey,
-          bagCount: bill?.isReturnCheque ? 0 : share.bagCount,
+          bagType: mentionReturnCheque ? 'Return cheque' : share.bagType,
+          brandKey: mentionReturnCheque ? '' : share.brandKey,
+          bagCount: mentionReturnCheque ? 0 : share.bagCount,
           amount: share.amount,
           billDate,
           settledDate,
@@ -473,6 +504,8 @@ export function buildCollectorCollectionRows(
     const collectorName = String(cust?.collectorName ?? '').trim() || '—';
     const shopName = String(cust?.name ?? '').trim() || '—';
 
+    const returnChequeOnlyPayments = returnOnlyPaymentIds(allocations);
+
     for (const alloc of allocations) {
       const paymentDate = String(alloc.paymentDate ?? '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) continue;
@@ -480,7 +513,13 @@ export function buildCollectorCollectionRows(
       const bill = alloc.bill;
       const billId = String(bill?.id ?? '').trim();
       const billDate = String(bill?.date ?? '').slice(0, 10);
-      const invoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+      const rawInvoiceNumber = String(bill?.invoiceNumber ?? '').trim() || '—';
+      const mentionReturnCheque =
+        Boolean(bill?.isReturnCheque) &&
+        returnChequeOnlyPayments.has(String(alloc.paymentId ?? '').trim());
+      const invoiceNumber = mentionReturnCheque
+        ? returnChequeSettleLabel(rawInvoiceNumber)
+        : rawInvoiceNumber;
       const billAmount = round2(bill?.totalAmount);
       const settledDate = billId ? settledLookup.get(billId) || '' : '';
       const payment = paymentById.get(String(alloc.paymentId ?? '').trim());
@@ -506,9 +545,9 @@ export function buildCollectorCollectionRows(
             date: paymentDate,
             invoiceNumber,
             shopName,
-            bagType: bill?.isReturnCheque ? 'Return cheque' : share.bagType,
-            brandKey: bill?.isReturnCheque ? '' : share.brandKey,
-            bagCount: bill?.isReturnCheque ? 0 : share.bagCount,
+            bagType: mentionReturnCheque ? 'Return cheque' : share.bagType,
+            brandKey: mentionReturnCheque ? '' : share.brandKey,
+            bagCount: mentionReturnCheque ? 0 : share.bagCount,
             amount: share.amount,
             billDate,
             settledDate,
@@ -542,15 +581,229 @@ export function buildCollectorCollectionRows(
   return rows;
 }
 
+/** Local date and time used to order All collections, earliest first. */
+function collectionRecordedAt(value, fallbackYmd) {
+  const raw = String(value ?? '').trim();
+  const parsed = raw ? Date.parse(raw) : NaN;
+  if (Number.isFinite(parsed) && raw.length > 10) {
+    const d = new Date(parsed);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return { sortAt: parsed, when: `${y}-${m}-${day} ${hh}:${mm}` };
+  }
+  const ymd = isYmd(raw) ? raw.slice(0, 10) : String(fallbackYmd ?? '').slice(0, 10);
+  const sortAt = Date.parse(`${ymd}T00:00:00`);
+  return { sortAt: Number.isFinite(sortAt) ? sortAt : 0, when: ymd };
+}
+
+/** Split an amount across weights so the shares add back up to the amount. */
+function splitRound2(total, weights) {
+  const target = round2(total);
+  const ws = (Array.isArray(weights) ? weights : []).map((w) => Math.max(0, round2(w)));
+  if (ws.length === 0) return [];
+  if (target === 0) return ws.map(() => 0);
+  const sumW = round2(ws.reduce((s, w) => s + w, 0));
+  if (!(sumW > 0)) {
+    const out = ws.map(() => 0);
+    out[out.length - 1] = target;
+    return out;
+  }
+  const shares = ws.map((w) => round2((target * w) / sumW));
+  const drift = round2(target - shares.reduce((s, n) => s + n, 0));
+  if (drift !== 0) {
+    const idx = ws.reduce((best, w, i) => (w > ws[best] ? i : best), 0);
+    shares[idx] = round2(shares[idx] + drift);
+  }
+  return shares;
+}
+
+/**
+ * Lines for one receipt. A payment applied to more than one invoice becomes one line per invoice.
+ * Amounts add up to the full receipt.
+ */
+function collectionLine(invoice, amount) {
+  const billAmount = round2(invoice?.billAmount);
+  const billId = String(invoice?.billId ?? '').trim();
+  return {
+    invoiceNumber: invoice?.invoiceNumber || '—',
+    amount: round2(amount),
+    billId,
+    billDate: /^\d{4}-\d{2}-\d{2}$/.test(String(invoice?.billDate ?? '').slice(0, 10))
+      ? String(invoice.billDate).slice(0, 10)
+      : '',
+    billAmount: billAmount > 0 ? billAmount : null,
+  };
+}
+
+function collectionLinesForPayment(payment, credit) {
+  const invoices = paymentInvoiceLines(payment);
+  if (invoices.length <= 1) {
+    return [collectionLine(invoices[0], credit)];
+  }
+  const applied = invoices.map((line) => round2(line.appliedAmount));
+  const appliedSum = round2(applied.reduce((s, n) => s + n, 0));
+  if (appliedSum > 0 && Math.abs(appliedSum - credit) < 0.01) {
+    return invoices.map((line, i) => collectionLine(line, applied[i]));
+  }
+  if (appliedSum > credit && appliedSum > 0) {
+    const shares = splitRound2(credit, applied);
+    return invoices.map((line, i) => collectionLine(line, shares[i]));
+  }
+  if (appliedSum <= 0) {
+    const shares = splitRound2(
+      credit,
+      invoices.map(() => 1),
+    );
+    return invoices.map((line, i) => collectionLine(line, shares[i]));
+  }
+  const lines = invoices.map((line, i) => collectionLine(line, applied[i]));
+  const gap = round2(credit - appliedSum);
+  if (gap > 0) lines.push(collectionLine(null, gap));
+  return lines;
+}
+
+/**
+ * Every receipt recorded in the period. A payment that affects more than one invoice is one line per invoice.
+ * Amounts add up to the full receipt. Cheques returned in the period are separate deductions.
+ * Rows are ordered by recorded time, earliest first.
+ */
+export function buildAllCollectionsRows(
+  payments,
+  { from, to, recordedByKeys = null, staff = [], settledByBillId = null } = {},
+) {
+  const keys = Array.isArray(recordedByKeys)
+    ? recordedByKeys.map(normalizeRecorderKey).filter(Boolean)
+    : null;
+  const settledLookup = settledByBillId instanceof Map ? settledByBillId : null;
+  const rows = [];
+
+  for (const p of payments || []) {
+    if (keys && !paymentMatchesRecordedByKeys(p, keys)) continue;
+    const credit = paymentSettlementCredit(p);
+    if (credit <= 0) continue;
+    const date = String(p.date ?? '').slice(0, 10);
+    if (!isYmd(date)) continue;
+    if (from && to && !inDateRange(date, from, to)) continue;
+    const pid = String(p.id ?? '').trim();
+    const recorded = collectionRecordedAt(p.createdAt, date);
+    const shopName = String(p.customerName ?? '').trim() || '—';
+    const collectorName = recorderDisplayName(p.recordedBy, staff);
+    const lines = collectionLinesForPayment(p, credit);
+    lines.forEach((line, index) => {
+      rows.push({
+        rowKey: `${pid || date}-${line.invoiceNumber}-${index}`,
+        date,
+        when: recorded.when,
+        sortAt: recorded.sortAt,
+        shopName,
+        invoiceNumber: line.invoiceNumber,
+        billDate: line.billDate || '',
+        daysFromBill: line.billDate ? daysBetweenYmd(line.billDate, date) : null,
+        billAmount: line.billAmount,
+        billSettled: line.billId ? Boolean(settledLookup?.has(line.billId)) : null,
+        amount: line.amount,
+        cash: index === 0 ? round2(cashPortion(p)) : 0,
+        cheque: index === 0 ? round2(chequePortion(p)) : 0,
+        cdm: index === 0 ? round2(cdmPortion(p)) : 0,
+        bankTransfer: index === 0 ? round2(onlineTransferPortion(p)) : 0,
+        collectorName,
+        isReturnDeduction: false,
+      });
+    });
+  }
+
+  for (const p of payments || []) {
+    if (p?.cancelled) continue;
+    if (keys && !paymentMatchesRecordedByKeys(p, keys)) continue;
+    const pid = String(p.id ?? '').trim();
+    for (const c of getPaymentCheques(p)) {
+      if (!c.chequeReturned) continue;
+      const returnDate = String(c.chequeReturnedAt || '').slice(0, 10);
+      if (!isYmd(returnDate)) continue;
+      if (from && to && !inDateRange(returnDate, from, to)) continue;
+      const amount = round2(c.amount);
+      if (amount <= 0) continue;
+      const recorded = collectionRecordedAt(c.chequeReturnedAt, returnDate);
+      rows.push({
+        rowKey: `return-${pid || returnDate}-${c.id || rows.length}`,
+        date: recorded.when.slice(0, 10) || returnDate,
+        when: recorded.when,
+        sortAt: recorded.sortAt,
+        shopName: String(p.customerName ?? '').trim() || '—',
+        invoiceNumber: c.chequeNumber ? `Return #${c.chequeNumber}` : 'Return cheque',
+        billDate: '',
+        daysFromBill: null,
+        billAmount: null,
+        billSettled: null,
+        amount: -amount,
+        cash: 0,
+        cheque: -amount,
+        cdm: 0,
+        bankTransfer: 0,
+        collectorName: recorderDisplayName(p.recordedBy, staff),
+        isReturnDeduction: true,
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    const byTime = (Number(a.sortAt) || 0) - (Number(b.sortAt) || 0);
+    if (byTime !== 0) return byTime;
+    const byShop = a.shopName.localeCompare(b.shopName);
+    if (byShop !== 0) return byShop;
+    return String(a.invoiceNumber).localeCompare(String(b.invoiceNumber));
+  });
+
+  return rows;
+}
+
+/** All collections summary. Ranges do not overlap: day 30 is only in 22–30, and 31–35 starts at day 31. */
+export const ALL_COLLECTION_DAY_BUCKETS = [
+  { key: '0-14', label: '0–14 days', min: 0, max: 14 },
+  { key: '15-21', label: '15–21 days', min: 15, max: 21 },
+  { key: '22-30', label: '22–30 days', min: 22, max: 30 },
+  { key: '31-35', label: '31–35 days', min: 31, max: 35 },
+  { key: 'more than 35', label: 'More than 35 days', min: 36, max: Infinity },
+];
+
+export function allCollectionBucketForDays(days) {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d < 0) return null;
+  const bucket = ALL_COLLECTION_DAY_BUCKETS.find((b) => d >= b.min && d <= b.max);
+  return bucket ? bucket.key : null;
+}
+
+/** One band per line, using days from the billed date. Lines without a billed date are left out. */
+export function summarizeAllCollectionsByDays(rows) {
+  const totals = Object.fromEntries(
+    ALL_COLLECTION_DAY_BUCKETS.map((b) => [b.key, { lineCount: 0, amount: 0 }]),
+  );
+  for (const row of rows || []) {
+    if (row?.daysFromBill == null || row.daysFromBill === '') continue;
+    const key = allCollectionBucketForDays(row.daysFromBill);
+    if (!key || !totals[key]) continue;
+    totals[key].lineCount += 1;
+    totals[key].amount = round2(totals[key].amount + (Number(row.amount) || 0));
+  }
+  return totals;
+}
+
+/** Summary bands from each line's Days, adding that line's Amount. Day 30 is in both 22–30 and 30–35. */
 export function summarizeCollectionsByBucket(rows) {
   const totals = Object.fromEntries(
     COLLECTION_DAY_BUCKETS.map((b) => [b.key, { lineCount: 0, amount: 0 }]),
   );
   for (const row of rows || []) {
-    const key = row.commissionBucket || commissionBucketForDays(row.daysToSettle);
-    if (!key || !totals[key]) continue;
-    totals[key].lineCount += 1;
-    totals[key].amount = round2(totals[key].amount + row.amount);
+    if (row?.daysToSettle == null || row.daysToSettle === '') continue;
+    const amount = Number(row.amount) || 0;
+    for (const key of summaryBucketsForDays(row.daysToSettle)) {
+      if (!totals[key]) continue;
+      totals[key].lineCount += 1;
+      totals[key].amount = round2(totals[key].amount + amount);
+    }
   }
   return totals;
 }

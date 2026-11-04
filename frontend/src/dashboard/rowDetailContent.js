@@ -833,11 +833,19 @@ function PromotionDetailContent({ row }) {
       <SummaryGrid>
         <SummaryField label="Type" value={promoKind} />
         <SummaryField label="Date" value={displayText(row.date)} />
-        <SummaryField
-          label="Bill / Invoice"
-          value={row.invoiceNumber || (row.billNumber ? `#${row.billNumber}` : '—')}
-          valueClassName="font-mono"
-        />
+        {type === 'target_promotion' ? (
+          <SummaryField
+            label="Credit note"
+            value={displayText(row.creditNoteNumber)}
+            valueClassName="font-mono"
+          />
+        ) : (
+          <SummaryField
+            label="Bill / Invoice"
+            value={row.invoiceNumber || (row.billNumber ? `#${row.billNumber}` : '—')}
+            valueClassName="font-mono"
+          />
+        )}
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
         {String(row.customerId ?? '').trim() ? (
           <SummaryField label="Customer ID" value={String(row.customerId).trim()} valueClassName="font-mono" />

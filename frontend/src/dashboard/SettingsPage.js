@@ -5,6 +5,7 @@ import { authFetch, getFirstAllowedDashboardPath, isAdmin } from '../auth';
 import { MAX_LOW_STOCK_ALERTS, notifyStockUpdateSettingsChanged } from '../stockUpdateSettings';
 import { notifyCollectorUnloadPriceSettingsChanged } from '../collectorUnloadPriceSettings';
 import { notifyStockItemUnloadPriceSettingsChanged } from '../stockItemUnloadPriceSettings';
+import { notifyPaymentReceiptSettingsChanged } from '../paymentReceiptSettings';
 import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel } from './brandTheme';
 import {
@@ -170,6 +171,11 @@ export default function SettingsPage() {
   const [stockItemUnloadPriceSaving, setStockItemUnloadPriceSaving] = useState(false);
   const [stockItemUnloadPriceError, setStockItemUnloadPriceError] = useState(null);
   const [stockItemUnloadPriceOk, setStockItemUnloadPriceOk] = useState(false);
+  const [printCustomerOutstanding, setPrintCustomerOutstanding] = useState(false);
+  const [paymentReceiptLoading, setPaymentReceiptLoading] = useState(true);
+  const [paymentReceiptSaving, setPaymentReceiptSaving] = useState(false);
+  const [paymentReceiptError, setPaymentReceiptError] = useState(null);
+  const [paymentReceiptOk, setPaymentReceiptOk] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -256,6 +262,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadPaymentReceiptSettings = useCallback(async () => {
+    setPaymentReceiptLoading(true);
+    setPaymentReceiptError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/payment-receipt-settings`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPaymentReceiptError(data.error || 'Failed to load payment receipt settings');
+        return;
+      }
+      setPrintCustomerOutstanding(Boolean(data.printCustomerOutstanding));
+    } catch {
+      setPaymentReceiptError('Could not reach the server');
+    } finally {
+      setPaymentReceiptLoading(false);
+    }
+  }, []);
+
   const loadStockItemUnloadPrice = useCallback(async () => {
     setStockItemUnloadPriceLoading(true);
     setStockItemUnloadPriceError(null);
@@ -280,7 +304,15 @@ export default function SettingsPage() {
     loadStockUpdate();
     loadCollectorUnloadPrice();
     loadStockItemUnloadPrice();
-  }, [load, loadBackupStatus, loadStockUpdate, loadCollectorUnloadPrice, loadStockItemUnloadPrice]);
+    loadPaymentReceiptSettings();
+  }, [
+    load,
+    loadBackupStatus,
+    loadStockUpdate,
+    loadCollectorUnloadPrice,
+    loadStockItemUnloadPrice,
+    loadPaymentReceiptSettings,
+  ]);
 
   const persistStockUpdateSettings = useCallback(
     async ({
@@ -490,6 +522,32 @@ export default function SettingsPage() {
       setStockItemUnloadPriceError(err.message || 'Could not save stock item unload price settings');
     } finally {
       setStockItemUnloadPriceSaving(false);
+    }
+  };
+
+  const handleSavePaymentReceipt = async (e) => {
+    e.preventDefault();
+    setPaymentReceiptSaving(true);
+    setPaymentReceiptError(null);
+    setPaymentReceiptOk(false);
+    try {
+      const res = await authFetch(`${apiBase}/api/payment-receipt-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printCustomerOutstanding: Boolean(printCustomerOutstanding) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not save payment receipt settings');
+      }
+      const nextEnabled = Boolean(data.printCustomerOutstanding);
+      setPrintCustomerOutstanding(nextEnabled);
+      notifyPaymentReceiptSettingsChanged(nextEnabled);
+      setPaymentReceiptOk(true);
+    } catch (err) {
+      setPaymentReceiptError(err.message || 'Could not save payment receipt settings');
+    } finally {
+      setPaymentReceiptSaving(false);
     }
   };
 
@@ -767,6 +825,60 @@ export default function SettingsPage() {
                 className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
               >
                 {stockItemUnloadPriceSaving ? 'Saving…' : 'Save unload price for items'}
+              </button>
+            </div>
+          </section>
+        </form>
+      )}
+
+      {paymentReceiptError ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {paymentReceiptError}
+        </p>
+      ) : null}
+
+      {paymentReceiptLoading ? (
+        <div className="flex justify-center py-8">
+          <LoadingSpinner size="lg" />
+        </div>
+      ) : (
+        <form onSubmit={handleSavePaymentReceipt} className="space-y-4">
+          {paymentReceiptOk ? (
+            <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-emerald-100">
+              Payment receipt settings saved.
+            </p>
+          ) : null}
+          <section className="rounded-[20px] bg-white p-5 shadow-lg shadow-slate-200/40 ring-1 ring-slate-100 sm:p-6">
+            <h2 className="text-sm font-bold text-slate-900">Customer payment receipt</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Choose whether a customer’s total outstanding balance is printed on the payment receipt.
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/35"
+                checked={printCustomerOutstanding}
+                onChange={(e) => {
+                  setPaymentReceiptOk(false);
+                  setPrintCustomerOutstanding(e.target.checked);
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-slate-900">
+                  Print total outstanding on the payment receipt
+                </span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  When this is on, the Bluetooth receipt and the receipt PDF include the customer’s total amount still owed. When it is off, that line is left off the receipt.
+                </span>
+              </span>
+            </label>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="submit"
+                disabled={paymentReceiptSaving}
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {paymentReceiptSaving ? 'Saving…' : 'Save receipt settings'}
               </button>
             </div>
           </section>

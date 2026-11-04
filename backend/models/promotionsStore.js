@@ -48,6 +48,50 @@ function promotionCreditAmount(row) {
   return toNonNegMoney(row.discountAmount);
 }
 
+function formatCreditNoteNumber(n) {
+  return `CN-${String(n).padStart(3, '0')}`;
+}
+
+function highestCreditNoteSerial(rows) {
+  const re = /^CN-(\d+)$/i;
+  let max = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const match = String(row?.creditNoteNumber ?? '').trim().match(re);
+    if (match) max = Math.max(max, parseInt(match[1], 10) || 0);
+  }
+  return max;
+}
+
+function nextCreditNoteNumber(rows) {
+  return formatCreditNoteNumber(highestCreditNoteSerial(rows) + 1);
+}
+
+/** Give every target promotion a stable CN-001 style number. Returns true when a row changed. */
+function assignMissingTargetCreditNoteNumbers(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  let max = highestCreditNoteSerial(list);
+  const pending = [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (promotionType(list[i]) !== PROMOTION_TYPES.TARGET_PROMOTION) continue;
+    if (String(list[i].creditNoteNumber ?? '').trim()) continue;
+    pending.push(i);
+  }
+  pending.sort((ia, ib) => {
+    const a = list[ia];
+    const b = list[ib];
+    const dateCmp = String(a.date || '').localeCompare(String(b.date || ''));
+    if (dateCmp !== 0) return dateCmp;
+    return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+  let changed = false;
+  for (const index of pending) {
+    max += 1;
+    list[index] = { ...list[index], creditNoteNumber: formatCreditNoteNumber(max) };
+    changed = true;
+  }
+  return changed;
+}
+
 function sumPromotionCreditsForBill(promotions, billId, type) {
   const id = String(billId ?? '').trim();
   if (!id) return 0;
@@ -142,6 +186,8 @@ module.exports = {
   isFreeBagPromotion,
   isLedgerCreditPromotion,
   promotionCreditAmount,
+  nextCreditNoteNumber,
+  assignMissingTargetCreditNoteNumbers,
   sumInvoiceDiscountForBill,
   sumRuleCashbackForBill,
   computeInvoiceDiscountAmount,

@@ -2,7 +2,13 @@ import { getUsername } from '../auth';
 import { formatBrandLabel, getCachedBrands } from '../dashboard/brandTheme';
 import { collectedByPrintLabel, invoiceCollectorName } from '../dashboard/collectorPrintName';
 import { cashPortion, cdmPortion, chequePortion, getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, onlineTransferPortion } from '../dashboard/paymentCheques';
-import { getPaymentReceiptInvoices } from '../dashboard/paymentReceipt';
+import {
+  getPaymentReceiptInvoices,
+  invoiceAmountWithPriorBalance,
+  isReturnChequeEffect,
+  receiptInvoiceTitle,
+} from '../dashboard/paymentReceipt';
+import { customerOutstandingForPaymentReceipt } from '../paymentReceiptSettings';
 import { settleBeforeYmd } from '../dashboard/pendingBills';
 import { printEscPosLines } from './bluetoothPrinter';
 
@@ -58,19 +64,6 @@ function accountNoFromSnap(snap) {
     return String(snap.accountNumber ?? '').trim();
   }
   return '';
-}
-
-function invoiceTitle(inv) {
-  const num = String(inv.invoiceNumber ?? '').trim();
-  if (num) return num.toLowerCase() === 'opening' ? 'Opening balance' : `Invoice ${num}`;
-  const details = String(inv.details ?? '').trim();
-  const invMatch = details.match(/^Inv\s+(.+?)(?:\s*·|$)/i);
-  if (invMatch) {
-    const extracted = invMatch[1].trim();
-    if (extracted.toLowerCase() === 'opening') return 'Opening balance';
-    return `Invoice ${extracted}`;
-  }
-  return 'Invoice';
 }
 
 function shopLines(shop, { includeAddress = true } = {}) {
@@ -174,20 +167,25 @@ function shopIdLines(id) {
 function pushInvoiceLines(lines, payment) {
   const invoices = getPaymentReceiptInvoices(payment);
   if (invoices.length === 0) return;
+  const onlyReturnCheque = invoices.every((inv) => isReturnChequeEffect(inv));
 
   lines.push({ kind: 'align', value: 'center' });
-  lines.push({ text: 'INVOICES', bold: true });
+  lines.push({ text: onlyReturnCheque ? 'RETURN CHEQUE' : 'INVOICES', bold: true });
   lines.push({ kind: 'rule' });
   lines.push({ kind: 'align', value: 'left' });
 
   invoices.forEach((inv) => {
     lines.push({
       kind: 'cols',
-      left: invoiceTitle(inv),
+      left: receiptInvoiceTitle(inv, { onlyReturnCheque }),
       right: inv.date ? formatDate(inv.date) : '',
     });
     if (inv.billTotal > 0) {
-      lines.push({ kind: 'cols', left: 'Invoice amt', right: money(inv.billTotal) });
+      lines.push({
+        kind: 'cols',
+        left: 'Invoice amt',
+        right: invoiceAmountWithPriorBalance(inv, money),
+      });
     }
     if (inv.remainingAfter != null) {
       lines.push({ kind: 'cols', left: 'Remaining', right: money(inv.remainingAfter) });
@@ -195,6 +193,18 @@ function pushInvoiceLines(lines, payment) {
   });
 
   lines.push({ kind: 'rule' });
+}
+
+function pushCustomerOutstanding(lines, payment) {
+  if (payment?.customerOutstanding == null || payment.customerOutstanding === '') return;
+  const amount = Number(payment.customerOutstanding);
+  if (!Number.isFinite(amount)) return;
+  lines.push({
+    kind: 'cols',
+    left: 'Total outstanding',
+    right: money(Math.max(0, amount)),
+    bold: true,
+  });
 }
 
 export function buildUnloadReceiptLines(unload, shop) {
@@ -326,6 +336,7 @@ export function buildPaymentReceiptLines(payment, shop) {
   lines.push({ kind: 'rule', char: '=' });
 
   pushInvoiceLines(lines, payment);
+  pushCustomerOutstanding(lines, payment);
 
   if (payment?.note) {
     lines.push({ kind: 'blank' });
@@ -354,6 +365,9 @@ function invoiceListLabel(value) {
   if (!raw || raw === '—') return '';
   const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
   if (parts.length === 1 && parts[0].toLowerCase() === 'opening') return 'Opening balance';
+  if (parts.length > 0 && parts.every((part) => /^return cheque\b/i.test(part))) {
+    return parts.join(', ');
+  }
   const formatted = parts.map((part) => (part.toLowerCase() === 'opening' ? 'Opening' : part));
   return `Inv ${formatted.join(', ')}`;
 }
@@ -562,5 +576,12 @@ const BUILDERS = {
 export async function printScenarioReceipt(scenarioKey, payload, shop) {
   const builder = BUILDERS[scenarioKey];
   if (!builder) throw new Error('Unknown print scenario.');
-  await printEscPosLines(builder(payload, shop));
+  let receipt = payload;
+  if (scenarioKey === 'cashCollection' && payload) {
+    const customerOutstanding = await customerOutstandingForPaymentReceipt(payload);
+    if (customerOutstanding != null) {
+      receipt = { ...payload, customerOutstanding };
+    }
+  }
+  await printEscPosLines(builder(receipt, shop));
 }

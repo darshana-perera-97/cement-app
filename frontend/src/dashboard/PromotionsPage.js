@@ -31,6 +31,10 @@ import {
   downloadShopWisePromotions,
   downloadSpecialPromotions,
 } from './promotionsExport';
+import {
+  downloadTargetPromotionCreditNote,
+  targetPromotionCreditNoteNumber,
+} from './targetPromotionCreditNotePdf';
 
 const apiBase = getApiBase();
 
@@ -315,6 +319,8 @@ function SpecialPromotionsPanel() {
   const [shopItemKeys, setShopItemKeys] = useState([]);
   const [listDownloadKind, setListDownloadKind] = useState('shop');
   const [costDownloadBusy, setCostDownloadBusy] = useState(false);
+  const [creditNoteBusyId, setCreditNoteBusyId] = useState(null);
+  const [creditNoteError, setCreditNoteError] = useState(null);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -801,6 +807,24 @@ function SpecialPromotionsPanel() {
     }
   };
 
+  const handleDownloadCreditNote = async (row) => {
+    if (!row || promoType(row) !== 'target_promotion' || creditNoteBusyId) return;
+    setCreditNoteBusyId(row.id);
+    setCreditNoteError(null);
+    try {
+      const customer =
+        customers.find((c) => c.id === row.customerId) || {
+          id: row.customerId,
+          name: row.customerName,
+        };
+      await downloadTargetPromotionCreditNote(row, customer);
+    } catch (e) {
+      setCreditNoteError(e.message || 'Could not download the credit note.');
+    } finally {
+      setCreditNoteBusyId(null);
+    }
+  };
+
   const confirmDownload = () => {
     if (downloadRows.length === 0) return;
     const selected = availableDownloadTypes.filter((type) => downloadTypes.includes(type.id));
@@ -893,6 +917,11 @@ function SpecialPromotionsPanel() {
           {error}
         </p>
       ) : null}
+      {creditNoteError ? (
+        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-100" role="alert">
+          {creditNoteError}
+        </p>
+      ) : null}
 
       <TableFiltersBar
         hint={
@@ -970,16 +999,31 @@ function SpecialPromotionsPanel() {
                 fields={[
                   { label: 'Type', value: promoTypeLabel(promoType(r)) },
                   { label: 'Bill / Invoice', value: r.invoiceNumber || (r.billNumber ? `#${r.billNumber}` : '—') },
+                  ...(promoType(r) === 'target_promotion'
+                    ? [{ label: 'Credit note', value: targetPromotionCreditNoteNumber(r) }]
+                    : []),
                   { label: 'Amount', value: money(promoAmount(r)) },
                   { label: 'Free bags', value: promoType(r) === 'free_bags' ? totalFreeBags(r, brands) : '—' },
                   { label: 'Reason', value: r.reason || '—' },
                 ]}
+                actions={
+                  promoType(r) === 'target_promotion' ? (
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadCreditNote(r)}
+                      disabled={creditNoteBusyId === r.id}
+                      className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                    >
+                      {creditNoteBusyId === r.id ? 'Preparing…' : 'Download credit note'}
+                    </button>
+                  ) : null
+                }
               />
             ))
           )}
         </div>
         <div className={`hidden sm:block ${scrollTableWrap}`}>
-          <table className="w-full min-w-[900px] data-table border-separate border-spacing-0 text-left text-sm">
+          <table className="w-full min-w-[1040px] data-table border-separate border-spacing-0 text-left text-sm">
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Date</th>
@@ -988,24 +1032,25 @@ function SpecialPromotionsPanel() {
                 <th className="whitespace-nowrap px-4 py-3 font-mono">Bill / Invoice</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Free bags</th>
+                <th className="whitespace-nowrap px-4 py-3">Credit note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     No promotions yet. Use &quot;Add promotion&quot; to record a promotion for a customer.
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     No rows match your search or filters.
                   </td>
                 </tr>
@@ -1034,6 +1079,24 @@ function SpecialPromotionsPanel() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-indigo-800">
                       {type === 'free_bags' ? totalFreeBags(r, brands) : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {type === 'target_promotion' ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDownloadCreditNote(r);
+                          }}
+                          disabled={creditNoteBusyId === r.id}
+                          className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50"
+                          title={`Download credit note ${targetPromotionCreditNoteNumber(r)}`}
+                        >
+                          {creditNoteBusyId === r.id ? '…' : targetPromotionCreditNoteNumber(r)}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
                     </td>
                   </tr>
                   );
@@ -1600,23 +1663,39 @@ function SpecialPromotionsPanel() {
         variant="promotion"
         onClose={() => setDetailRow(null)}
         actions={
-          detailRow?.id && canEditDetails() ? (
+          detailRow?.id ? (
             <div className="mt-4 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => openPromotionEdit(detailRow)}
-                className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
-              >
-                Edit promotion
-              </button>
-              <button
-                type="button"
-                disabled={deletingId === detailRow.id}
-                onClick={() => handleDelete(detailRow)}
-                className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 ring-1 ring-rose-100 hover:bg-rose-100 disabled:opacity-50"
-              >
-                {deletingId === detailRow.id ? 'Deleting…' : 'Delete promotion'}
-              </button>
+              {promoType(detailRow) === 'target_promotion' ? (
+                <button
+                  type="button"
+                  onClick={() => handleDownloadCreditNote(detailRow)}
+                  disabled={creditNoteBusyId === detailRow.id}
+                  className="w-full rounded-xl border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-900 ring-1 ring-teal-100 hover:bg-teal-100 disabled:opacity-50"
+                >
+                  {creditNoteBusyId === detailRow.id
+                    ? 'Preparing credit note…'
+                    : `Download credit note ${targetPromotionCreditNoteNumber(detailRow)}`}
+                </button>
+              ) : null}
+              {canEditDetails() ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openPromotionEdit(detailRow)}
+                    className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-800 ring-1 ring-indigo-100 hover:bg-indigo-100"
+                  >
+                    Edit promotion
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingId === detailRow.id}
+                    onClick={() => handleDelete(detailRow)}
+                    className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 ring-1 ring-rose-100 hover:bg-rose-100 disabled:opacity-50"
+                  >
+                    {deletingId === detailRow.id ? 'Deleting…' : 'Delete promotion'}
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null
         }
