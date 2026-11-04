@@ -2,6 +2,7 @@ import { formatReportItemLabel, getCachedBrands } from './brandTheme';
 import { getPaymentCheques } from './paymentCheques';
 import {
   buildBillSettledDateLookup,
+  chequeRealizeYmd,
   listCustomerBillPaymentAllocations,
   paymentCreditToCustomer,
   paymentSettlementCredit,
@@ -78,20 +79,7 @@ function isYmd(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').slice(0, 10));
 }
 
-/**
- * Date a cheque is realized: later of converting date and deposit date when deposited.
- * Falls back to converting date when not yet deposited.
- */
-export function chequeRealizeYmd(cheque) {
-  const converting = String(cheque?.chequeDate ?? '').slice(0, 10);
-  const deposited = String(cheque?.chequeDepositedAt ?? '').slice(0, 10);
-  const convertingOk = isYmd(converting);
-  const depositedOk = Boolean(cheque?.chequeDeposited) && isYmd(deposited);
-  if (convertingOk && depositedOk) return deposited > converting ? deposited : converting;
-  if (convertingOk) return converting;
-  if (depositedOk) return deposited;
-  return '';
-}
+export { chequeRealizeYmd };
 
 /**
  * Split a payment's credited amount into slices with the date used for days-to-settle.

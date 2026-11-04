@@ -505,7 +505,73 @@ function sortBillsChronological(bills) {
   });
 }
 
-/** Payment date (YYYY-MM-DD) when each bill was fully cleared. */
+function isYmd(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').slice(0, 10));
+}
+
+/**
+ * Date a cheque is realized: later of converting date and deposit date when deposited.
+ * Falls back to the converting date when it has not been deposited yet.
+ */
+export function chequeRealizeYmd(cheque) {
+  const converting = String(cheque?.chequeDate ?? '').slice(0, 10);
+  const deposited = String(cheque?.chequeDepositedAt ?? '').slice(0, 10);
+  const convertingOk = isYmd(converting);
+  const depositedOk = Boolean(cheque?.chequeDeposited) && isYmd(deposited);
+  if (convertingOk && depositedOk) return deposited > converting ? deposited : converting;
+  if (convertingOk) return converting;
+  if (depositedOk) return deposited;
+  return '';
+}
+
+/**
+ * Split a payment into dated slices. Cash, CDM, and transfers use the receipt date.
+ * Each cheque uses its realizing date. Earliest money is consumed first, so the date
+ * that finishes a bill is the realizing date of the last rupee that cleared it.
+ */
+function paymentRealizeSlices(payment, credit, { includeReturnedCheques }) {
+  const paymentDate = String(payment?.date ?? '').slice(0, 10);
+  const fallback = isYmd(paymentDate) ? paymentDate : '';
+  let remaining = toNonNegMoney(credit);
+  const cheques = getPaymentCheques(payment).filter((c) => {
+    if (toNonNegMoney(c.amount) <= 0) return false;
+    if (!includeReturnedCheques && c.chequeReturned) return false;
+    return true;
+  });
+  const slices = [];
+  for (const c of cheques) {
+    if (remaining <= 0.009) break;
+    const amt = Math.min(remaining, toNonNegMoney(c.amount));
+    remaining = toNonNegMoney(remaining - amt);
+    const realized = chequeRealizeYmd(c);
+    slices.push({ date: isYmd(realized) ? realized : fallback, left: amt });
+  }
+  if (remaining > 0.009) slices.push({ date: fallback, left: remaining });
+  slices.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return slices;
+}
+
+function createRealizeDateCursor(payment, credit, options) {
+  const slices = paymentRealizeSlices(payment, credit, options);
+  const fallback = String(payment?.date ?? '').slice(0, 10);
+  return (amount) => {
+    let left = toNonNegMoney(amount);
+    if (left <= 0) return isYmd(fallback) ? fallback : '';
+    let date = '';
+    for (const slice of slices) {
+      if (left <= 0.009) break;
+      if (slice.left <= 0.009) continue;
+      const take = Math.min(slice.left, left);
+      slice.left = toNonNegMoney(slice.left - take);
+      left = toNonNegMoney(left - take);
+      if (take > 0.009 && isYmd(slice.date)) date = slice.date;
+    }
+    if (!isYmd(date) && isYmd(fallback)) return fallback;
+    return date;
+  };
+}
+
+/** Date (YYYY-MM-DD) when each bill was fully cleared, using cheque realizing dates. */
 function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, customerId = '', promotions = []) {
   const settledByBillId = new Map();
   const sortedBills = sortBillsChronological(custBills);
@@ -527,6 +593,15 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
     if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) continue;
 
     const explicit = getPaymentBillCashAllocations(p);
+    const dateOf = createRealizeDateCursor(p, paymentCreditToCustomer(p), {
+      includeReturnedCheques: false,
+    });
+    const markSettled = (billId, toward, cleared) => {
+      if (toward <= 0.009) return;
+      const settledOn = dateOf(toward);
+      if (!billId || !cleared || settledByBillId.has(billId)) return;
+      if (isYmd(settledOn)) settledByBillId.set(billId, settledOn);
+    };
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
         if (credit <= 0.009) break;
@@ -536,7 +611,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
           pastPaid = toNonNegMoney(pastPaid + toward);
           runningPaid.set(openingId, pastPaid);
           credit = toNonNegMoney(credit - toward);
-          if (pastOwed > 0 && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
+          markSettled(openingId, toward, pastOwed > 0 && pastPaid >= pastOwed - 0.009);
           continue;
         }
         if (!runningPaid.has(billId)) continue;
@@ -548,7 +623,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
         const next = toNonNegMoney(current + toward);
         runningPaid.set(billId, next);
         credit = toNonNegMoney(credit - toward);
-        if (next >= total - 0.009 && billId) settledByBillId.set(billId, payDate);
+        markSettled(billId, toward, next >= total - 0.009);
       }
       continue;
     }
@@ -557,7 +632,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
       const toward = Math.min(pastOwed - pastPaid, credit);
       pastPaid = toNonNegMoney(pastPaid + toward);
       credit = toNonNegMoney(credit - toward);
-      if (openingId && pastPaid >= pastOwed - 0.009) settledByBillId.set(openingId, payDate);
+      markSettled(openingId, toward, Boolean(openingId) && pastPaid >= pastOwed - 0.009);
     }
 
     for (const bill of sortedBills) {
@@ -571,7 +646,7 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
       const next = toNonNegMoney(current + toward);
       runningPaid.set(id, next);
       credit = toNonNegMoney(credit - toward);
-      if (next >= total - 0.009) settledByBillId.set(id, payDate);
+      markSettled(id, toward, next >= total - 0.009);
     }
   }
 
@@ -587,16 +662,26 @@ function buildSettledDateByBillIdForCustomer(
 ) {
   const settledByBillId = new Map();
   if (!customer) return settledByBillId;
+  const cursors = new WeakMap();
   forEachCustomerSettlementApplication(
     customer,
     bills,
     payments,
     promotions,
     (info) => {
-      if (!info.settled || !info.billId) return;
-      const payDate = String(info.payment?.date ?? '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate)) return;
-      if (!settledByBillId.has(info.billId)) settledByBillId.set(info.billId, payDate);
+      const payment = info.payment;
+      if (!payment || !(info.toward > 0)) return;
+      let dateOf = cursors.get(payment);
+      if (!dateOf) {
+        dateOf = createRealizeDateCursor(payment, paymentSettlementCredit(payment), {
+          includeReturnedCheques: true,
+        });
+        cursors.set(payment, dateOf);
+      }
+      const settledOn = dateOf(info.toward);
+      if (!info.settled || !info.billId || settledByBillId.has(info.billId)) return;
+      if (!isYmd(settledOn)) return;
+      settledByBillId.set(info.billId, settledOn);
     },
     returnsRows,
   );
