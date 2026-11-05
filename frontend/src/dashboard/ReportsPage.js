@@ -1730,8 +1730,8 @@ export default function ReportsPage() {
   const shopTargetsMonthLabel = useMemo(() => monthDisplayLabel(shopTargetsMonth), [shopTargetsMonth]);
 
   const shopTargetsReport = useMemo(
-    () => buildShopTargetsRows(bills, customers, shopTargetsMonth),
-    [bills, customers, shopTargetsMonth],
+    () => buildShopTargetsRows(bills, customers, shopTargetsMonth, promotions),
+    [bills, customers, shopTargetsMonth, promotions, brands],
   );
 
   const billSettledDateLookup = useMemo(
@@ -4666,7 +4666,7 @@ export default function ReportsPage() {
       <>
       <Card
         title="Shop targets"
-        subtitle={`Monthly bag sales vs target for ${shopTargetsMonthLabel} — from credit bills and customer targets`}
+        subtitle={`Monthly bag sales vs target for ${shopTargetsMonthLabel} — from credit bills, free bags, and customer targets`}
       >
         <TableFiltersBar>
           <label className={filterLabelNarrow}>
@@ -4708,6 +4708,7 @@ export default function ReportsPage() {
                     value: (r.byBrand[b.key] || 0).toLocaleString(),
                   })),
                   { label: 'Total bags', value: r.total.toLocaleString() },
+                  { label: 'Free bags', value: r.freeBags > 0 ? r.freeBags.toLocaleString() : '—' },
                   {
                     label: 'Monthly target',
                     value: r.monthlyTargetBags > 0 ? r.monthlyTargetBags.toLocaleString() : '—',
@@ -4743,6 +4744,7 @@ export default function ReportsPage() {
                   </th>
                 ))}
                 <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
+                <th className="whitespace-nowrap px-4 py-3 text-right">Free bags</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Monthly target</th>
                 <th className="min-w-[10rem] whitespace-nowrap px-4 py-3">Completed</th>
               </tr>
@@ -4750,13 +4752,13 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={brands.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={brands.length + 5} className="px-4 py-8 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : shopTargetsReport.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={brands.length + 4} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={brands.length + 5} className="px-4 py-8 text-center text-slate-500">
                     No shop sales or targets in {shopTargetsMonthLabel}.
                   </td>
                 </tr>
@@ -4778,6 +4780,13 @@ export default function ReportsPage() {
                     ))}
                     <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
                       {r.total.toLocaleString()}
+                    </td>
+                    <td
+                      className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
+                        r.freeBags > 0 ? 'font-medium text-indigo-800' : 'text-slate-300'
+                      }`}
+                    >
+                      {r.freeBags > 0 ? r.freeBags.toLocaleString() : '—'}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
                       {r.monthlyTargetBags > 0 ? r.monthlyTargetBags.toLocaleString() : '—'}
@@ -4812,6 +4821,9 @@ export default function ReportsPage() {
                   ))}
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                     {shopTargetsReport.totals.total.toLocaleString()}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-800">
+                    {(shopTargetsReport.totals.freeBags || 0).toLocaleString()}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                     {shopTargetsReport.totals.monthlyTargetBags > 0

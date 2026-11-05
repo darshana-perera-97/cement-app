@@ -56,6 +56,7 @@ function buildHead() {
       'Shop name',
       ...brands.map((b) => `${formatReportItemLabel(b) || b.label} bags`),
       'Total bags',
+      'Free bags',
       'Monthly target',
       'Completed',
     ],
@@ -65,12 +66,13 @@ function buildHead() {
 function buildBody(rows) {
   const brands = getCachedBrands();
   if (rows.length === 0) {
-    return [['—', ...brands.map(() => '—'), '0', '—', '—']];
+    return [['—', ...brands.map(() => '—'), '0', '0', '—', '—']];
   }
   return rows.map((r) => [
     r.shop || '—',
     ...brands.map((b) => formatBrandCell(r.byBrand?.[b.key])),
     formatBags(r.total),
+    formatBags(r.freeBags),
     r.monthlyTargetBags > 0 ? formatBags(r.monthlyTargetBags) : '—',
     formatPct(r.progressPct),
   ]);
@@ -84,6 +86,7 @@ function buildFoot(rows, totals, overallProgressPct) {
       `Total (${rows.length} shop${rows.length === 1 ? '' : 's'})`,
       ...brands.map((b) => formatBags(totals.byBrand?.[b.key] || 0)),
       formatBags(totals.total),
+      formatBags(totals.freeBags),
       totals.monthlyTargetBags > 0 ? formatBags(totals.monthlyTargetBags) : '—',
       formatPct(overallProgressPct),
     ],
@@ -91,13 +94,13 @@ function buildFoot(rows, totals, overallProgressPct) {
 }
 
 /**
- * Shop targets PDF: bags sold per brand vs monthly target for each shop.
+ * Shop targets PDF: bags sold per brand, free bags, and monthly target for each shop.
  */
 export function downloadShopTargetsPdf(data, options = {}) {
   const {
     monthLabel = '',
     rows = [],
-    totals = { byBrand: {}, total: 0, monthlyTargetBags: 0 },
+    totals = { byBrand: {}, total: 0, freeBags: 0, monthlyTargetBags: 0 },
     overallProgressPct = null,
     generatedAt = new Date(),
   } = data;
@@ -124,7 +127,7 @@ export function downloadShopTargetsPdf(data, options = {}) {
   doc.text(`Generated: ${dateStr}`, MARGIN, 22);
   doc.text(`Month: ${monthLabel}`, MARGIN, 27);
   doc.text(
-    'Monthly bag sales by brand vs customer targets (from credit bills).',
+    'Monthly bag sales by brand vs customer targets, plus free bags issued that month.',
     MARGIN,
     32,
   );
@@ -148,11 +151,12 @@ export function downloadShopTargetsPdf(data, options = {}) {
       [brandColCount + 1]: { halign: 'right', fontStyle: 'bold' },
       [brandColCount + 2]: { halign: 'right' },
       [brandColCount + 3]: { halign: 'right' },
+      [brandColCount + 4]: { halign: 'right' },
     },
     didParseCell: (hookData) => {
       if (hookData.section === 'head') return;
       const col = hookData.column.index;
-      if (col >= 1 && col <= brandColCount + 3) {
+      if (col >= 1 && col <= brandColCount + 4) {
         hookData.cell.styles.halign = 'right';
       }
     },
