@@ -60,6 +60,7 @@ export function collectReturnChequeSettlementRows({
   for (const row of cashRows) {
     if (!isReturnChequeSettlementLabel(row?.invoiceNumber)) continue;
     out.push({
+      id: `cash-${row.id || out.length}`,
       customerName: row.customerName,
       returnCheque: row.invoiceNumber,
       method: 'Cash',
@@ -71,6 +72,7 @@ export function collectReturnChequeSettlementRows({
   for (const row of chequeRows) {
     if (row?.isReturnDeduction || !isReturnChequeSettlementLabel(row?.invoiceNumber)) continue;
     out.push({
+      id: `cheque-${row.id || out.length}`,
       customerName: row.customerName,
       returnCheque: row.invoiceNumber,
       method: 'Cheque',
@@ -82,6 +84,7 @@ export function collectReturnChequeSettlementRows({
   for (const row of cdmRows) {
     if (!isReturnChequeSettlementLabel(row?.invoiceNumber)) continue;
     out.push({
+      id: `cdm-${row.id || out.length}`,
       customerName: row.customerName,
       returnCheque: row.invoiceNumber,
       method: 'CDM deposit',
@@ -93,6 +96,7 @@ export function collectReturnChequeSettlementRows({
   for (const row of bankTransferRows) {
     if (!isReturnChequeSettlementLabel(row?.invoiceNumber)) continue;
     out.push({
+      id: `bank-${row.id || out.length}`,
       customerName: row.customerName,
       returnCheque: row.invoiceNumber,
       method: 'Bank transfer',

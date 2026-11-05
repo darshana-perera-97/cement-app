@@ -51,6 +51,12 @@ import {
 } from './collectionsReport';
 import { downloadAllCollectionsReportPdf, downloadCollectionsReportPdf } from './collectorCommissionPdf';
 import { paymentInvoiceNumberLabel } from './paymentReceipt';
+import {
+  cashInvoicesExcludingReturnSettlements,
+  collectReturnChequeSettlementRows,
+  sumAmounts,
+  withoutReturnChequeSettlements,
+} from './dailyCollectionsReturnSettlements';
 import PrintCollectionsSummaryModal from './PrintCollectionsSummaryModal';
 
 const apiBase = getApiBase();
@@ -2453,6 +2459,55 @@ export default function ReportsPage() {
     [dailyReportBankTransferRows],
   );
 
+  const dailyReportReturnChequeRows = useMemo(
+    () =>
+      collectReturnChequeSettlementRows({
+        cashRows: dailyReportCashRows,
+        chequeRows: dailyReportChequeRows,
+        cdmRows: dailyReportCdmRows,
+        bankTransferRows: dailyReportBankTransferRows,
+      }),
+    [dailyReportCashRows, dailyReportChequeRows, dailyReportCdmRows, dailyReportBankTransferRows],
+  );
+
+  const dailyReportReturnChequeTotal = useMemo(
+    () => sumAmounts(dailyReportReturnChequeRows),
+    [dailyReportReturnChequeRows],
+  );
+
+  const dailyReportListedCashRows = useMemo(
+    () => withoutReturnChequeSettlements(dailyReportCashRows),
+    [dailyReportCashRows],
+  );
+  const dailyReportListedCashTotal = useMemo(
+    () => sumAmounts(dailyReportListedCashRows),
+    [dailyReportListedCashRows],
+  );
+  const dailyReportListedChequeRows = useMemo(
+    () => withoutReturnChequeSettlements(dailyReportChequeRows),
+    [dailyReportChequeRows],
+  );
+  const dailyReportListedChequeTotal = useMemo(
+    () => sumAmounts(dailyReportListedChequeRows),
+    [dailyReportListedChequeRows],
+  );
+  const dailyReportListedCdmRows = useMemo(
+    () => withoutReturnChequeSettlements(dailyReportCdmRows),
+    [dailyReportCdmRows],
+  );
+  const dailyReportListedCdmTotal = useMemo(
+    () => sumAmounts(dailyReportListedCdmRows),
+    [dailyReportListedCdmRows],
+  );
+  const dailyReportListedBankRows = useMemo(
+    () => withoutReturnChequeSettlements(dailyReportBankTransferRows),
+    [dailyReportBankTransferRows],
+  );
+  const dailyReportListedBankTotal = useMemo(
+    () => sumAmounts(dailyReportListedBankRows),
+    [dailyReportListedBankRows],
+  );
+
   const dailyReportUserRows = useMemo(() => {
     if (!showDailyCollectionsReport || !adminDailyReportView) return [];
     return buildDailyCollectionUserRows(payments, dailyReportUserChoices, dailyReportDate);
@@ -2920,7 +2975,7 @@ export default function ReportsPage() {
             </p>
           ) : (
             <>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-100">
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Collections</p>
                   <SummaryLkrAmount value={dailyReportTotals.collections} valueClassName="text-emerald-900" />
@@ -2937,22 +2992,30 @@ export default function ReportsPage() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">Cheque</p>
                   <SummaryLkrAmount value={dailyReportTotals.cheque} valueClassName="text-violet-900" />
                   <p className="mt-0.5 text-xs text-violet-600">
-                    {dailyReportChequeRows.length} cheque{dailyReportChequeRows.length === 1 ? '' : 's'}
+                    {dailyReportListedChequeRows.length} cheque{dailyReportListedChequeRows.length === 1 ? '' : 's'}
                   </p>
                 </div>
                 <div className="rounded-xl bg-amber-50 p-4 ring-1 ring-amber-100">
                   <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">CDM deposit</p>
                   <SummaryLkrAmount value={dailyReportTotals.cdm} valueClassName="text-amber-900" />
                   <p className="mt-0.5 text-xs text-amber-600">
-                    {dailyReportCdmRows.length} deposit{dailyReportCdmRows.length === 1 ? '' : 's'}
+                    {dailyReportListedCdmRows.length} deposit{dailyReportListedCdmRows.length === 1 ? '' : 's'}
                   </p>
                 </div>
                 <div className="rounded-xl bg-teal-50 p-4 ring-1 ring-teal-100">
                   <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Bank transfer</p>
                   <SummaryLkrAmount value={dailyReportTotals.bankTransfer} valueClassName="text-teal-900" />
                   <p className="mt-0.5 text-xs text-teal-600">
-                    {dailyReportBankTransferRows.length} transfer
-                    {dailyReportBankTransferRows.length === 1 ? '' : 's'}
+                    {dailyReportListedBankRows.length} transfer
+                    {dailyReportListedBankRows.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-rose-50 p-4 ring-1 ring-rose-100">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Return cheque settlements</p>
+                  <SummaryLkrAmount value={dailyReportReturnChequeTotal} valueClassName="text-rose-900" />
+                  <p className="mt-0.5 text-xs text-rose-600">
+                    {dailyReportReturnChequeRows.length} settlement
+                    {dailyReportReturnChequeRows.length === 1 ? '' : 's'} · included above
                   </p>
                 </div>
               </div>
@@ -3102,7 +3165,7 @@ export default function ReportsPage() {
                       title={r.shop}
                       subtitle={r.location || '—'}
                       fields={[
-                        { label: 'Cash invoice #', value: r.cashInvoiceNumbers || '—' },
+                        { label: 'Cash invoice #', value: cashInvoicesExcludingReturnSettlements(r.cashInvoiceNumbers) },
                         { label: 'Cash', value: money(r.cashCollected) },
                         { label: 'Cheque', value: money(r.chequeCollected) },
                         { label: 'CDM', value: money(r.cdmCollected) },
@@ -3142,7 +3205,9 @@ export default function ReportsPage() {
                             {r.shop}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.location || '—'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.cashInvoiceNumbers || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">
+                            {cashInvoicesExcludingReturnSettlements(r.cashInvoiceNumbers)}
+                          </td>
                           <td className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${r.cashCollected < 0 ? 'font-semibold text-rose-800' : 'text-sky-800'}`}>
                             {r.cashCollected !== 0 ? money(r.cashCollected) : '—'}
                           </td>
@@ -3193,15 +3258,16 @@ export default function ReportsPage() {
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cash list</h3>
               <p className="mt-1 text-xs text-slate-500">
                 Cash collected on {dailyReportDate}
-                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}. Return cheque
+                settlements are listed separately.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
-                {dailyReportCashRows.length === 0 ? (
+                {dailyReportListedCashRows.length === 0 ? (
                   <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
                     No cash on this day.
                   </p>
                 ) : (
-                  dailyReportCashRows.map((r) => (
+                  dailyReportListedCashRows.map((r) => (
                     <MobileRowCard
                       key={r.id}
                       title={r.customerName}
@@ -3223,14 +3289,14 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dailyReportCashRows.length === 0 ? (
+                    {dailyReportListedCashRows.length === 0 ? (
                       <tr>
                         <td colSpan={3} className="px-4 py-8 text-center text-slate-500">
                           No cash on this day.
                         </td>
                       </tr>
                     ) : (
-                      dailyReportCashRows.map((r) => (
+                      dailyReportListedCashRows.map((r) => (
                         <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                           <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
                           <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.invoiceNumber}</td>
@@ -3241,15 +3307,15 @@ export default function ReportsPage() {
                       ))
                     )}
                   </tbody>
-                  {dailyReportCashRows.length > 0 ? (
+                  {dailyReportListedCashRows.length > 0 ? (
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
                         <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={2}>
-                          Total ({dailyReportCashRows.length} payment
-                          {dailyReportCashRows.length === 1 ? '' : 's'})
+                          Total ({dailyReportListedCashRows.length} payment
+                          {dailyReportListedCashRows.length === 1 ? '' : 's'})
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sky-800">
-                          {money(dailyReportTotals.cash)}
+                          {money(dailyReportListedCashTotal)}
                         </td>
                       </tr>
                     </tfoot>
@@ -3260,15 +3326,16 @@ export default function ReportsPage() {
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Cheque list</h3>
               <p className="mt-1 text-xs text-slate-500">
                 Cheques collected on {dailyReportDate}, with returned cheques deducted on the day they bounce
-                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}. Return cheque
+                settlements are listed separately.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
-                {dailyReportChequeRows.length === 0 ? (
+                {dailyReportListedChequeRows.length === 0 ? (
                   <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
                     No cheques on this day.
                   </p>
                 ) : (
-                  dailyReportChequeRows.map((r) => (
+                  dailyReportListedChequeRows.map((r) => (
                     <MobileRowCard
                       key={r.id}
                       title={r.customerName}
@@ -3305,7 +3372,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dailyReportChequeRows.length === 0 ? (
+                    {dailyReportListedChequeRows.length === 0 ? (
                       <tr>
                         <td
                           colSpan={showDailyReportRecordedBy ? 8 : 7}
@@ -3315,7 +3382,7 @@ export default function ReportsPage() {
                         </td>
                       </tr>
                     ) : (
-                      dailyReportChequeRows.map((r) => (
+                      dailyReportListedChequeRows.map((r) => (
                         <tr
                           key={r.id}
                           className={
@@ -3352,15 +3419,15 @@ export default function ReportsPage() {
                       ))
                     )}
                   </tbody>
-                  {dailyReportChequeRows.length > 0 ? (
+                  {dailyReportListedChequeRows.length > 0 ? (
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
                         <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={2}>
-                          Total ({dailyReportChequeRows.length} cheque
-                          {dailyReportChequeRows.length === 1 ? '' : 's'})
+                          Total ({dailyReportListedChequeRows.length} cheque
+                          {dailyReportListedChequeRows.length === 1 ? '' : 's'})
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-violet-800">
-                          {money(dailyReportChequeTotal)}
+                          {money(dailyReportListedChequeTotal)}
                         </td>
                         <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 5 : 4} />
                       </tr>
@@ -3372,15 +3439,16 @@ export default function ReportsPage() {
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">CDM deposit list</h3>
               <p className="mt-1 text-xs text-slate-500">
                 CDM deposits recorded on payments dated {dailyReportDate}
-                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}. Return cheque
+                settlements are listed separately.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
-                {dailyReportCdmRows.length === 0 ? (
+                {dailyReportListedCdmRows.length === 0 ? (
                   <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
                     No CDM deposits on this day.
                   </p>
                 ) : (
-                  dailyReportCdmRows.map((r) => (
+                  dailyReportListedCdmRows.map((r) => (
                     <MobileRowCard
                       key={r.id}
                       title={r.customerName}
@@ -3416,7 +3484,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dailyReportCdmRows.length === 0 ? (
+                    {dailyReportListedCdmRows.length === 0 ? (
                       <tr>
                         <td
                           colSpan={showDailyReportRecordedBy ? 9 : 8}
@@ -3426,7 +3494,7 @@ export default function ReportsPage() {
                         </td>
                       </tr>
                     ) : (
-                      dailyReportCdmRows.map((r) => (
+                      dailyReportListedCdmRows.map((r) => (
                         <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                           <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-amber-800">
@@ -3447,15 +3515,15 @@ export default function ReportsPage() {
                       ))
                     )}
                   </tbody>
-                  {dailyReportCdmRows.length > 0 ? (
+                  {dailyReportListedCdmRows.length > 0 ? (
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
                         <td className={`px-4 py-3 ${stickyFirstTd}`}>
-                          Total ({dailyReportCdmRows.length} deposit
-                          {dailyReportCdmRows.length === 1 ? '' : 's'})
+                          Total ({dailyReportListedCdmRows.length} deposit
+                          {dailyReportListedCdmRows.length === 1 ? '' : 's'})
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-amber-800">
-                          {money(dailyReportCdmTotal)}
+                          {money(dailyReportListedCdmTotal)}
                         </td>
                         <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 7 : 6} />
                       </tr>
@@ -3467,15 +3535,16 @@ export default function ReportsPage() {
               <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Bank transfer list</h3>
               <p className="mt-1 text-xs text-slate-500">
                 Online bank transfers recorded on payments dated {dailyReportDate}
-                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}.
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}. Return cheque
+                settlements are listed separately.
               </p>
               <div className="mt-3 space-y-3 sm:hidden">
-                {dailyReportBankTransferRows.length === 0 ? (
+                {dailyReportListedBankRows.length === 0 ? (
                   <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
                     No bank transfers on this day.
                   </p>
                 ) : (
-                  dailyReportBankTransferRows.map((r) => (
+                  dailyReportListedBankRows.map((r) => (
                     <MobileRowCard
                       key={r.id}
                       title={r.customerName}
@@ -3511,7 +3580,7 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dailyReportBankTransferRows.length === 0 ? (
+                    {dailyReportListedBankRows.length === 0 ? (
                       <tr>
                         <td
                           colSpan={showDailyReportRecordedBy ? 9 : 8}
@@ -3521,7 +3590,7 @@ export default function ReportsPage() {
                         </td>
                       </tr>
                     ) : (
-                      dailyReportBankTransferRows.map((r) => (
+                      dailyReportListedBankRows.map((r) => (
                         <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                           <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-teal-800">
@@ -3542,17 +3611,102 @@ export default function ReportsPage() {
                       ))
                     )}
                   </tbody>
-                  {dailyReportBankTransferRows.length > 0 ? (
+                  {dailyReportListedBankRows.length > 0 ? (
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
                         <td className={`px-4 py-3 ${stickyFirstTd}`}>
-                          Total ({dailyReportBankTransferRows.length} transfer
-                          {dailyReportBankTransferRows.length === 1 ? '' : 's'})
+                          Total ({dailyReportListedBankRows.length} transfer
+                          {dailyReportListedBankRows.length === 1 ? '' : 's'})
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-teal-800">
-                          {money(dailyReportBankTransferTotal)}
+                          {money(dailyReportListedBankTotal)}
                         </td>
                         <td className="px-4 py-3" colSpan={showDailyReportRecordedBy ? 7 : 6} />
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+
+              <h3 className="mt-8 text-xs font-bold uppercase tracking-wide text-slate-500">Return cheque settlements</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Payments on {dailyReportDate} that settle a returned cheque
+                {adminDailyReportView && dailyReportUserId ? ` · ${dailyReportUserLabel}` : ''}. These amounts are
+                already included in the method totals above.
+              </p>
+              <div className="mt-3 space-y-3 sm:hidden">
+                {dailyReportReturnChequeRows.length === 0 ? (
+                  <p className="rounded-[20px] bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 ring-1 ring-slate-100">
+                    No return cheque settlements on this day.
+                  </p>
+                ) : (
+                  dailyReportReturnChequeRows.map((r) => (
+                    <MobileRowCard
+                      key={r.id}
+                      title={r.customerName}
+                      subtitle={r.returnCheque}
+                      fields={[
+                        { label: 'Method', value: r.method },
+                        { label: 'Reference', value: r.reference },
+                        { label: 'Amount', value: money(r.amount) },
+                        ...(showDailyReportRecordedBy ? [{ label: 'Recorded by', value: r.recordedBy || '—' }] : []),
+                      ]}
+                    />
+                  ))
+                )}
+              </div>
+              <div className={`mt-3 hidden sm:block ${scrollTableWrap}`}>
+                <table className="w-full min-w-[760px] data-table border-separate border-spacing-0 text-left text-sm">
+                  <thead className={stickyThead}>
+                    <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop</th>
+                      <th className="whitespace-nowrap px-4 py-3">Return cheque</th>
+                      <th className="whitespace-nowrap px-4 py-3">Method</th>
+                      <th className="px-4 py-3">Reference</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-right">Amount</th>
+                      {showDailyReportRecordedBy ? (
+                        <th className="whitespace-nowrap px-4 py-3">Recorded by</th>
+                      ) : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyReportReturnChequeRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={showDailyReportRecordedBy ? 6 : 5}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
+                          No return cheque settlements on this day.
+                        </td>
+                      </tr>
+                    ) : (
+                      dailyReportReturnChequeRows.map((r) => (
+                        <tr key={r.id} className="border-t border-slate-100 bg-rose-50/40 hover:bg-rose-50">
+                          <td className={`px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>{r.customerName}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.returnCheque}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700">{r.method}</td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{r.reference}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-rose-800">
+                            {money(r.amount)}
+                          </td>
+                          {showDailyReportRecordedBy ? (
+                            <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">{r.recordedBy || '—'}</td>
+                          ) : null}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dailyReportReturnChequeRows.length > 0 ? (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                        <td className={`px-4 py-3 ${stickyFirstTd}`} colSpan={4}>
+                          Total ({dailyReportReturnChequeRows.length} settlement
+                          {dailyReportReturnChequeRows.length === 1 ? '' : 's'})
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-rose-800">
+                          {money(dailyReportReturnChequeTotal)}
+                        </td>
+                        {showDailyReportRecordedBy ? <td className="px-4 py-3" /> : null}
                       </tr>
                     </tfoot>
                   ) : null}
