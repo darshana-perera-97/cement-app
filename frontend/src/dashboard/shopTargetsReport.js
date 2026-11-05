@@ -39,6 +39,7 @@ function emptyShopRow(rowKey, shop, monthlyTargetBags = 0) {
     rowKey,
     shop,
     byBrand: emptyBrandBagMap(),
+    freeByBrand: emptyBrandBagMap(),
     total: 0,
     freeBags: 0,
     monthlyTargetBags,
@@ -51,12 +52,17 @@ function isFreeBagPromotion(row) {
   return type !== 'invoice_discount' && type !== 'target_promotion' && type !== 'rule_cashback';
 }
 
-function freeBagsOnPromotion(row, brands) {
-  if (!isFreeBagPromotion(row)) return 0;
-  return brands.reduce((sum, brand) => {
+function addFreeBagsByBrand(row, promo, brands) {
+  if (!isFreeBagPromotion(promo)) return 0;
+  let sum = 0;
+  for (const brand of brands) {
     const field = brand.bagsField || `${brand.key}Bags`;
-    return sum + (Number(row?.[field]) || 0);
-  }, 0);
+    const bags = Number(promo?.[field]) || 0;
+    if (bags <= 0) continue;
+    row.freeByBrand[brand.key] += bags;
+    sum += bags;
+  }
+  return sum;
 }
 
 /**
@@ -101,8 +107,6 @@ export function buildShopTargetsRows(bills, customers, monthValue, promotions = 
 
   for (const promo of Array.isArray(promotions) ? promotions : []) {
     if (!inDateRange(promo.date, from, to)) continue;
-    const bags = freeBagsOnPromotion(promo, brands);
-    if (bags <= 0) continue;
     const id = String(promo.customerId ?? '').trim();
     let row = id ? byCustomerId.get(id) : null;
     if (!row) {
@@ -110,13 +114,16 @@ export function buildShopTargetsRows(bills, customers, monthValue, promotions = 
       row = map.get(normalizeCustomerName(shop));
     }
     if (!row) continue;
-    row.freeBags += bags;
+    row.freeBags += addFreeBagsByBrand(row, promo, brands);
   }
 
   for (const row of map.values()) {
     row.total = Math.round(row.total);
     row.freeBags = Math.round(row.freeBags);
-    for (const b of brands) row.byBrand[b.key] = Math.round(row.byBrand[b.key]);
+    for (const b of brands) {
+      row.byBrand[b.key] = Math.round(row.byBrand[b.key]);
+      row.freeByBrand[b.key] = Math.round(row.freeByBrand[b.key]);
+    }
     if (row.monthlyTargetBags > 0) {
       row.progressPct = Math.round((row.total / row.monthlyTargetBags) * 1000) / 10;
     }
@@ -128,21 +135,28 @@ export function buildShopTargetsRows(bills, customers, monthValue, promotions = 
 
   const totals = {
     byBrand: emptyBrandBagMap(),
+    freeByBrand: emptyBrandBagMap(),
     total: 0,
     freeBags: 0,
     monthlyTargetBags: 0,
   };
   for (const r of rows) {
-    for (const b of brands) totals.byBrand[b.key] += r.byBrand[b.key];
+    for (const b of brands) {
+      totals.byBrand[b.key] += r.byBrand[b.key];
+      totals.freeByBrand[b.key] += r.freeByBrand[b.key];
+    }
     totals.total += r.total;
     totals.freeBags += r.freeBags;
     totals.monthlyTargetBags += r.monthlyTargetBags;
   }
+
+  const soldBrands = brands.filter((b) => totals.byBrand[b.key] > 0);
+  const freeBrands = brands.filter((b) => totals.freeByBrand[b.key] > 0);
 
   const overallProgressPct =
     totals.monthlyTargetBags > 0
       ? Math.round((totals.total / totals.monthlyTargetBags) * 1000) / 10
       : null;
 
-  return { rows, totals, overallProgressPct, from, to };
+  return { rows, totals, overallProgressPct, from, to, soldBrands, freeBrands };
 }

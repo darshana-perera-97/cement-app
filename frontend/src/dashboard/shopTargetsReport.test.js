@@ -4,6 +4,8 @@ import { buildShopTargetsRows } from './shopTargetsReport';
 const brands = [
   { key: 'tokyo', label: 'Tokyo', bagsField: 'tokyoBags' },
   { key: 'holcim', label: 'Holcim', bagsField: 'holcimBags' },
+  { key: 'lanwa', label: 'Lanwa', bagsField: 'lanwaBags' },
+  { key: 'sanstha', label: 'Sanstha', bagsField: 'sansthaBags' },
 ];
 
 beforeEach(() => {
@@ -56,6 +58,7 @@ describe('shop targets free bags', () => {
         discountAmount: 100,
       },
       { customerId: 'c2', customerName: 'Hill Shop', date: '2026-11-06', holcimBags: 7 },
+      { customerId: 'c2', customerName: 'Hill Shop', date: '2026-11-08', sansthaBags: 4 },
     ];
 
     const report = buildShopTargetsRows(bills, customers, '2026-11', promotions);
@@ -63,8 +66,15 @@ describe('shop targets free bags', () => {
     const hill = report.rows.find((r) => r.shop === 'Hill Shop');
 
     expect(lake.total).toBe(25);
+    expect(lake.freeByBrand.tokyo).toBe(7);
+    expect(lake.freeByBrand.holcim).toBe(2);
     expect(lake.freeBags).toBe(9);
-    expect(hill.freeBags).toBe(7);
-    expect(report.totals.freeBags).toBe(16);
+    expect(hill.freeByBrand.holcim).toBe(7);
+    expect(hill.freeByBrand.sanstha).toBe(4);
+    expect(hill.freeBags).toBe(11);
+    expect(report.totals.freeByBrand.tokyo).toBe(7);
+    expect(report.totals.freeBags).toBe(20);
+    expect(report.soldBrands.map((b) => b.key)).toEqual(['tokyo', 'holcim']);
+    expect(report.freeBrands.map((b) => b.key)).toEqual(['tokyo', 'holcim', 'sanstha']);
   });
 });

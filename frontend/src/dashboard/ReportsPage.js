@@ -27,6 +27,7 @@ import {
 } from './companyUnloadReportExport';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import { buildShopTargetsRows } from './shopTargetsReport';
+import { downloadShopTargetsExcel } from './shopTargetsExcel';
 import { downloadShopTargetsPdf } from './shopTargetsPdf';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import {
@@ -1733,6 +1734,9 @@ export default function ReportsPage() {
     () => buildShopTargetsRows(bills, customers, shopTargetsMonth, promotions),
     [bills, customers, shopTargetsMonth, promotions, brands],
   );
+  const shopSoldBrands = shopTargetsReport.soldBrands || [];
+  const shopFreeBrands = shopTargetsReport.freeBrands || [];
+  const shopTargetsColSpan = shopSoldBrands.length + shopFreeBrands.length + 5;
 
   const billSettledDateLookup = useMemo(
     () => buildBillSettledDateLookup(customers, bills, payments),
@@ -2677,17 +2681,25 @@ export default function ReportsPage() {
     monthlyBillTotals,
   ]);
 
+  const shopTargetsExportData = useCallback(
+    () => ({
+      monthLabel: shopTargetsMonthLabel,
+      rows: shopTargetsReport.rows,
+      totals: shopTargetsReport.totals,
+      overallProgressPct: shopTargetsReport.overallProgressPct,
+      soldBrands: shopTargetsReport.soldBrands,
+      freeBrands: shopTargetsReport.freeBrands,
+    }),
+    [shopTargetsMonthLabel, shopTargetsReport],
+  );
+
   const handleDownloadShopTargets = useCallback(() => {
-    downloadShopTargetsPdf(
-      {
-        monthLabel: shopTargetsMonthLabel,
-        rows: shopTargetsReport.rows,
-        totals: shopTargetsReport.totals,
-        overallProgressPct: shopTargetsReport.overallProgressPct,
-      },
-      { monthSlug: shopTargetsMonth },
-    );
-  }, [shopTargetsMonth, shopTargetsMonthLabel, shopTargetsReport]);
+    downloadShopTargetsPdf(shopTargetsExportData(), { monthSlug: shopTargetsMonth });
+  }, [shopTargetsExportData, shopTargetsMonth]);
+
+  const handleDownloadShopTargetsExcel = useCallback(() => {
+    downloadShopTargetsExcel(shopTargetsExportData(), { monthSlug: shopTargetsMonth });
+  }, [shopTargetsExportData, shopTargetsMonth]);
 
   const handleDownloadStockDistribution = useCallback(() => {
     downloadStockDistributionPdf(
@@ -4686,6 +4698,14 @@ export default function ReportsPage() {
           >
             Download report (PDF)
           </button>
+          <button
+            type="button"
+            onClick={handleDownloadShopTargetsExcel}
+            disabled={loading || !!error}
+            className={downloadBtnClass}
+          >
+            Download Excel
+          </button>
         </TableFiltersBar>
 
         <div className="mt-5 space-y-3 sm:hidden">
@@ -4703,12 +4723,16 @@ export default function ReportsPage() {
                 key={r.rowKey}
                 title={r.shop}
                 fields={[
-                  ...brands.map((b) => ({
-                    label: formatReportItemLabel(b) || b.label,
-                    value: (r.byBrand[b.key] || 0).toLocaleString(),
+                  ...shopSoldBrands.map((b) => ({
+                    label: `${formatReportItemLabel(b) || b.label} bags`,
+                    value: (r.byBrand[b.key] || 0) > 0 ? r.byBrand[b.key].toLocaleString() : '—',
                   })),
                   { label: 'Total bags', value: r.total.toLocaleString() },
-                  { label: 'Free bags', value: r.freeBags > 0 ? r.freeBags.toLocaleString() : '—' },
+                  ...shopFreeBrands.map((b) => ({
+                    label: `${formatReportItemLabel(b) || b.label} free`,
+                    value: (r.freeByBrand?.[b.key] || 0) > 0 ? r.freeByBrand[b.key].toLocaleString() : '—',
+                  })),
+                  { label: 'Total free bags', value: r.freeBags > 0 ? r.freeBags.toLocaleString() : '—' },
                   {
                     label: 'Monthly target',
                     value: r.monthlyTargetBags > 0 ? r.monthlyTargetBags.toLocaleString() : '—',
@@ -4738,13 +4762,18 @@ export default function ReportsPage() {
             <thead className={stickyThead}>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <th className={`whitespace-nowrap px-4 py-3 ${stickyFirstTh}`}>Shop name</th>
-                {brands.map((b) => (
+                {shopSoldBrands.map((b) => (
                   <th key={b.key} className="whitespace-nowrap px-4 py-3 text-right">
                     {formatReportItemLabel(b) || b.label} bags
                   </th>
                 ))}
                 <th className="whitespace-nowrap px-4 py-3 text-right">Total bags</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">Free bags</th>
+                {shopFreeBrands.map((b) => (
+                  <th key={`free-${b.key}`} className="whitespace-nowrap px-4 py-3 text-right">
+                    {formatReportItemLabel(b) || b.label} free
+                  </th>
+                ))}
+                <th className="whitespace-nowrap px-4 py-3 text-right">Total free bags</th>
                 <th className="whitespace-nowrap px-4 py-3 text-right">Monthly target</th>
                 <th className="min-w-[10rem] whitespace-nowrap px-4 py-3">Completed</th>
               </tr>
@@ -4752,13 +4781,13 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={brands.length + 5} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={shopTargetsColSpan} className="px-4 py-8 text-center text-slate-500">
                     <LoadingSpinner />
                   </td>
                 </tr>
               ) : shopTargetsReport.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={brands.length + 5} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={shopTargetsColSpan} className="px-4 py-8 text-center text-slate-500">
                     No shop sales or targets in {shopTargetsMonthLabel}.
                   </td>
                 </tr>
@@ -4768,7 +4797,7 @@ export default function ReportsPage() {
                     <td className={`whitespace-nowrap px-4 py-3 font-medium text-slate-900 ${stickyFirstTd}`}>
                       {r.shop}
                     </td>
-                    {brands.map((b) => (
+                    {shopSoldBrands.map((b) => (
                       <td
                         key={b.key}
                         className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
@@ -4781,9 +4810,19 @@ export default function ReportsPage() {
                     <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
                       {r.total.toLocaleString()}
                     </td>
+                    {shopFreeBrands.map((b) => (
+                      <td
+                        key={`free-${b.key}`}
+                        className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
+                          (r.freeByBrand?.[b.key] || 0) > 0 ? 'font-medium text-indigo-800' : 'text-slate-300'
+                        }`}
+                      >
+                        {(r.freeByBrand?.[b.key] || 0) > 0 ? r.freeByBrand[b.key].toLocaleString() : '—'}
+                      </td>
+                    ))}
                     <td
-                      className={`whitespace-nowrap px-4 py-3 text-right tabular-nums ${
-                        r.freeBags > 0 ? 'font-medium text-indigo-800' : 'text-slate-300'
+                      className={`whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums ${
+                        r.freeBags > 0 ? 'text-indigo-900' : 'text-slate-300'
                       }`}
                     >
                       {r.freeBags > 0 ? r.freeBags.toLocaleString() : '—'}
@@ -4814,7 +4853,7 @@ export default function ReportsPage() {
                     Total ({shopTargetsReport.rows.length} shop
                     {shopTargetsReport.rows.length === 1 ? '' : 's'})
                   </td>
-                  {brands.map((b) => (
+                  {shopSoldBrands.map((b) => (
                     <td key={b.key} className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                       {(shopTargetsReport.totals.byBrand[b.key] || 0).toLocaleString()}
                     </td>
@@ -4822,7 +4861,12 @@ export default function ReportsPage() {
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                     {shopTargetsReport.totals.total.toLocaleString()}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-800">
+                  {shopFreeBrands.map((b) => (
+                    <td key={`free-${b.key}`} className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-800">
+                      {(shopTargetsReport.totals.freeByBrand?.[b.key] || 0).toLocaleString()}
+                    </td>
+                  ))}
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-indigo-900">
                     {(shopTargetsReport.totals.freeBags || 0).toLocaleString()}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">

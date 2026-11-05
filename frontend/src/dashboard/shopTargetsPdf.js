@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { formatReportItemLabel, getCachedBrands } from './brandTheme';
+import { formatReportItemLabel } from './brandTheme';
 
 const MARGIN = 14;
 
@@ -49,43 +49,47 @@ function addPageFooters(doc) {
   }
 }
 
-function buildHead() {
-  const brands = getCachedBrands();
+function itemLabel(brand) {
+  return formatReportItemLabel(brand) || brand.label || brand.key;
+}
+
+function buildHead(soldBrands, freeBrands) {
   return [
     [
       'Shop name',
-      ...brands.map((b) => `${formatReportItemLabel(b) || b.label} bags`),
+      ...soldBrands.map((b) => `${itemLabel(b)} bags`),
       'Total bags',
-      'Free bags',
+      ...freeBrands.map((b) => `${itemLabel(b)} free`),
+      'Total free bags',
       'Monthly target',
       'Completed',
     ],
   ];
 }
 
-function buildBody(rows) {
-  const brands = getCachedBrands();
+function buildBody(rows, soldBrands, freeBrands) {
   if (rows.length === 0) {
-    return [['—', ...brands.map(() => '—'), '0', '0', '—', '—']];
+    return [['—', ...soldBrands.map(() => '—'), '0', ...freeBrands.map(() => '—'), '0', '—', '—']];
   }
   return rows.map((r) => [
     r.shop || '—',
-    ...brands.map((b) => formatBrandCell(r.byBrand?.[b.key])),
+    ...soldBrands.map((b) => formatBrandCell(r.byBrand?.[b.key])),
     formatBags(r.total),
+    ...freeBrands.map((b) => formatBrandCell(r.freeByBrand?.[b.key])),
     formatBags(r.freeBags),
     r.monthlyTargetBags > 0 ? formatBags(r.monthlyTargetBags) : '—',
     formatPct(r.progressPct),
   ]);
 }
 
-function buildFoot(rows, totals, overallProgressPct) {
-  const brands = getCachedBrands();
+function buildFoot(rows, totals, overallProgressPct, soldBrands, freeBrands) {
   if (rows.length === 0) return null;
   return [
     [
       `Total (${rows.length} shop${rows.length === 1 ? '' : 's'})`,
-      ...brands.map((b) => formatBags(totals.byBrand?.[b.key] || 0)),
+      ...soldBrands.map((b) => formatBags(totals.byBrand?.[b.key] || 0)),
       formatBags(totals.total),
+      ...freeBrands.map((b) => formatBags(totals.freeByBrand?.[b.key] || 0)),
       formatBags(totals.freeBags),
       totals.monthlyTargetBags > 0 ? formatBags(totals.monthlyTargetBags) : '—',
       formatPct(overallProgressPct),
@@ -94,14 +98,17 @@ function buildFoot(rows, totals, overallProgressPct) {
 }
 
 /**
- * Shop targets PDF: bags sold per brand, free bags, and monthly target for each shop.
+ * Shop targets PDF: bags sold per item, free bags per item, and monthly target for each shop.
+ * Item columns with no sales, and free-bag columns with no free bags, are omitted.
  */
 export function downloadShopTargetsPdf(data, options = {}) {
   const {
     monthLabel = '',
     rows = [],
-    totals = { byBrand: {}, total: 0, freeBags: 0, monthlyTargetBags: 0 },
+    totals = { byBrand: {}, freeByBrand: {}, total: 0, freeBags: 0, monthlyTargetBags: 0 },
     overallProgressPct = null,
+    soldBrands = [],
+    freeBrands = [],
     generatedAt = new Date(),
   } = data;
   const { monthSlug = '' } = options;
@@ -127,17 +134,21 @@ export function downloadShopTargetsPdf(data, options = {}) {
   doc.text(`Generated: ${dateStr}`, MARGIN, 22);
   doc.text(`Month: ${monthLabel}`, MARGIN, 27);
   doc.text(
-    'Monthly bag sales by brand vs customer targets, plus free bags issued that month.',
+    'Sales columns appear only for items someone bought. Free bags are shown per item, plus the total.',
     MARGIN,
     32,
   );
   doc.setTextColor(0, 0, 0);
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
-  const brandColCount = getCachedBrands().length;
-  const head = buildHead();
-  const body = buildBody(rows);
-  const foot = buildFoot(rows, totals, overallProgressPct);
+  const soldCount = soldBrands.length;
+  const freeCount = freeBrands.length;
+  const totalBagsCol = soldCount + 1;
+  const totalFreeCol = soldCount + freeCount + 2;
+  const lastNumericCol = soldCount + freeCount + 4;
+  const head = buildHead(soldBrands, freeBrands);
+  const body = buildBody(rows, soldBrands, freeBrands);
+  const foot = buildFoot(rows, totals, overallProgressPct, soldBrands, freeBrands);
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -148,15 +159,13 @@ export function downloadShopTargetsPdf(data, options = {}) {
     tableWidth: pageW,
     columnStyles: {
       0: { halign: 'left', cellWidth: 42 },
-      [brandColCount + 1]: { halign: 'right', fontStyle: 'bold' },
-      [brandColCount + 2]: { halign: 'right' },
-      [brandColCount + 3]: { halign: 'right' },
-      [brandColCount + 4]: { halign: 'right' },
+      [totalBagsCol]: { halign: 'right', fontStyle: 'bold' },
+      [totalFreeCol]: { halign: 'right', fontStyle: 'bold' },
     },
     didParseCell: (hookData) => {
       if (hookData.section === 'head') return;
       const col = hookData.column.index;
-      if (col >= 1 && col <= brandColCount + 4) {
+      if (col >= 1 && col <= lastNumericCol) {
         hookData.cell.styles.halign = 'right';
       }
     },
