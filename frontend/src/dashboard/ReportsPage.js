@@ -983,7 +983,7 @@ function buildDailyCollectionBankTransferRows(payments, ymd, users = []) {
 }
 
 /** Cash portions on payments recorded on a single calendar day. */
-function buildDailyCollectionCashRows(payments, ymd) {
+function buildDailyCollectionCashRows(payments, ymd, users = []) {
   const rows = [];
   for (const p of payments) {
     const payDate = String(p.date ?? '').slice(0, 10);
@@ -995,6 +995,7 @@ function buildDailyCollectionCashRows(payments, ymd) {
       customerName: String(p.customerName ?? '').trim() || '—',
       amount,
       invoiceNumber: paymentInvoiceNumberLabel(p) || '—',
+      recordedBy: recordedByDisplay(p, users),
     });
   }
   rows.sort((a, b) => a.customerName.localeCompare(b.customerName));
@@ -2419,8 +2420,8 @@ export default function ReportsPage() {
 
   const dailyReportCashRows = useMemo(() => {
     if (!showDailyCollectionsReport) return [];
-    return buildDailyCollectionCashRows(dailyReportPayments, dailyReportDate);
-  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate]);
+    return buildDailyCollectionCashRows(dailyReportPayments, dailyReportDate, dailyReportUserChoices);
+  }, [showDailyCollectionsReport, dailyReportPayments, dailyReportDate, dailyReportUserChoices]);
 
   const dailyReportChequeRows = useMemo(() => {
     if (!showDailyCollectionsReport) return [];

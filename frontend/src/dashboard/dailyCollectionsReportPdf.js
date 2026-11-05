@@ -1,5 +1,12 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import {
+  cashInvoicesExcludingReturnSettlements,
+  chequeNumberWithBank,
+  collectReturnChequeSettlementRows,
+  sumAmounts,
+  withoutReturnChequeSettlements,
+} from './dailyCollectionsReturnSettlements';
 
 const MARGIN = 14;
 
@@ -12,16 +19,6 @@ function formatLkr(n) {
 
 function moneyCell(n) {
   return `LKR ${formatLkr(n)}`;
-}
-
-function chequeNumberWithBank(row) {
-  const bank = String(row?.chequeBank ?? '').trim();
-  const num = String(row?.chequeNumber ?? '').trim();
-  const chequeNo = !num || num === '—' ? '' : num.replace(/^#/, '');
-  if (bank && chequeNo) return `${bank} ${chequeNo}`;
-  if (chequeNo) return chequeNo;
-  if (bank) return bank;
-  return '—';
 }
 
 const TABLE_OPTS = {
@@ -62,6 +59,7 @@ function nextY(doc, gap = 8) {
 function addSectionTitle(doc, title, subtitle) {
   let y = nextY(doc, 10);
   const pageHeight = doc.internal.pageSize.getHeight();
+  const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
   if (y > pageHeight - 40) {
     doc.addPage();
     y = 16;
@@ -74,15 +72,16 @@ function addSectionTitle(doc, title, subtitle) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(71, 85, 105);
-    doc.text(subtitle, MARGIN, y + 4);
+    const lines = doc.splitTextToSize(subtitle, pageW);
+    doc.text(lines, MARGIN, y + 4);
     doc.setTextColor(0, 0, 0);
-    return y + 8;
+    return y + 4 + lines.length * 3.6;
   }
   return y + 4;
 }
 
 /**
- * Daily collections report PDF: summary, by shop, cheque / CDM / bank transfer lists.
+ * Daily collections report PDF: summary, by shop, method lists, and return-cheque settlements.
  */
 export function downloadDailyCollectionsReportPdf(data, options = {}) {
   const {
@@ -93,11 +92,8 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     shopRows = [],
     cashRows = [],
     chequeRows = [],
-    chequeTotal = 0,
     cdmRows = [],
-    cdmTotal = 0,
     bankTransferRows = [],
-    bankTransferTotal = 0,
     showRecordedBy = false,
     showInvoiceNumber = false,
     generatedAt = new Date(),
@@ -128,10 +124,25 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     doc.text(`User: ${userLabel}`, MARGIN, headerY);
     headerY += 5;
   }
-  doc.text('Collections, cheques, CDM deposits, and bank transfers by payment date.', MARGIN, headerY);
+  doc.text(
+    'Collections by payment date. Return cheque settlements are listed in their own section.',
+    MARGIN,
+    headerY,
+  );
   doc.setTextColor(0, 0, 0);
 
   const pageW = doc.internal.pageSize.getWidth() - MARGIN * 2;
+  const returnChequeRows = collectReturnChequeSettlementRows({
+    cashRows,
+    chequeRows,
+    cdmRows,
+    bankTransferRows,
+  });
+  const returnChequeTotal = sumAmounts(returnChequeRows);
+  const listedCashRows = withoutReturnChequeSettlements(cashRows);
+  const listedChequeRows = withoutReturnChequeSettlements(chequeRows);
+  const listedCdmRows = withoutReturnChequeSettlements(cdmRows);
+  const listedBankRows = withoutReturnChequeSettlements(bankTransferRows);
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -142,6 +153,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
       ['Cheque', moneyCell(totals.cheque)],
       ['CDM deposit', moneyCell(totals.cdm)],
       ['Bank transfer', moneyCell(totals.bankTransfer)],
+      ['Return cheque settlements (included above)', moneyCell(returnChequeTotal)],
     ],
     startY: headerY + 6,
     tableWidth: pageW,
@@ -208,7 +220,11 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   const shopBody =
     shopRows.length === 0
       ? [['—', '—', ...emptyShopAmounts]]
-      : shopRows.map((r) => [r.shop || '—', r.cashInvoiceNumbers || '—', ...shopAmountCells(r)]);
+      : shopRows.map((r) => [
+          r.shop || '—',
+          cashInvoicesExcludingReturnSettlements(r.cashInvoiceNumbers),
+          ...shopAmountCells(r),
+        ]);
 
   const shopFoot =
     shopRows.length === 0
@@ -243,20 +259,20 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     y = addSectionTitle(
       doc,
       'Cash list',
-      `Cash collected on ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
+      `Cash collected on ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}. Return cheque settlements are listed separately.`,
     );
     const cashBody =
-      cashRows.length === 0
+      listedCashRows.length === 0
         ? [['—', '—', moneyCell(0)]]
-        : cashRows.map((r) => [r.customerName || '—', r.invoiceNumber || '—', moneyCell(r.amount)]);
+        : listedCashRows.map((r) => [r.customerName || '—', r.invoiceNumber || '—', moneyCell(r.amount)]);
     const cashFoot =
-      cashRows.length === 0
+      listedCashRows.length === 0
         ? null
         : [
             [
-              `Total (${cashRows.length} payment${cashRows.length === 1 ? '' : 's'})`,
+              `Total (${listedCashRows.length} payment${listedCashRows.length === 1 ? '' : 's'})`,
               '',
-              moneyCell(totals.cash),
+              moneyCell(sumAmounts(listedCashRows)),
             ],
           ];
     autoTable(doc, {
@@ -275,7 +291,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   y = addSectionTitle(
     doc,
     'Cheque list',
-    `Cheques collected on ${reportDate || '—'}, with returned cheques deducted on the day they bounce${userLabel ? ` · ${userLabel}` : ''}.`,
+    `Cheques collected on ${reportDate || '—'}, with returned cheques deducted on the day they bounce${userLabel ? ` · ${userLabel}` : ''}. Return cheque settlements are listed separately.`,
   );
 
   const chequeHeadRow = ['Shop', 'Cheque date', 'Amount', 'Cheque #', 'Bill #', 'Deposited'];
@@ -285,9 +301,9 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   if (showInvoiceNumber) chequeEmpty.splice(4, 0, '—');
   if (showRecordedBy) chequeEmpty.push('—');
   const chequeBody =
-    chequeRows.length === 0
+    listedChequeRows.length === 0
       ? [chequeEmpty]
-      : chequeRows.map((r) => {
+      : listedChequeRows.map((r) => {
           const row = [
             r.customerName || '—',
             r.chequeDate || '—',
@@ -302,16 +318,16 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
         });
 
   const chequeFootRow = [
-    `Total (${chequeRows.length} cheque${chequeRows.length === 1 ? '' : 's'})`,
+    `Total (${listedChequeRows.length} cheque${listedChequeRows.length === 1 ? '' : 's'})`,
     '',
-    moneyCell(chequeTotal),
+    moneyCell(sumAmounts(listedChequeRows)),
     '',
     '',
     '',
   ];
   if (showInvoiceNumber) chequeFootRow.splice(4, 0, '');
   if (showRecordedBy) chequeFootRow.push('');
-  const chequeFoot = chequeRows.length === 0 ? null : [chequeFootRow];
+  const chequeFoot = listedChequeRows.length === 0 ? null : [chequeFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -328,7 +344,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   y = addSectionTitle(
     doc,
     'CDM deposit list',
-    `CDM deposits on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
+    `CDM deposits on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}. Return cheque settlements are listed separately.`,
   );
 
   const cdmHeadRow = ['Shop', 'Amount', 'Deposit date', 'CDM #', 'Bank account', 'Bill #', 'Approval'];
@@ -338,9 +354,9 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   if (showInvoiceNumber) cdmEmpty.splice(5, 0, '—');
   if (showRecordedBy) cdmEmpty.push('—');
   const cdmBody =
-    cdmRows.length === 0
+    listedCdmRows.length === 0
       ? [cdmEmpty]
-      : cdmRows.map((r) => {
+      : listedCdmRows.map((r) => {
           const row = [
             r.customerName || '—',
             moneyCell(r.amount),
@@ -356,8 +372,8 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
         });
 
   const cdmFootRow = [
-    `Total (${cdmRows.length} deposit${cdmRows.length === 1 ? '' : 's'})`,
-    moneyCell(cdmTotal),
+    `Total (${listedCdmRows.length} deposit${listedCdmRows.length === 1 ? '' : 's'})`,
+    moneyCell(sumAmounts(listedCdmRows)),
     '',
     '',
     '',
@@ -366,7 +382,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   ];
   if (showInvoiceNumber) cdmFootRow.splice(5, 0, '');
   if (showRecordedBy) cdmFootRow.push('');
-  const cdmFoot = cdmRows.length === 0 ? null : [cdmFootRow];
+  const cdmFoot = listedCdmRows.length === 0 ? null : [cdmFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -383,7 +399,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   y = addSectionTitle(
     doc,
     'Bank transfer list',
-    `Online bank transfers on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}.`,
+    `Online bank transfers on payments dated ${reportDate || '—'}${userLabel ? ` · ${userLabel}` : ''}. Return cheque settlements are listed separately.`,
   );
 
   const bankHeadRow = ['Shop', 'Amount', 'Transfer date', 'Reference #', 'Bank account', 'Bill #', 'Approval'];
@@ -393,9 +409,9 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   if (showInvoiceNumber) bankEmpty.splice(5, 0, '—');
   if (showRecordedBy) bankEmpty.push('—');
   const bankBody =
-    bankTransferRows.length === 0
+    listedBankRows.length === 0
       ? [bankEmpty]
-      : bankTransferRows.map((r) => {
+      : listedBankRows.map((r) => {
           const row = [
             r.customerName || '—',
             moneyCell(r.amount),
@@ -411,8 +427,8 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
         });
 
   const bankFootRow = [
-    `Total (${bankTransferRows.length} transfer${bankTransferRows.length === 1 ? '' : 's'})`,
-    moneyCell(bankTransferTotal),
+    `Total (${listedBankRows.length} transfer${listedBankRows.length === 1 ? '' : 's'})`,
+    moneyCell(sumAmounts(listedBankRows)),
     '',
     '',
     '',
@@ -421,7 +437,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
   ];
   if (showInvoiceNumber) bankFootRow.splice(5, 0, '');
   if (showRecordedBy) bankFootRow.push('');
-  const bankFoot = bankTransferRows.length === 0 ? null : [bankFootRow];
+  const bankFoot = listedBankRows.length === 0 ? null : [bankFootRow];
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -433,6 +449,51 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     columnStyles: {
       1: { halign: 'right' },
     },
+  });
+
+  y = addSectionTitle(
+    doc,
+    'Return cheque settlements',
+    `Payments on ${reportDate || '—'} that settle a returned cheque${userLabel ? ` · ${userLabel}` : ''}. These amounts are already included in the method totals above and are not repeated in the cash, cheque, CDM, or bank lists.`,
+  );
+
+  const returnHead = ['Shop', 'Return cheque', 'Method', 'Reference', 'Amount'];
+  if (showRecordedBy) returnHead.push('Recorded by');
+  const returnEmpty = ['—', '—', '—', '—', moneyCell(0)];
+  if (showRecordedBy) returnEmpty.push('—');
+  const returnBody =
+    returnChequeRows.length === 0
+      ? [returnEmpty]
+      : returnChequeRows.map((r) => {
+          const row = [
+            r.customerName || '—',
+            r.returnCheque || '—',
+            r.method || '—',
+            r.reference || '—',
+            moneyCell(r.amount),
+          ];
+          if (showRecordedBy) row.push(r.recordedBy || '—');
+          return row;
+        });
+  const returnFootRow = [
+    `Total (${returnChequeRows.length} settlement${returnChequeRows.length === 1 ? '' : 's'})`,
+    '',
+    '',
+    '',
+    moneyCell(returnChequeTotal),
+  ];
+  if (showRecordedBy) returnFootRow.push('');
+  const returnFoot = returnChequeRows.length === 0 ? null : [returnFootRow];
+  const returnColumnStyles = { 4: { halign: 'right' } };
+
+  autoTable(doc, {
+    ...TABLE_OPTS,
+    head: [returnHead],
+    body: returnBody,
+    foot: returnFoot || undefined,
+    startY: y,
+    tableWidth: pageW,
+    columnStyles: returnColumnStyles,
   });
 
   addPageFooters(doc);
