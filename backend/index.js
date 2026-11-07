@@ -459,6 +459,7 @@ const {
   computeBillRuleCashback,
 } = require('./models/promotionRulesStore');
 const { readUnloads, writeUnloads, sumPendingUnloadBagsByBrand, normalizeStatus } = require('./models/unloadsStore');
+const { readBillingPriceRequests, writeBillingPriceRequests } = require('./models/billingPriceRequestsStore');
 const {
   getBagProducts,
   getBagProductKeys,
@@ -1835,6 +1836,11 @@ async function validateBillAgainstPooledStock(
     excludeRequestId ? pendingRows.filter((r) => r.id !== excludeRequestId) : pendingRows,
     keys,
   );
+  const billingHolds = await readBillingPriceRequests();
+  const held = sumPendingUnloadBagsByBrand(
+    billingHolds.filter((r) => !excludeRequestId || r.id !== excludeRequestId),
+    keys,
+  );
   // Match live stock: sellable returns come back; damage moves bags out of sellable stock.
   const returnsRows = await readReturns();
   const returned = sumItemReturnBagsByBrand(returnsRows, keys);
@@ -1847,7 +1853,8 @@ async function validateBillAgainstPooledStock(
         toNonNegNumber(promoOut[k]) -
         toNonNegNumber(damaged[k]) +
         toNonNegNumber(returned[k]) -
-        toNonNegNumber(pending[k]),
+        toNonNegNumber(pending[k]) -
+        toNonNegNumber(held[k]),
     );
     const need = toNonNegNumber(billBagFields[bagsField(k)]);
     if (need > available) {
@@ -3085,6 +3092,39 @@ function resolveStockUnloadPrices(row, stocks, bills, products) {
   return stockUnloadPricesFromLoad(load, products);
 }
 
+function billingUnitPriceChanges(fields, stockPrices, products) {
+  if (!stockPrices) return [];
+  const changes = [];
+  for (const p of products) {
+    const bags = toNonNegNumber(fields[p.bagsField]);
+    if (bags <= 0) continue;
+    const unloadPrice = roundMoney2(stockPrices[p.unitPriceField]);
+    if (!(unloadPrice > 0)) continue;
+    const unitPrice = roundMoney2(fields[p.unitPriceField]);
+    if (unitPrice === unloadPrice) continue;
+    changes.push({
+      key: p.key,
+      label: formatProductLabel(p) || p.label,
+      bags,
+      unloadPrice,
+      unitPrice,
+    });
+  }
+  return changes;
+}
+
+function pendingBillingInvoiceTaken(requests, invoiceNumber, excludeId = null) {
+  const norm = normalizeBillInvoiceNumber(invoiceNumber).toLowerCase();
+  if (!norm) return false;
+  const exclude = String(excludeId ?? '').trim();
+  for (const row of Array.isArray(requests) ? requests : []) {
+    if (normalizeStatus(row.status) !== 'pending') continue;
+    if (exclude && row.id === exclude) continue;
+    if (normalizeBillInvoiceNumber(row.invoiceNumber).toLowerCase() === norm) return true;
+  }
+  return false;
+}
+
 function submittedPricesMatchStockDefaults(pricedRow, defaults, products) {
   if (!defaults) return false;
   let compared = 0;
@@ -3231,11 +3271,18 @@ function enrichUnloadForCollector(row, bills, stocks, products, options = {}) {
   return next;
 }
 
-function suggestNextInvoiceForUnload(bills, unloads, dateStr) {
+async function suggestNextInvoiceForUnload(bills, unloads, dateStr) {
   const pending = (Array.isArray(unloads) ? unloads : [])
     .filter((r) => normalizeStatus(r.status) === 'pending')
     .map((r) => ({ createdAt: r.createdAt, invoiceNumber: r.invoiceNumber }));
-  return suggestNextBillInvoiceNumber([...(Array.isArray(bills) ? bills : []), ...pending], dateStr);
+  const billingHolds = await readBillingPriceRequests();
+  const billingPending = billingHolds
+    .filter((r) => normalizeStatus(r.status) === 'pending')
+    .map((r) => ({ createdAt: r.createdAt, invoiceNumber: r.invoiceNumber }));
+  return suggestNextBillInvoiceNumber(
+    [...(Array.isArray(bills) ? bills : []), ...pending, ...billingPending],
+    dateStr,
+  );
 }
 
 app.get('/api/bills/last-unit-prices', async (req, res) => {
@@ -3340,7 +3387,7 @@ async function createBillFromPendingUnload({ unloads, idx, priceBody = {}, enter
   const stockId = inferStockIdForBillBags(stocks, bills, fields, keys);
   let invoiceNumber = normalizeBillInvoiceNumber(requestRow.invoiceNumber);
   if (!invoiceNumber || billInvoiceNumberTaken(bills, invoiceNumber)) {
-    invoiceNumber = suggestNextInvoiceForUnload(bills, unloads, requestRow.date);
+    invoiceNumber = await suggestNextInvoiceForUnload(bills, unloads, requestRow.date);
   }
   const billRow = {
     id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -3611,14 +3658,141 @@ app.get('/api/requests/pending-count', async (req, res) => {
     ).length;
     const payments = await readPayments();
     const paymentRequests = payments.filter((p) => isPaymentApprovalPending(p)).length;
+    const billingHolds = await readBillingPriceRequests();
+    const billingPriceRequests = billingHolds.filter((r) => normalizeStatus(r.status) === 'pending').length;
     res.json({
-      total: unloadRequests + paymentRequests,
+      total: unloadRequests + paymentRequests + billingPriceRequests,
       unloadRequests,
       paymentRequests,
+      billingPriceRequests,
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read pending request count' });
+  }
+});
+
+app.get('/api/billing-price-requests', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const statusFilter = String(req.query.status ?? 'pending').trim().toLowerCase();
+    let rows = await readBillingPriceRequests();
+    if (statusFilter !== 'all') {
+      rows = rows.filter((r) => normalizeStatus(r.status) === (statusFilter || 'pending'));
+    }
+    const sorted = [...rows].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+    );
+    res.json(sorted);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read billing price requests' });
+  }
+});
+
+app.post('/api/billing-price-requests/:id/approve', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const approvedBy = String(body.approvedBy ?? auth.username ?? '').trim();
+    if (!id) return res.status(400).json({ error: 'Request id is required' });
+    if (!approvedBy) return res.status(400).json({ error: 'approvedBy is required' });
+
+    const requests = await readBillingPriceRequests();
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Request not found' });
+    const existing = requests[idx];
+    if (normalizeStatus(existing.status) !== 'pending') {
+      return res.status(400).json({ error: 'This request is no longer pending' });
+    }
+
+    const { fields, products } = await parseBillBagFields({ ...existing, ...body });
+    if (fields.totalAmount <= 0) {
+      return res.status(400).json({ error: 'Enter a unit price for each product with bags' });
+    }
+    const bills = await readBills();
+    if (
+      billInvoiceNumberTaken(bills, existing.invoiceNumber) ||
+      pendingBillingInvoiceTaken(requests, existing.invoiceNumber, existing.id)
+    ) {
+      return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
+    }
+    const stocks = await readStocks();
+    const promotions = await readPromotions();
+    const pendingUnloads = await readUnloads();
+    const check = await validateBillAgainstPooledStock(
+      stocks,
+      bills,
+      promotions,
+      fields,
+      pendingUnloads,
+      existing.id,
+      products,
+    );
+    if (!check.ok) return res.status(400).json({ error: check.error });
+
+    const billRow = {
+      id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      date: existing.date,
+      customerId: existing.customerId || '',
+      customerName: existing.customerName,
+      stockId: existing.stockId || '',
+      invoiceNumber: existing.invoiceNumber,
+      ...fields,
+      note: existing.note || '',
+      enteredBy: existing.enteredBy || approvedBy,
+      approvedBy,
+      billingPriceRequestId: existing.id,
+      createdAt: new Date().toISOString(),
+    };
+    const saved = await commitCreditBill(billRow, { products, promotions });
+    requests[idx] = {
+      ...existing,
+      ...fields,
+      status: 'approved',
+      billId: saved.id,
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+    };
+    await writeBillingPriceRequests(requests);
+    res.status(201).json({
+      request: requests[idx],
+      bill: await attachCollectorName(saved, 'enteredBy'),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to approve billing price request' });
+  }
+});
+
+app.post('/api/billing-price-requests/:id/reject', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = req.body || {};
+    const rejectedBy = String(body.rejectedBy ?? auth.username ?? '').trim();
+    const requests = await readBillingPriceRequests();
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Request not found' });
+    if (normalizeStatus(requests[idx].status) !== 'pending') {
+      return res.status(400).json({ error: 'This request is no longer pending' });
+    }
+    requests[idx] = {
+      ...requests[idx],
+      status: 'rejected',
+      rejectedBy,
+      rejectedAt: new Date().toISOString(),
+      rejectReason: String(body.reason ?? '').trim(),
+    };
+    await writeBillingPriceRequests(requests);
+    res.json({ request: requests[idx] });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to reject billing price request' });
   }
 });
 
@@ -3806,7 +3980,7 @@ app.post('/api/unloads', async (req, res) => {
       bills,
       products,
     );
-    row.invoiceNumber = suggestNextInvoiceForUnload(bills, unloadsExisting, date);
+    row.invoiceNumber = await suggestNextInvoiceForUnload(bills, unloadsExisting, date);
 
     const unloads = await readUnloads();
     unloads.push(row);
@@ -5934,7 +6108,7 @@ app.get('/api/bills/next-invoice-number', async (req, res) => {
   try {
     const date = String(req.query.date ?? '').trim();
     const [bills, unloads] = await Promise.all([readBills(), readUnloads()]);
-    res.json({ invoiceNumber: suggestNextInvoiceForUnload(bills, unloads, date) });
+    res.json({ invoiceNumber: await suggestNextInvoiceForUnload(bills, unloads, date) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to read the next invoice number' });
@@ -5962,6 +6136,41 @@ app.get('/api/bills', async (req, res) => {
   }
 });
 
+async function commitCreditBill(row, options = {}) {
+  const bills = await readBills();
+  bills.push(row);
+  await writeBills(bills);
+
+  const products = options.products || (await getBagProducts());
+  const promotions = options.promotions || (await readPromotions());
+  await syncBillRuleCashback(row, { enteredBy: row.enteredBy, products, promotions });
+
+  const paymentsList = await readPayments();
+  await refreshCustomerBalancesForBillNames(bills, paymentsList, row.customerName);
+
+  try {
+    await refreshLiveStockFromSources();
+  } catch (err) {
+    console.error('liveStock refresh after bill', err);
+  }
+
+  const customersForEmail = await readCustomers();
+  const custForEmail = customersForEmail.find(
+    (c) => normalizeCustomerName(c.name) === normalizeCustomerName(row.customerName),
+  );
+  if (custForEmail?.email) {
+    notifyBillEmail(custForEmail, row, custForEmail.remainingAmount).catch((err) =>
+      console.error('bill email notification', err),
+    );
+  }
+  if (custForEmail?.contactNumber) {
+    notifyBillWhatsApp(custForEmail, row, custForEmail.remainingAmount).catch((err) =>
+      console.error('bill whatsapp notification', err),
+    );
+  }
+  return row;
+}
+
 app.post('/api/bills', async (req, res) => {
   try {
     const body = req.body || {};
@@ -5987,16 +6196,25 @@ app.post('/api/bills', async (req, res) => {
     const stockIdFromBody = String(body.stockId ?? '').trim();
     const stocks = await readStocks();
     const bills = await readBills();
-    if (billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber)) {
+    const billingHolds = await readBillingPriceRequests();
+    if (
+      billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber) ||
+      pendingBillingInvoiceTaken(billingHolds, parsedInvoice.invoiceNumber)
+    ) {
       return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
     }
     const keys = products.map((p) => p.key);
     const stockId = stockIdFromBody || inferStockIdForBillBags(stocks, bills, fields, keys);
     const note = String(body.note ?? '').trim();
+    const customers = await readCustomers();
+    const cust = customers.find(
+      (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
+    );
 
     const row = {
       id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       date,
+      customerId: cust?.id || '',
       customerName,
       stockId,
       invoiceNumber: parsedInvoice.invoiceNumber,
@@ -6021,36 +6239,34 @@ app.post('/api/bills', async (req, res) => {
       return res.status(400).json({ error: check.error });
     }
 
-    bills.push(row);
-    await writeBills(bills);
-
-    await syncBillRuleCashback(row, { enteredBy, products, promotions });
-
-    const paymentsList = await readPayments();
-    await refreshCustomerBalancesForBillNames(bills, paymentsList, customerName);
-
-    try {
-      await refreshLiveStockFromSources();
-    } catch (err) {
-      console.error('liveStock refresh after bill', err);
+    const stockItemUnloadPriceEnabled = await isStockItemUnloadPriceEnabled();
+    const stockPrices = stockItemUnloadPriceEnabled
+      ? stockUnloadPricesFromLoad(
+          stocks.find((s) => String(s.stockId || '').trim() === String(stockId || '').trim()),
+          products,
+        )
+      : null;
+    const priceChanges = stockItemUnloadPriceEnabled
+      ? billingUnitPriceChanges(fields, stockPrices, products)
+      : [];
+    if (priceChanges.length > 0) {
+      const request = {
+        ...row,
+        id: `bill-req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        status: 'pending',
+        billingPriceChange: true,
+        priceChangeRequest: true,
+        stockItemUnloadPriceEnabled: true,
+        stockUnloadPrices: stockPrices,
+        priceChanges,
+      };
+      billingHolds.push(request);
+      await writeBillingPriceRequests(billingHolds);
+      return res.status(202).json({ pendingApproval: true, request });
     }
 
-    const customersForEmail = await readCustomers();
-    const custForEmail = customersForEmail.find(
-      (c) => normalizeCustomerName(c.name) === normalizeCustomerName(customerName),
-    );
-    if (custForEmail?.email) {
-      notifyBillEmail(custForEmail, row, custForEmail.remainingAmount).catch((err) =>
-        console.error('bill email notification', err),
-      );
-    }
-    if (custForEmail?.contactNumber) {
-      notifyBillWhatsApp(custForEmail, row, custForEmail.remainingAmount).catch((err) =>
-        console.error('bill whatsapp notification', err),
-      );
-    }
-
-    res.status(201).json(await attachCollectorName(row, 'enteredBy'));
+    const saved = await commitCreditBill(row, { products, promotions });
+    res.status(201).json(await attachCollectorName(saved, 'enteredBy'));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to save bill' });
@@ -6090,7 +6306,11 @@ app.patch('/api/bills/:id', async (req, res) => {
     if (parsedInvoice.error) {
       return res.status(400).json({ error: parsedInvoice.error });
     }
-    if (billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber, id)) {
+    const billingHolds = await readBillingPriceRequests();
+    if (
+      billInvoiceNumberTaken(bills, parsedInvoice.invoiceNumber, id) ||
+      pendingBillingInvoiceTaken(billingHolds, parsedInvoice.invoiceNumber)
+    ) {
       return res.status(400).json({ error: 'This invoice # is already used on another bill.' });
     }
     const stocks = await readStocks();
@@ -6470,11 +6690,15 @@ app.get('/api/stocks/summary', async (req, res) => {
   try {
     const payload = await getLiveStockSummary();
     const keys = (payload.brands || []).map((b) => b.key);
-    const unloads = await readUnloads();
+    const [unloads, billingHolds] = await Promise.all([readUnloads(), readBillingPriceRequests()]);
     const pending = sumPendingUnloadBagsByBrand(unloads, keys);
+    const held = sumPendingUnloadBagsByBrand(billingHolds, keys);
     const brands = (payload.brands || []).map((b) => {
       const bags = Math.max(0, Math.floor(Number(b.bags) || 0));
-      const reserved = Math.max(0, Math.floor(Number(pending[b.key]) || 0));
+      const reserved = Math.max(
+        0,
+        Math.floor(Number(pending[b.key]) || 0) + Math.floor(Number(held[b.key]) || 0),
+      );
       return {
         ...b,
         bags,

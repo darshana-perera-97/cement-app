@@ -794,9 +794,9 @@ export default function SettingsPage() {
             <h2 className="text-sm font-bold text-slate-900">Add a unload price for items</h2>
             <p className="mt-1 text-sm text-slate-500">
               When enabled, admins enter an unloading price per product on each stock load. That price is the
-              default in Update unload price. If it is kept, the invoice is created immediately. If it is
-              changed, admin must accept the request first. When this is off, Save prices creates the credit
-              invoice, updates the customer ledger, and treats the unload as already approved by admin.
+              default in Update unload price and on Record credit sale. If it is kept, the invoice is created
+              immediately. If the per-bag price is changed, admin must accept the request first. When this is
+              off, Save prices and credit sales create the invoice immediately.
             </p>
             <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-slate-50/90 p-4 ring-1 ring-slate-100">
               <input
@@ -813,8 +813,9 @@ export default function SettingsPage() {
                   Add unloading prices on stock loads
                 </span>
                 <span className="mt-1 block text-sm leading-relaxed text-slate-600">
-                  Admin-only step 4 on Add a stock load. Collectors see those prices as the default per bag.
-                  Turn this off so Save prices invoices immediately without a price-change request.
+                  Admin-only step 4 on Add a stock load. Collectors and credit sales use those prices as the
+                  default per bag. A different per-bag price waits for admin approval. Turn this off to invoice
+                  immediately without a price-change request.
                 </span>
               </span>
             </label>

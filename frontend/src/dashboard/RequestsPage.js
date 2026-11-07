@@ -135,8 +135,18 @@ function isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled) {
   return Boolean(stockItemUnloadPriceEnabled) && Boolean(row?.priceChangeRequest);
 }
 
+function billingPriceSummary(row) {
+  const changes = Array.isArray(row?.priceChanges) ? row.priceChanges : [];
+  const invoice = String(row?.invoiceNumber || '').trim();
+  const prices = changes
+    .map((c) => `${c.label} ${money(c.unitPrice)} (unload ${money(c.unloadPrice)})`)
+    .join(', ');
+  return [invoice, prices].filter(Boolean).join(' · ') || '—';
+}
+
 function adminRequestTypeLabel(row, stockItemUnloadPriceEnabled) {
   if (row?.requestKind === 'payment') return requestTypeLabel(row);
+  if (row?.requestKind === 'billing') return 'Billing price change';
   return requestTypeLabel({
     ...row,
     priceChangeRequest: isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled),
@@ -227,14 +237,17 @@ export default function RequestsPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [unloadRes, paymentRes, shopRes] = await Promise.all([
+      const [unloadRes, paymentRes, billingRes, shopRes] = await Promise.all([
         authFetch(`${apiBase}/api/unload-requests?status=pending`),
         authFetch(`${apiBase}/api/payment-requests?status=pending`),
+        authFetch(`${apiBase}/api/billing-price-requests?status=pending`),
         authFetch(`${apiBase}/api/shop`),
       ]);
+      if ([unloadRes, paymentRes, billingRes, shopRes].some((res) => res.status === 401)) return;
       if (!unloadRes.ok) throw new Error('Failed to load requests');
       const unloadData = await unloadRes.json();
       const paymentData = paymentRes.ok ? await paymentRes.json() : [];
+      const billingData = billingRes.ok ? await billingRes.json() : [];
       if (shopRes.ok) {
         const shopData = await shopRes.json();
         setBankAccounts(Array.isArray(shopData?.bankAccounts) ? shopData.bankAccounts : []);
@@ -244,6 +257,7 @@ export default function RequestsPage() {
       const combined = [
         ...(Array.isArray(unloadData) ? unloadData : []).map((r) => normalizeRequestRow(r, 'unload')),
         ...(Array.isArray(paymentData) ? paymentData : []).map((r) => normalizeRequestRow(r, 'payment')),
+        ...(Array.isArray(billingData) ? billingData : []).map((r) => normalizeRequestRow(r, 'billing')),
       ].sort((a, b) =>
         String(b.createdAt || `${b.date}T12:00:00`).localeCompare(String(a.createdAt || `${a.date}T12:00:00`)),
       );
@@ -263,7 +277,7 @@ export default function RequestsPage() {
   }, [load]);
 
   useEffect(() => {
-    if (!stockItemUnloadPriceEnabled && typeFilter === 'price_change') {
+    if (!stockItemUnloadPriceEnabled && (typeFilter === 'price_change' || typeFilter === 'billing_price')) {
       setTypeFilter('');
     }
   }, [stockItemUnloadPriceEnabled, typeFilter]);
@@ -271,13 +285,14 @@ export default function RequestsPage() {
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       const visiblePriceChange =
-        r.requestKind !== 'payment' && isVisiblePriceChangeRequest(r, stockItemUnloadPriceEnabled);
-      if (r.requestKind !== 'payment' && collectorHasPricedUnload(r) && !visiblePriceChange) {
+        r.requestKind === 'unload' && isVisiblePriceChangeRequest(r, stockItemUnloadPriceEnabled);
+      if (r.requestKind === 'unload' && collectorHasPricedUnload(r) && !visiblePriceChange) {
         return false;
       }
       if (typeFilter === 'payment' && r.requestKind !== 'payment') return false;
-      if (typeFilter === 'unload' && (r.requestKind === 'payment' || visiblePriceChange)) return false;
-      if (typeFilter === 'price_change' && (r.requestKind === 'payment' || !visiblePriceChange)) return false;
+      if (typeFilter === 'billing_price' && r.requestKind !== 'billing') return false;
+      if (typeFilter === 'unload' && (r.requestKind !== 'unload' || visiblePriceChange)) return false;
+      if (typeFilter === 'price_change' && !visiblePriceChange) return false;
       if (!inDateRange(r.date, dateFrom, dateTo)) return false;
       const fields = [
         r.date,
@@ -289,6 +304,8 @@ export default function RequestsPage() {
       ];
       if (r.requestKind === 'payment') {
         fields.push(paymentRequestSummary(r));
+      } else if (r.requestKind === 'billing') {
+        fields.push(r.invoiceNumber, r.enteredBy, billingPriceSummary(r));
       } else {
         fields.push(r.driverName, String(totalBags(r, brands)), bagLines(r, brands));
       }
@@ -320,7 +337,10 @@ export default function RequestsPage() {
     }
     setPriceForm(
       emptyPriceForm(row, brands, {
-        hideCollectorPrices: !isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled),
+        hideCollectorPrices:
+          row.requestKind === 'billing'
+            ? false
+            : !isVisiblePriceChangeRequest(row, stockItemUnloadPriceEnabled),
       }),
     );
     setLastPreview(null);
@@ -344,6 +364,7 @@ export default function RequestsPage() {
         `${apiBase}/api/bills/last-unit-prices?customerId=${encodeURIComponent(approveRow.customerId)}`,
       );
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401) return;
       if (!res.ok) {
         setSaveError(data.error || 'Could not load last prices');
         return;
@@ -428,6 +449,7 @@ export default function RequestsPage() {
           },
         );
         const data = await res.json().catch(() => ({}));
+        if (res.status === 401) return;
         if (!res.ok) {
           setSaveError(data.error || 'Approval failed');
           return;
@@ -436,6 +458,37 @@ export default function RequestsPage() {
         await load();
         if (data?.payment) requestAutoPrint('cashCollection', data.payment);
         else if (data?.id && data?.amount != null) requestAutoPrint('cashCollection', data);
+        return;
+      }
+      if (approveRow.requestKind === 'billing') {
+        const payload = { approvedBy: getUsername() };
+        for (const b of brands) {
+          const bags = Number(approveRow[`${b.key}Bags`]) || 0;
+          if (bags <= 0) continue;
+          payload[`${b.key}UnitPrice`] = priceForm[`${b.key}UnitPrice`];
+        }
+        const res = await authFetch(
+          `${apiBase}/api/billing-price-requests/${encodeURIComponent(approveRow.id)}/approve`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) return;
+        if (!res.ok) {
+          setSaveError(data.error || 'Approval failed');
+          return;
+        }
+        closeApprove();
+        await load();
+        if (data?.bill) {
+          requestAutoPrint('billGenerate', {
+            ...data.bill,
+            customerId: data.bill.customerId || approveRow?.customerId || '',
+          });
+        }
         return;
       }
       const payload = { enteredBy: getUsername() };
@@ -448,6 +501,7 @@ export default function RequestsPage() {
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401) return;
       if (!res.ok) {
         setSaveError(data.error || 'Approval failed');
         return;
@@ -474,12 +528,15 @@ export default function RequestsPage() {
       const url =
         row.requestKind === 'payment'
           ? `${apiBase}/api/payment-requests/${encodeURIComponent(row.id)}/reject`
-          : `${apiBase}/api/unload-requests/${encodeURIComponent(row.id)}/reject`;
+          : row.requestKind === 'billing'
+            ? `${apiBase}/api/billing-price-requests/${encodeURIComponent(row.id)}/reject`
+            : `${apiBase}/api/unload-requests/${encodeURIComponent(row.id)}/reject`;
       const res = await authFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rejectedBy: getUsername() }),
       });
+      if (res.status === 401) return;
       if (res.ok) await load();
     } finally {
       setRejectingId(null);
@@ -496,7 +553,7 @@ export default function RequestsPage() {
         <h1 className="text-xl font-bold text-slate-900">Requests</h1>
         <p className="mt-1 text-sm text-slate-500">
           Driver unload submissions
-          {stockItemUnloadPriceEnabled ? ', unload price changes,' : ''} and CDM / online transfer
+          {stockItemUnloadPriceEnabled ? ', unload price changes, billing price changes,' : ''} and CDM / online transfer
           payments waiting for manager approval.
         </p>
       </div>
@@ -525,6 +582,9 @@ export default function RequestsPage() {
             <option value="unload">Unload</option>
             {stockItemUnloadPriceEnabled ? (
               <option value="price_change">Unload price change</option>
+            ) : null}
+            {stockItemUnloadPriceEnabled ? (
+              <option value="billing_price">Billing price change</option>
             ) : null}
             <option value="payment">Payment approval</option>
           </select>
@@ -596,7 +656,9 @@ export default function RequestsPage() {
                   subtitle={
                     row.requestKind === 'payment'
                       ? `${row.date} · ${adminRequestTypeLabel(row, stockItemUnloadPriceEnabled)} · ${paymentRequestSummary(row)}`
-                      : `${row.date} · ${row.driverName || 'Driver'} · ${totalBags(row, brands)} bags`
+                      : row.requestKind === 'billing'
+                        ? `${row.date} · ${billingPriceSummary(row)}`
+                        : `${row.date} · ${row.driverName || 'Driver'} · ${totalBags(row, brands)} bags`
                   }
                   onClick={() => setDetailRow(row)}
                   fields={[
@@ -606,7 +668,9 @@ export default function RequestsPage() {
                     },
                     row.requestKind === 'payment'
                       ? { label: 'Amount', value: money(row.amount) }
-                      : { label: 'Bags', value: bagLines(row, brands) || '—' },
+                      : row.requestKind === 'billing'
+                        ? { label: 'Price', value: billingPriceSummary(row) }
+                        : { label: 'Bags', value: bagLines(row, brands) || '—' },
                   ]}
                   actions={
                     <>
@@ -665,7 +729,9 @@ export default function RequestsPage() {
                       <td className="px-4 py-3 text-slate-600">
                         {row.requestKind === 'payment'
                           ? paymentRequestSummary(row)
-                          : `${row.driverName || '—'} · ${bagLines(row, brands) || '—'}`}
+                          : row.requestKind === 'billing'
+                            ? billingPriceSummary(row)
+                            : `${row.driverName || '—'} · ${bagLines(row, brands) || '—'}`}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
                         <div
@@ -828,14 +894,18 @@ export default function RequestsPage() {
             ) : (
               <>
             <h2 className="text-lg font-bold text-slate-900">
-              {isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
-                ? 'Approve unload price change'
-                : 'Approve unload request'}
+              {approveRow.requestKind === 'billing'
+                ? 'Approve billing price change'
+                : isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
+                  ? 'Approve unload price change'
+                  : 'Approve unload request'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              {isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
-                ? 'Review the collector’s unit prices, then create the credit bill.'
-                : 'Creates a credit bill with the driver’s date and bag counts.'}
+              {approveRow.requestKind === 'billing'
+                ? 'The per-bag price differs from the stock-load unloading price. Approving creates the credit bill.'
+                : isVisiblePriceChangeRequest(approveRow, stockItemUnloadPriceEnabled)
+                  ? 'Review the collector’s unit prices, then create the credit bill.'
+                  : 'Creates a credit bill with the driver’s date and bag counts.'}
             </p>
 
             <dl className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm">
@@ -847,10 +917,17 @@ export default function RequestsPage() {
                 <dt className="text-slate-500">Date</dt>
                 <dd className="font-semibold tabular-nums text-slate-900">{approveRow.date}</dd>
               </div>
+              {approveRow.requestKind === 'billing' ? (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-slate-500">Invoice</dt>
+                  <dd className="font-semibold text-slate-900">{approveRow.invoiceNumber || '—'}</dd>
+                </div>
+              ) : (
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-500">Driver</dt>
                 <dd className="text-slate-800">{approveRow.driverName || '—'}</dd>
               </div>
+              )}
               <div>
                 <dt className="text-slate-500">Bags</dt>
                 <dd className="mt-1 text-slate-800">{bagLines(approveRow, brands)}</dd>
@@ -873,10 +950,18 @@ export default function RequestsPage() {
               {brands.map((b) => {
                 const bags = Number(approveRow[`${b.key}Bags`]) || 0;
                 if (bags <= 0) return null;
+                const unloadPrice = Number(approveRow.stockUnloadPrices?.[`${b.key}UnitPrice`]);
+                const showUnload =
+                  approveRow.requestKind === 'billing' && Number.isFinite(unloadPrice) && unloadPrice > 0;
                 return (
                   <label key={b.key} className="flex items-center justify-between gap-3 text-sm">
                     <span className="font-medium text-slate-800">
                       {b.label} <span className="text-slate-400">({bags} bags)</span>
+                      {showUnload ? (
+                        <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+                          Unload price {money(unloadPrice)} / bag
+                        </span>
+                      ) : null}
                     </span>
                     <input
                       type="number"

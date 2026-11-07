@@ -506,6 +506,7 @@ export default function BillsPage() {
   const [unloadSaving, setUnloadSaving] = useState(false);
   const [unloadError, setUnloadError] = useState(null);
   const [unloadNotice, setUnloadNotice] = useState(null);
+  const [saleNotice, setSaleNotice] = useState(null);
   const [unloadStockByBrand, setUnloadStockByBrand] = useState({});
   const [unloadStockLoading, setUnloadStockLoading] = useState(false);
   const [showAllUnloadItems, setShowAllUnloadItems] = useState(false);
@@ -993,6 +994,7 @@ export default function BillsPage() {
 
   const openAdd = () => {
     setSaveError(null);
+    setSaleNotice(null);
     invoiceNumberTouched.current = false;
     loadCustomers();
     setAddStep(1);
@@ -1146,6 +1148,15 @@ export default function BillsPage() {
         setSaveError(data.error || 'Save failed');
         return;
       }
+      if (data.pendingApproval) {
+        const invoice = String(data.request?.invoiceNumber || built.body.invoiceNumber || '').trim();
+        const shop = String(data.request?.customerName || built.body.customerName || 'this shop').trim();
+        setSaleNotice(
+          `Billing for ${shop}${invoice ? ` (${invoice})` : ''} uses a per-bag price different from the unloading price. Sent for admin approval. The credit bill is created after it is accepted.`,
+        );
+        setAddOpen(false);
+        return;
+      }
       await load();
       revokeSaleInvoiceUrl();
       const preview = billsInvoicesPdfBlobUrl([data], {
@@ -1269,6 +1280,11 @@ export default function BillsPage() {
       {unloadNotice ? (
         <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900 ring-1 ring-emerald-100" role="status">
           {unloadNotice}
+        </p>
+      ) : null}
+      {saleNotice ? (
+        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950 ring-1 ring-amber-100" role="status">
+          {saleNotice}
         </p>
       ) : null}
 

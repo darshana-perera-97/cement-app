@@ -71,7 +71,12 @@ export function getRowDetailMeta(variant, row) {
       };
     case 'unloadRequest':
       return {
-        title: row.priceChangeRequest && row.stockItemUnloadPriceEnabled ? 'Unload price change' : 'Unload request',
+        title:
+          row.requestKind === 'billing'
+            ? 'Billing price change'
+            : row.priceChangeRequest && row.stockItemUnloadPriceEnabled
+              ? 'Unload price change'
+              : 'Unload request',
         subtitle: [row.date, row.customerName, row.driverName].filter(Boolean).join(' · ') || null,
       };
     case 'purchaseOrder':
@@ -984,12 +989,26 @@ function UnloadRequestDetailContent({ row }) {
         <SummaryField label="Date" value={displayText(row.date)} />
         <SummaryField
           label="Type"
-          value={row.priceChangeRequest && row.stockItemUnloadPriceEnabled ? 'Unload price change' : 'Unload'}
+          value={
+            row.requestKind === 'billing'
+              ? 'Billing price change'
+              : row.priceChangeRequest && row.stockItemUnloadPriceEnabled
+                ? 'Unload price change'
+                : 'Unload'
+          }
         />
         <SummaryField label="Status" value={status} valueClassName="capitalize" />
         <SummaryField label="Shop" value={displayText(row.customerName)} className="col-span-2 sm:col-span-1" />
-        <SummaryField label="Driver" value={displayText(row.driverName)} />
-        <SummaryField label="Lorry" value={displayText(row.vehicleNumber)} />
+        {row.requestKind === 'billing' ? (
+          <SummaryField label="Invoice" value={displayText(row.invoiceNumber)} />
+        ) : (
+          <SummaryField label="Driver" value={displayText(row.driverName)} />
+        )}
+        {row.requestKind === 'billing' ? (
+          <SummaryField label="Entered by" value={displayText(row.enteredBy)} />
+        ) : (
+          <SummaryField label="Lorry" value={displayText(row.vehicleNumber)} />
+        )}
         <SummaryField label="Submitted" value={formatDateTime(row.createdAt)} className="col-span-2 sm:col-span-1" />
         <SummaryField
           label="Total bags"
@@ -1004,12 +1023,15 @@ function UnloadRequestDetailContent({ row }) {
           valueClassName="tabular-nums font-semibold text-slate-900"
         />
       </SummaryGrid>
-      {row.note ? <NoteBlock label="Driver note" value={row.note} /> : null}
+      {row.note ? (
+        <NoteBlock label={row.requestKind === 'billing' ? 'Note' : 'Driver note'} value={row.note} />
+      ) : null}
       <BrandSections title="Bags by brand">
         {brands.map((b) => {
           const bags = Number(row[`${b.key}Bags`]) || 0;
           const unit = Number(row[`${b.key}UnitPrice`]);
           const line = Number(row[`${b.key}Line`]);
+          const unloadPrice = Number(row.stockUnloadPrices?.[`${b.key}UnitPrice`]);
           const active = brandHasBags(row, b.key);
           return (
             <BrandSectionShell key={b.key} brand={b} active={active} emptyText="No bags for this brand">
@@ -1017,6 +1039,14 @@ function UnloadRequestDetailContent({ row }) {
                 <BrandFieldCell brand={b} lead label="Bags" value={bags} valueClassName="tabular-nums font-semibold text-slate-900" />
                 {active ? (
                   <>
+                    {row.requestKind === 'billing' && Number.isFinite(unloadPrice) && unloadPrice > 0 ? (
+                      <BrandFieldCell
+                        brand={b}
+                        label="Unload price"
+                        value={formatMoneyOrDash(unloadPrice)}
+                        valueClassName="tabular-nums"
+                      />
+                    ) : null}
                     <BrandFieldCell
                       brand={b}
                       label="Unit price"

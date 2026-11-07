@@ -19,6 +19,7 @@ function displayFilter(value, fallback = 'All') {
 
 export function requestTypeLabel(row) {
   if (row?.requestKind === 'payment') return 'Payment approval';
+  if (row?.requestKind === 'billing') return 'Billing price change';
   if (row?.priceChangeRequest) return 'Unload price change';
   return 'Unload';
 }
@@ -26,6 +27,7 @@ export function requestTypeLabel(row) {
 export function requestTypeFilterLabel(typeFilter) {
   if (typeFilter === 'unload') return 'Unload';
   if (typeFilter === 'price_change') return 'Unload price change';
+  if (typeFilter === 'billing_price') return 'Billing price change';
   if (typeFilter === 'payment') return 'Payment approval';
   return 'All types';
 }

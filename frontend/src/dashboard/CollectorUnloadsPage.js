@@ -171,6 +171,7 @@ export default function CollectorUnloadsPage() {
     setError(null);
     try {
       const res = await authFetch(`${apiBase}/api/collector/unloads`);
+      if (res.status === 401) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || 'Failed to load unloads');
@@ -247,6 +248,7 @@ export default function CollectorUnloadsPage() {
       const res = await authFetch(
         `${apiBase}/api/bills/last-unit-prices?customerId=${encodeURIComponent(editRow.customerId)}`,
       );
+      if (res.status === 401) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setSaveError(data.error || 'Could not load last prices');
@@ -298,6 +300,7 @@ export default function CollectorUnloadsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (res.status === 401) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setSaveError(data.error || 'Could not save prices');

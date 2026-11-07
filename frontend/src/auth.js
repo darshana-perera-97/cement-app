@@ -209,12 +209,28 @@ export function getAuthHeaders() {
   return { Authorization: `Bearer ${t}` };
 }
 
+let signingOut = false;
+
+/** Invalid session: clear it and leave the app instead of showing a sign-in error. */
+export function signOutToLogin() {
+  if (signingOut) return;
+  signingOut = true;
+  clearAuth();
+  if (typeof window === 'undefined') return;
+  const path = window.location.pathname || '';
+  if (path.startsWith('/login')) return;
+  window.location.replace('/login');
+}
+
 export function authFetch(url, options = {}) {
   const headers = {
     ...(options.headers || {}),
     ...getAuthHeaders(),
   };
-  return fetch(url, { ...options, headers });
+  return fetch(url, { ...options, headers }).then((res) => {
+    if (res.status === 401 && isAuthed()) signOutToLogin();
+    return res;
+  });
 }
 
 /** Sync manager permissions from GET /api/me (e.g. after admin changes access). */

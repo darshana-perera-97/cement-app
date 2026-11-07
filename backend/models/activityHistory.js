@@ -16,6 +16,7 @@ const ENTITY_RULES = [
   ['/api/purchase-orders', 'purchase order'],
   ['/api/cheque-deposits', 'cheque deposit'],
   ['/api/payments', 'payment collection'],
+  ['/api/billing-price-requests', 'billing price request'],
   ['/api/bills', 'billing'],
   ['/api/returns', 'return'],
   ['/api/customers', 'customer'],
@@ -170,6 +171,9 @@ function entityFor(pathname, body, response) {
   if (pathMatches(pathname, '/api/unload-requests') && /\/approve$/.test(pathname)) {
     return 'billing';
   }
+  if (pathMatches(pathname, '/api/billing-price-requests') && /\/approve$/.test(pathname)) {
+    return 'billing';
+  }
   if (pathMatches(pathname, '/api/payment-requests') && /\/approve$/.test(pathname)) {
     return 'payment collection';
   }
@@ -196,7 +200,13 @@ function categoryFor(pathname, body, response) {
   return entity.charAt(0).toUpperCase() + entity.slice(1);
 }
 
-function classify(method, pathname) {
+function classify(method, pathname, responseBody) {
+  if (method === 'POST' && pathname === '/api/bills' && responseBody?.pendingApproval) {
+    return { action: 'add', verb: 'Sent for approval' };
+  }
+  if (pathMatches(pathname, '/api/billing-price-requests') && /\/approve$/.test(pathname)) {
+    return { action: 'accept', verb: 'Created' };
+  }
   if (pathMatches(pathname, '/api/unload-requests') && /\/approve$/.test(pathname)) {
     return { action: 'accept', verb: 'Created' };
   }
@@ -247,7 +257,7 @@ function recordsToScan(body, response, pathname) {
   };
   const responseRecord = asRecord(response);
   if (responseRecord) {
-    if (/\/approve$/.test(pathname)) {
+    if (/\/approve$/.test(pathname) || responseRecord.pendingApproval) {
       push(responseRecord.bill);
       push(responseRecord.request);
       push(responseRecord.payment);
@@ -341,7 +351,7 @@ const BAG_KEY_RE = /(Bags|bags)$/;
 const QTY_KEY_RE = /^(quantity|qty|bags)$/i;
 
 function positiveNumber(value) {
-  if (value == null || value === '') return null;
+  if (value == null || value === '' || typeof value === 'boolean') return null;
   const n = Number(value);
   if (!Number.isFinite(n) || n === 0) return null;
   return n;
@@ -592,7 +602,7 @@ async function actorName(username) {
 }
 
 async function recordActivity(req, pathname, responseBody) {
-  const kind = classify(req.method, pathname);
+  const kind = classify(req.method, pathname, responseBody);
   if (!kind) return null;
   const username = actorUsername(req);
   const userName = await actorName(username);
