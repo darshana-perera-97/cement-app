@@ -24,6 +24,7 @@ function titleForPath(pathname, brand) {
     { test: (p) => p === '/dashboard/stock', title: `Stock — ${brand}` },
     { test: (p) => p === '/dashboard/loads', title: `Loads — ${brand}` },
     { test: (p) => p === '/dashboard/purchase-orders', title: `Purchase Order — ${brand}` },
+    { test: (p) => p === '/dashboard/quotations', title: `Quotations — ${brand}` },
     { test: (p) => p === '/dashboard/bills', title: `Bills — ${brand}` },
     { test: (p) => p === '/dashboard/returns', title: `Returns — ${brand}` },
     { test: (p) => p === '/dashboard/payments', title: `Payments — ${brand}` },

@@ -92,6 +92,12 @@ export function getRowDetailMeta(variant, row) {
             .filter((v) => v && v !== '—')
             .join(' · ') || null,
       };
+    case 'quotation':
+      return {
+        title: 'Quotation',
+        subtitle:
+          [row.quotationNumber, row.date, row.customerName].filter(Boolean).join(' · ') || null,
+      };
     case 'user':
       return {
         title: 'User details',
@@ -210,6 +216,8 @@ export function RowDetailContent({ variant, row }) {
       return <UnloadRequestDetailContent row={row} />;
     case 'purchaseOrder':
       return <PurchaseOrderDetailContent row={row} />;
+    case 'quotation':
+      return <QuotationDetailContent row={row} />;
     case 'user':
       return <UserDetailContent row={row} />;
     case 'distributor':
@@ -1079,6 +1087,116 @@ function poChequeStatusLabel(chequeDate, paymentType) {
     return d <= today ? 'Deducted from bank account' : 'Pending (deducted on transfer date)';
   }
   return d <= today ? 'Deducted from bank balance' : 'Pending (cash out on converting date)';
+}
+
+function QuotationDetailContent({ row }) {
+  const items = Array.isArray(row.items) ? row.items : [];
+  const conditions = row.conditions && typeof row.conditions === 'object' ? row.conditions : {};
+  const total =
+    Number(row.totalAmount) ||
+    items.reduce((sum, item) => sum + (Number(item.lineTotal) || 0), 0);
+
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField
+          label="Quotation number"
+          value={displayText(row.quotationNumber)}
+          valueClassName="font-mono font-semibold"
+        />
+        <SummaryField label="Date" value={displayText(row.date)} />
+        <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2" />
+        <SummaryField
+          label="Total amount"
+          value={formatMoney(total)}
+          className="col-span-2 bg-indigo-50 ring-indigo-100"
+          valueClassName="tabular-nums font-semibold text-indigo-900"
+        />
+        <SummaryField label="Valid until" value={displayText(conditions.validUntil)} />
+        <SummaryField label="Created by" value={displayText(row.recordedBy || row.createdBy)} />
+        <SummaryField label="Created" value={formatDateTime(row.createdAt)} />
+        {row.updatedAt ? <SummaryField label="Updated" value={formatDateTime(row.updatedAt)} /> : null}
+      </SummaryGrid>
+
+      {items.length > 0 ? (
+        <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-slate-100">
+          <p className="bg-slate-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+            Items
+          </p>
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-white text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Item</th>
+                <th className="px-3 py-2 text-right">Amount</th>
+                <th className="px-3 py-2 text-right">Per item cost</th>
+                <th className="px-3 py-2 text-right">Line total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {items.map((item, idx) => (
+                <tr key={`${item.product}-${idx}`}>
+                  <td className="px-3 py-2 text-slate-800">
+                    {displayText(item.product)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                    {Number(item.quantity) || 0}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                    {formatMoney(item.unitCost)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
+                    {formatMoney(item.lineTotal ?? (Number(item.quantity) || 0) * (Number(item.unitCost) || 0))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-100">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Conditions</p>
+        <dl className="mt-2 space-y-2 text-sm">
+          <div>
+            <dt className="text-xs text-slate-500">Payment terms</dt>
+            <dd className="mt-0.5 whitespace-pre-wrap text-slate-800">
+              {displayText(conditions.paymentTerms)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Delivery terms</dt>
+            <dd className="mt-0.5 whitespace-pre-wrap text-slate-800">
+              {displayText(conditions.deliveryTerms)}
+            </dd>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1 text-xs text-slate-600">
+            {conditions.pricesSubjectToChange ? (
+              <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">
+                Prices subject to change
+              </span>
+            ) : null}
+            {conditions.stockAvailability ? (
+              <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">
+                Stock availability
+              </span>
+            ) : null}
+            {conditions.quotationNotOrder ? (
+              <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">
+                Offer only (not an order)
+              </span>
+            ) : null}
+            {conditions.vatAlsoAdded ? (
+              <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-slate-200">
+                VAT also added for this bill
+              </span>
+            ) : null}
+          </div>
+        </dl>
+      </div>
+
+      {row.note ? <NoteBlock note={row.note} /> : null}
+    </>
+  );
 }
 
 function PurchaseOrderDetailContent({ row }) {

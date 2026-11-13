@@ -20,7 +20,9 @@ export default function RowDetailModal({
   const finalTitle = title ?? meta.title;
   const finalSubtitle = subtitle ?? meta.subtitle;
   const panelSizeClassName =
-    variant === 'incentive' || variant === 'purchaseOrder' ? 'max-w-3xl' : 'max-w-lg';
+    variant === 'incentive' || variant === 'purchaseOrder' || variant === 'quotation'
+      ? 'max-w-3xl'
+      : 'max-w-lg';
 
   return (
     <DetailModalShell

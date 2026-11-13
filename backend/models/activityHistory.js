@@ -14,6 +14,7 @@ const ENTITY_RULES = [
   ['/api/collector/unloads', 'unload prices'],
   ['/api/unloads', 'unload'],
   ['/api/purchase-orders', 'purchase order'],
+  ['/api/quotations', 'quotation'],
   ['/api/cheque-deposits', 'cheque deposit'],
   ['/api/payments', 'payment collection'],
   ['/api/billing-price-requests', 'billing price request'],
@@ -230,6 +231,7 @@ function classify(method, pathname, responseBody) {
     if (pathMatches(pathname, '/api/bills')) return { action: 'add', verb: 'Created' };
     if (pathMatches(pathname, '/api/stocks')) return { action: 'add', verb: 'Added' };
     if (pathMatches(pathname, '/api/purchase-orders')) return { action: 'add', verb: 'Created' };
+    if (pathMatches(pathname, '/api/quotations')) return { action: 'add', verb: 'Created' };
     if (pathMatches(pathname, '/api/promotions')) return { action: 'add', verb: 'Issued' };
     return { action: 'add', verb: 'Added' };
   }

@@ -6,6 +6,7 @@ export const MANAGER_ACCESS_OPTIONS = [
   { key: 'shop', label: 'Shop' },
   { key: 'loads', label: 'Loads' },
   { key: 'purchase-orders', label: 'Purchase Order' },
+  { key: 'quotations', label: 'Quotations' },
   { key: 'bills', label: 'Bills' },
   { key: 'returns', label: 'Returns' },
   { key: 'payments', label: 'Payments' },
@@ -39,6 +40,7 @@ export const DASHBOARD_ROUTE_ACCESS = {
   stock: 'stock',
   loads: 'loads',
   'purchase-orders': 'purchase-orders',
+  quotations: 'quotations',
   bills: 'bills',
   returns: 'returns',
   payments: 'payments',
@@ -124,6 +126,12 @@ export const DASHBOARD_NAV = [
     label: 'Purchase Order',
     icon: 'purchase-order',
     accessKey: 'purchase-orders',
+  },
+  {
+    to: '/dashboard/quotations',
+    label: 'Quotations',
+    icon: 'quotation',
+    accessKey: 'quotations',
   },
   {
     to: '/dashboard/bills',

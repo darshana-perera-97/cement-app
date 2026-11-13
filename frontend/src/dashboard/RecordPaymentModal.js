@@ -228,6 +228,7 @@ export default function RecordPaymentModal({
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -255,6 +256,17 @@ export default function RecordPaymentModal({
       setPromotions(Array.isArray(data) ? data : []);
     } catch {
       setPromotions([]);
+    }
+  }, []);
+
+  const loadReturns = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/returns`);
+      if (!res.ok) throw new Error('Failed to load returns');
+      const data = await res.json();
+      setReturnsRows(Array.isArray(data) ? data : []);
+    } catch {
+      setReturnsRows([]);
     }
   }, []);
 
@@ -313,10 +325,11 @@ export default function RecordPaymentModal({
     loadCustomers();
     loadBills();
     loadPromotions();
+    loadReturns();
     loadPayments();
     loadNextReceiptNumber();
     loadBankAccounts();
-  }, [open, loadCustomers, loadBills, loadPromotions, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
+  }, [open, loadCustomers, loadBills, loadPromotions, loadReturns, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -395,6 +408,7 @@ export default function RecordPaymentModal({
     const outstanding = buildCustomerOutstandingBills(customers, bills, payments, form.customerId, {
       excludePaymentId: editPayment?.id || null,
       promotions,
+      returnsRows,
     });
     const byId = new Map(outstanding.map((r) => [r.id, r]));
     for (const id of form.appliedBillIds) {
@@ -428,7 +442,7 @@ export default function RecordPaymentModal({
       }
       return String(a.billDate).localeCompare(String(b.billDate));
     });
-  }, [form.customerId, form.appliedBillIds, customers, bills, payments, promotions, editPayment?.id]);
+  }, [form.customerId, form.appliedBillIds, customers, bills, payments, promotions, returnsRows, editPayment?.id]);
 
   const handleChequeChange = (key, field, value) => {
     setForm((f) => ({

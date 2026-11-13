@@ -161,6 +161,7 @@ export default function CollectorSeparateBillSettlementModal({
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -188,6 +189,17 @@ export default function CollectorSeparateBillSettlementModal({
       setPromotions(Array.isArray(data) ? data : []);
     } catch {
       setPromotions([]);
+    }
+  }, []);
+
+  const loadReturns = useCallback(async () => {
+    try {
+      const res = await authFetch(`${apiBase}/api/returns`);
+      if (!res.ok) throw new Error('Failed to load returns');
+      const data = await res.json();
+      setReturnsRows(Array.isArray(data) ? data : []);
+    } catch {
+      setReturnsRows([]);
     }
   }, []);
 
@@ -244,10 +256,11 @@ export default function CollectorSeparateBillSettlementModal({
     loadCustomers();
     loadBills();
     loadPromotions();
+    loadReturns();
     loadPayments();
     loadNextReceiptNumber();
     loadBankAccounts();
-  }, [open, loadCustomers, loadBills, loadPromotions, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
+  }, [open, loadCustomers, loadBills, loadPromotions, loadReturns, loadPayments, loadNextReceiptNumber, loadBankAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -276,7 +289,7 @@ export default function CollectorSeparateBillSettlementModal({
 
   const pendingBills = useMemo(() => {
     if (!form.customerId) return [];
-    return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId, { promotions })].sort((a, b) => {
+    return [...buildCustomerOutstandingBills(customers, bills, payments, form.customerId, { promotions, returnsRows })].sort((a, b) => {
       if (Boolean(a.isReturnCheque) !== Boolean(b.isReturnCheque)) {
         return a.isReturnCheque ? -1 : 1;
       }
@@ -287,7 +300,7 @@ export default function CollectorSeparateBillSettlementModal({
       if (dateCmp !== 0) return dateCmp;
       return String(a.invoiceNumber || a.id).localeCompare(String(b.invoiceNumber || b.id));
     });
-  }, [form.customerId, customers, bills, payments, promotions]);
+  }, [form.customerId, customers, bills, payments, promotions, returnsRows]);
 
   const chequeTotal = useMemo(
     () => form.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0),

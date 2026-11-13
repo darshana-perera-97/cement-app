@@ -34,6 +34,7 @@ const CATEGORIES = [
   { value: 'Payment collection', label: 'Payment collection' },
   { value: 'Billing', label: 'Billing' },
   { value: 'Purchase order', label: 'Purchase order' },
+  { value: 'Quotation', label: 'Quotation' },
   { value: 'Stock addition', label: 'Stock addition' },
 ];
 

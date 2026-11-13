@@ -501,6 +501,13 @@ const {
   normalizeEntry: normalizeBankGuarantee,
   validateCreateBody: validateBankGuaranteeCreateBody,
 } = require('./models/bankGuaranteesStore');
+const {
+  readQuotations,
+  writeQuotations,
+  normalizeQuotation,
+  validateQuotationBody,
+  nextSuggestedQuotationNumber,
+} = require('./models/quotationsStore');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 1249;
@@ -2546,6 +2553,126 @@ app.delete('/api/bank-guarantees/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to remove bank guarantee' });
+  }
+});
+
+app.get('/api/quotations', async (req, res) => {
+  try {
+    const from = String(req.query.from ?? '').trim().slice(0, 10);
+    const to = String(req.query.to ?? '').trim().slice(0, 10);
+    const customerId = String(req.query.customerId ?? '').trim();
+
+    let rows = await readQuotations();
+    if (customerId) {
+      rows = rows.filter((r) => r.customerId === customerId);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      rows = rows.filter((r) => r.date >= from);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      rows = rows.filter((r) => r.date <= to);
+    }
+
+    rows.sort((a, b) => {
+      const d = String(b.date || '').localeCompare(String(a.date || ''));
+      if (d !== 0) return d;
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to read quotations' });
+  }
+});
+
+app.post('/api/quotations', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const customers = await readCustomers();
+    const customerById = new Map(customers.map((c) => [c.id, c]));
+
+    const validated = validateQuotationBody(body, { customerById });
+    if (validated.error) {
+      return res.status(400).json({ error: validated.error });
+    }
+
+    const entries = await readQuotations();
+    const quotationNumber =
+      String(validated.payload.quotationNumber ?? '').trim() || nextSuggestedQuotationNumber(entries);
+    const row = normalizeQuotation({
+      id: `qt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...validated.payload,
+      quotationNumber,
+      createdAt: new Date().toISOString(),
+    });
+    entries.push(row);
+    await writeQuotations(entries);
+    res.status(201).json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save quotation' });
+  }
+});
+
+app.patch('/api/quotations/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Quotation id is required' });
+    }
+
+    const body = req.body || {};
+    const customers = await readCustomers();
+    const customerById = new Map(customers.map((c) => [c.id, c]));
+
+    const validated = validateQuotationBody(body, { customerById });
+    if (validated.error) {
+      return res.status(400).json({ error: validated.error });
+    }
+
+    const entries = await readQuotations();
+    const idx = entries.findIndex((e) => e.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Quotation not found' });
+    }
+
+    const existing = entries[idx];
+    const row = normalizeQuotation({
+      ...existing,
+      ...validated.payload,
+      id: existing.id,
+      quotationNumber: existing.quotationNumber || validated.payload.quotationNumber || nextSuggestedQuotationNumber(entries),
+      createdAt: existing.createdAt,
+      recordedBy: existing.recordedBy || validated.payload.recordedBy,
+      updatedAt: new Date().toISOString(),
+      updatedBy: validated.payload.recordedBy,
+    });
+    entries[idx] = row;
+    await writeQuotations(entries);
+    res.json(row);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update quotation' });
+  }
+});
+
+app.delete('/api/quotations/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) {
+      return res.status(400).json({ error: 'Quotation id is required' });
+    }
+    const entries = await readQuotations();
+    const idx = entries.findIndex((e) => e.id === id);
+    if (idx < 0) {
+      return res.status(404).json({ error: 'Quotation not found' });
+    }
+    entries.splice(idx, 1);
+    await writeQuotations(entries);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to remove quotation' });
   }
 });
 

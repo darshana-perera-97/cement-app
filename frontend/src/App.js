@@ -12,6 +12,7 @@ import CustomerTransactionsPage from './dashboard/CustomerTransactionsPage';
 import CustomersPage from './dashboard/CustomersPage';
 import LoadsPage from './dashboard/LoadsPage';
 import PurchaseOrdersPage from './dashboard/PurchaseOrdersPage';
+import QuotationsPage from './dashboard/QuotationsPage';
 import PaymentsPage from './dashboard/PaymentsPage';
 import BankPage from './dashboard/BankPage';
 import ProfilesPage from './dashboard/ProfilesPage';
@@ -166,6 +167,14 @@ function AppRoutes() {
           element={
             <DashboardAccessRoute accessKey="purchase-orders">
               <PurchaseOrdersPage />
+            </DashboardAccessRoute>
+          }
+        />
+        <Route
+          path="quotations"
+          element={
+            <DashboardAccessRoute accessKey="quotations">
+              <QuotationsPage />
             </DashboardAccessRoute>
           }
         />
