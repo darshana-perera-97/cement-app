@@ -483,6 +483,8 @@ const {
   lastPricesByProduct,
   cancelIssuedCheque,
   cancelPurchaseOrder,
+  resolveIssuedPurchaseCheque,
+  preserveChequeDispositions,
   isPoCashPayment,
   poLineItems: storedPoLineItems,
 } = require('./models/purchaseOrdersStore');
@@ -2272,7 +2274,7 @@ function collectUnpaidBillRows(customers, bills, payments, overdueDates = {}, op
     });
     let remainingCredit = paySum;
     for (const bill of sortedBills) {
-      const total = toNonNegMoney(bill.totalAmount);
+      const total = effectiveBillTotal(bill, promotions, returnsRows);
       const paidTowardBill = Math.min(total, remainingCredit);
       remainingCredit -= paidTowardBill;
       const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -7503,14 +7505,14 @@ function applyCashBookForPurchaseOrders(cashBook, pos, recordedBy) {
   for (const po of pos) {
     const poId = String(po.id ?? '').trim();
     const desired = (Array.isArray(po.cheques) ? po.cheques : [])
-      .filter((c) => c && isPoCashPayment(c) && !c.cancelled)
+      .filter((c) => c && isPoCashPayment(c) && !c.cancelled && !c.settlementOfCheque)
       .map((c) => toNonNegMoney(c.amount))
       .filter((n) => n > 0);
     const description = poCashBookDescription(po);
     const activeIdx = [];
     next.forEach((entry, i) => {
       if (String(entry.category ?? '').trim() !== 'purchase_order') return;
-      if (entry.cancelled) return;
+      if (entry.cancelled || entry.chequeSettlement) return;
       if (String(entry.poId ?? '').trim() !== poId) return;
       activeIdx.push(i);
     });
@@ -7763,7 +7765,7 @@ app.patch('/api/purchase-orders/:id', async (req, res) => {
       next.unitPrice = item.unitPrice;
       next.lineTotal = item.lineTotal;
       next.totalAmount = item.lineTotal;
-      next.cheques = item.cheques;
+      next.cheques = preserveChequeDispositions(po.cheques, item.cheques);
       delete next.items;
       return next;
     };
@@ -7811,7 +7813,7 @@ app.patch('/api/purchase-orders/:id', async (req, res) => {
       next.unitPrice = first.unitPrice;
       next.lineTotal = totalAmount;
       next.totalAmount = totalAmount;
-      next.cheques = sharedCheques;
+      next.cheques = preserveChequeDispositions(current.cheques, sharedCheques);
       rows[idx] = next;
       touched.push(next);
     }
@@ -7861,6 +7863,78 @@ app.post('/api/purchase-orders/:id/cancel-cheque', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to cancel cheque' });
+  }
+});
+
+/** Manager/admin: hold, return, or settle a cheque issued for a purchase. */
+app.post('/api/purchase-orders/:id/cheque-action', async (req, res) => {
+  const auth = await requireManagerOrAdmin(req, res);
+  if (!auth) return;
+  try {
+    const poId = String(req.params.id ?? '').trim();
+    if (!poId) {
+      return res.status(400).json({ error: 'Purchase order id is required' });
+    }
+    const body = req.body || {};
+    const recordedBy = String(body.recordedBy ?? auth.username ?? '').trim();
+    if (!recordedBy) {
+      return res.status(400).json({ error: 'recordedBy (username) is required' });
+    }
+
+    const shop = await readShopData();
+    const bankAccountById = new Map((shop.bankAccounts || []).map((a) => [a.id, a]));
+    const rows = await readPurchaseOrders();
+    const result = resolveIssuedPurchaseCheque(
+      rows,
+      {
+        poId,
+        recordedBy,
+        action: body.action,
+        chequeNumber: body.chequeNumber,
+        chequeDate: body.chequeDate,
+        bankAccountId: body.bankAccountId,
+        amount: body.amount,
+        holdUntil: body.holdUntil,
+        settlementMethod: body.settlementMethod,
+        settlementDate: body.settlementDate,
+        settlementBankAccountId: body.settlementBankAccountId,
+        settlementChequeNumber: body.settlementChequeNumber,
+        settlementChequeDate: body.settlementChequeDate,
+        settlementReference: body.settlementReference,
+        today: body.today,
+      },
+      bankAccountById,
+    );
+    if (!result.ok) {
+      return res.status(result.error === 'Purchase order not found' ? 404 : 400).json({ error: result.error });
+    }
+
+    await writePurchaseOrders(rows);
+    if (result.cashSettlement) {
+      const cashBook = await readCashBookEntries();
+      const bookedAt = new Date().toISOString();
+      cashBook.push(
+        normalizeEntry({
+          id: `cbe-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          date: result.cashSettlement.date,
+          category: 'purchase_order',
+          amount: result.cashSettlement.amount,
+          description: result.cashSettlement.description,
+          recordedBy,
+          poId: result.cashSettlement.poId,
+          poNumber: result.cashSettlement.poNumber,
+          batchId: result.cashSettlement.batchId,
+          chequeSettlement: true,
+          createdAt: bookedAt,
+        }),
+      );
+      await writeCashBookEntries(cashBook);
+    }
+
+    res.json({ ok: true, po: result.po, updated: result.updated });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to update cheque' });
   }
 });
 

@@ -683,9 +683,11 @@ export default function AnalyticsPage() {
           } else {
             setPromotions([]);
           }
+          let retList = [];
           if (retRes.ok) {
             const retData = await retRes.json();
-            setReturnsRows(Array.isArray(retData) ? retData : []);
+            retList = Array.isArray(retData) ? retData : [];
+            setReturnsRows(retList);
           } else {
             setReturnsRows([]);
           }
@@ -694,7 +696,7 @@ export default function AnalyticsPage() {
               customerList,
               Array.isArray(bills) ? bills : [],
               paymentsList,
-              { promotions: promoList },
+              { promotions: promoList, returnsRows: retList },
             ).map(enrichOverdueBillRow),
           );
           if (cbeRes.ok) {

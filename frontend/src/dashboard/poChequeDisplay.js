@@ -8,6 +8,51 @@ function todayYmdLocal() {
   return `${y}-${m}-${day}`;
 }
 
+/** Converting / clearing date, moved forward when the cheque is on hold. */
+export function effectivePoChequeDate(c) {
+  const stored = String(c?.chequeDate ?? '').trim().slice(0, 10);
+  if (String(c?.chequeAction ?? '').trim() === 'hold') {
+    const hold = String(c?.holdUntil ?? '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(hold)) return hold;
+  }
+  return stored;
+}
+
+/** Issued purchase cheque that can still be held, returned, or settled. */
+export function canActOnIssuedPoCheque(c) {
+  if (!c || typeof c !== 'object') return false;
+  if (c.cancelled || c.chequeReturned) return false;
+  if (isPoCashPayment(c) || isPoBankTransferPayment(c)) return false;
+  if (!String(c.chequeNumber ?? '').trim()) return false;
+  if (!String(c.bankAccountId ?? '').trim()) return false;
+  if (!(Number(c.amount) > 0)) return false;
+  return true;
+}
+
+export function poChequeDispositionLabel(c) {
+  const action = String(c?.chequeAction ?? '').trim();
+  if (action === 'hold') {
+    const hold = String(c?.holdUntil ?? '').trim().slice(0, 10);
+    return hold ? `Held until ${hold}` : 'On hold';
+  }
+  if (c?.chequeReturned || action === 'return' || action === 'settle_today') {
+    const method = String(c?.settlementMethod ?? '').trim();
+    const how =
+      method === 'cash'
+        ? 'cash'
+        : method === 'bank_transfer'
+          ? 'bank transfer'
+          : method === 'cheque'
+            ? c.settlementChequeNumber
+              ? `cheque #${c.settlementChequeNumber}`
+              : 'another cheque'
+            : '';
+    const verb = action === 'settle_today' ? 'Settled today' : 'Returned';
+    return how ? `${verb} · ${how}` : verb;
+  }
+  return '';
+}
+
 /** PO outgoing cheques — deduped like backend bank balance. */
 export function collectPoOutgoingCheques(purchaseOrders) {
   const seen = new Set();
@@ -29,11 +74,12 @@ export function collectPoOutgoingCheques(purchaseOrders) {
       if (!bankAccountId || amount <= 0) continue;
       const paymentType = isPoBankTransferPayment(c) ? 'bank_transfer' : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
-      const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const sourceChequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const chequeDate = effectivePoChequeDate(c);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       rows.push({
@@ -42,8 +88,12 @@ export function collectPoOutgoingCheques(purchaseOrders) {
         paymentType,
         chequeNumber,
         chequeDate,
+        sourceChequeDate,
+        chequeAction: String(c.chequeAction ?? '').trim(),
+        holdUntil: String(c.holdUntil ?? '').trim().slice(0, 10),
         bankAccount: c.bankAccount,
         poId,
+        poNumber: String(po.poNumber ?? '').trim(),
         product: poLineItems(po)
           .map((item) => item.product)
           .filter(Boolean)
@@ -63,13 +113,18 @@ export function buildPendingPoOutgoingRows(purchaseOrders, bankAccounts, asOf = 
     const converting = String(c.chequeDate ?? '').slice(0, 10);
     if (converting && converting <= asOf) continue;
     rows.push({
-      rowKey: `po:${c.poId}:${c.paymentType || 'cheque'}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
+      rowKey: `po:${c.poId}:${c.paymentType || 'cheque'}:${c.chequeNumber}:${c.sourceChequeDate || converting}:${c.bankAccountId}`,
       poId: c.poId,
+      poNumber: c.poNumber || '',
       product: c.product,
       distributorName: c.distributorName,
       paymentType: c.paymentType || 'cheque',
       chequeNumber: c.chequeNumber || (c.paymentType === 'bank_transfer' ? 'Bank transfer' : '—'),
       chequeDate: converting || '—',
+      sourceChequeDate: c.sourceChequeDate || converting,
+      bankAccountId: c.bankAccountId,
+      chequeAction: c.chequeAction || '',
+      holdUntil: c.holdUntil || '',
       bankLabel: formatPoChequeWithBank(c, bankAccounts),
       amount: c.amount,
       sortAt: c.sortAt,

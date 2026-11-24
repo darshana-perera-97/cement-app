@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiBase } from '../apiBase';
-import { authFetch, canEditDetails, getUsername } from '../auth';
+import { authFetch, canEditDetails, getUsername, isManagerOrAdmin } from '../auth';
 import { buildChequeTableRows, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import CashBookExpenseModal from './CashBookExpenseModal';
 import CashBookChequeDepositModal from './CashBookChequeDepositModal';
@@ -47,7 +47,8 @@ import {
   useTablePagination,
 } from './tableToolbar';
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
-import { formatPoChequeWithBank, isPoCashPayment } from './poChequeDisplay';
+import { effectivePoChequeDate, formatPoChequeWithBank, isPoCashPayment } from './poChequeDisplay';
+import PoChequeActionModal from './PoChequeActionModal';
 import { poLineItems } from './poItems';
 import {
   buildCashBookLedgerRows,
@@ -193,11 +194,12 @@ function collectPoOutgoingCheques(purchaseOrders) {
       const paymentType =
         String(c.paymentType ?? '').trim().toLowerCase() === 'bank_transfer' ? 'bank_transfer' : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
-      const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const sourceChequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const clearingDate = effectivePoChequeDate(c);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       rows.push({
@@ -205,14 +207,19 @@ function collectPoOutgoingCheques(purchaseOrders) {
         amount,
         paymentType,
         chequeNumber,
-        chequeDate,
+        chequeDate: sourceChequeDate,
+        clearingDate,
+        chequeAction: String(c.chequeAction ?? '').trim(),
+        holdUntil: String(c.holdUntil ?? '').trim().slice(0, 10),
         bankAccount: c.bankAccount,
         poId,
+        poNumber: String(po.poNumber ?? '').trim(),
+        distributorName: String(po.distributorName ?? '').trim(),
         product: poLineItems(po)
           .map((item) => item.product)
           .filter(Boolean)
           .join(', ') || '—',
-        sortAt: po.createdAt || `${chequeDate}T12:00:00`,
+        sortAt: po.createdAt || `${clearingDate || sourceChequeDate}T12:00:00`,
       });
     }
   }
@@ -465,7 +472,8 @@ function buildBankTransactionRows(deposits, withdrawals, payments, purchaseOrder
   }
 
   for (const c of collectPoOutgoingCheques(purchaseOrders)) {
-    const futureDated = isFutureChequeDate(c.chequeDate);
+    const clearingDate = c.clearingDate || c.chequeDate;
+    const futureDated = isFutureChequeDate(clearingDate);
     if (futureDated) continue;
     const isTransfer = c.paymentType === 'bank_transfer';
     const kind = 'withdrawal';
@@ -473,12 +481,13 @@ function buildBankTransactionRows(deposits, withdrawals, payments, purchaseOrder
       id: `po:${c.poId}:${c.paymentType || 'cheque'}:${c.chequeNumber}:${c.chequeDate}:${c.bankAccountId}`,
       source: 'po',
       poId: c.poId,
+      poNumber: c.poNumber,
       chequeNumber: c.chequeNumber,
       paymentType: c.paymentType,
       bankAccountId: c.bankAccountId,
       kind,
       direction: 'out',
-      date: c.chequeDate || '—',
+      date: clearingDate || '—',
       amount: c.amount,
       bankAccountIds: [c.bankAccountId],
       accountLabel: bankAccountLabel(c.bankAccountId, bankAccounts),
@@ -500,7 +509,9 @@ function buildBankTransactionRows(deposits, withdrawals, payments, purchaseOrder
       detailVariant: 'poCheque',
       detailPayload: {
         poId: c.poId,
+        poNumber: c.poNumber,
         product: c.product,
+        distributorName: c.distributorName,
         paymentType: c.paymentType,
         chequeNumber: c.chequeNumber,
         chequeDate: c.chequeDate,
@@ -508,6 +519,8 @@ function buildBankTransactionRows(deposits, withdrawals, payments, purchaseOrder
         amount: c.amount,
         accountLabel: bankAccountLabel(c.bankAccountId, bankAccounts),
         futureDated,
+        chequeAction: c.chequeAction,
+        holdUntil: c.holdUntil,
       },
     });
   }
@@ -620,6 +633,22 @@ function filterBankTransactionRows(rows, { dateFrom, dateTo, search, accountIds 
 
 function isOutgoingBankKind(kind) {
   return kind === 'withdrawal' || kind === 'return_cheque';
+}
+
+function poChequeActionFromTx(tx) {
+  if (!tx || tx.source !== 'po' || tx.paymentType !== 'cheque') return null;
+  const payload = tx.detailPayload || {};
+  return {
+    poId: tx.poId,
+    poNumber: tx.poNumber || payload.poNumber,
+    product: payload.product,
+    distributorName: payload.distributorName,
+    chequeNumber: tx.chequeNumber,
+    chequeDate: payload.chequeDate || tx.date,
+    bankAccountId: tx.bankAccountId,
+    amount: tx.amount,
+    bankLabel: tx.accountLabel || payload.accountLabel,
+  };
 }
 
 function isReturnableCustomerChequeRow(r) {
@@ -1203,6 +1232,8 @@ function BankPanel({ refreshToken, onBooksChanged }) {
   const [returnBusyKey, setReturnBusyKey] = useState(null);
   const [returnErr, setReturnErr] = useState(null);
   const [balanceByAccountId, setBalanceByAccountId] = useState({});
+  const [poChequeAction, setPoChequeAction] = useState(null);
+  const canReturnPoCheque = isManagerOrAdmin();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1339,7 +1370,7 @@ function BankPanel({ refreshToken, onBooksChanged }) {
           body: JSON.stringify({
             cancelledBy: username,
             chequeNumber: tx.chequeNumber,
-            chequeDate: tx.date,
+            chequeDate: tx.detailPayload?.chequeDate || tx.date,
             bankAccountId: tx.bankAccountId,
             amount: tx.amount,
           }),
@@ -1732,19 +1763,33 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                   { label: 'Recorded by', value: r.recordedBy },
                 ]}
                 actions={
-                  canEditDetails() && isReturnableCustomerChequeRow(r) ? (
-                    <button
-                      type="button"
-                      disabled={returnBusyKey != null}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleMarkChequeReturned(r.detailPayload, r.id);
-                      }}
-                      className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {returnBusyKey === r.id ? 'Saving…' : 'Mark returned'}
-                    </button>
-                  ) : null
+                  <>
+                    {canEditDetails() && isReturnableCustomerChequeRow(r) ? (
+                      <button
+                        type="button"
+                        disabled={returnBusyKey != null}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMarkChequeReturned(r.detailPayload, r.id);
+                        }}
+                        className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {returnBusyKey === r.id ? 'Saving…' : 'Mark returned'}
+                      </button>
+                    ) : null}
+                    {canReturnPoCheque && poChequeActionFromTx(r) ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPoChequeAction(poChequeActionFromTx(r));
+                        }}
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                      >
+                        Return cheque
+                      </button>
+                    ) : null}
+                  </>
                 }
               />
             ))
@@ -1818,6 +1863,17 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                         >
                           {returnBusyKey === r.id ? 'Saving…' : 'Mark returned'}
                         </button>
+                      ) : canReturnPoCheque && poChequeActionFromTx(r) ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPoChequeAction(poChequeActionFromTx(r));
+                          }}
+                          className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                        >
+                          Return cheque
+                        </button>
                       ) : (
                         '—'
                       )}
@@ -1884,6 +1940,15 @@ function BankPanel({ refreshToken, onBooksChanged }) {
                   {cancelErr}
                 </p>
               ) : null}
+              {canReturnPoCheque && poChequeActionFromTx(detailRow.txRow) ? (
+                <button
+                  type="button"
+                  onClick={() => setPoChequeAction(poChequeActionFromTx(detailRow.txRow))}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-950 transition hover:bg-amber-100"
+                >
+                  Return cheque
+                </button>
+              ) : null}
               <button
                 type="button"
                 disabled={cancelBusy}
@@ -1895,6 +1960,18 @@ function BankPanel({ refreshToken, onBooksChanged }) {
             </div>
           ) : null
         }
+      />
+      <PoChequeActionModal
+        open={poChequeAction != null}
+        cheque={poChequeAction}
+        bankAccounts={bankAccounts}
+        onClose={() => setPoChequeAction(null)}
+        onSaved={() => {
+          setPoChequeAction(null);
+          setDetailRow(null);
+          onBooksChanged?.();
+          load();
+        }}
       />
       <CashBookBankChargeModal
         open={chargeOpen}

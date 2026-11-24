@@ -71,6 +71,7 @@ export function downloadOverduePaymentsPdf(data = {}) {
     ['Customer', displayFilter(filters.customer, 'All customers')],
     ['Overdue days', daysRangeLabel(filters.overdueDaysFrom, filters.overdueDaysTo)],
     ['Search', displayFilter(filters.search, 'None')],
+    ['Sort', displayFilter(filters.sort, 'Payment date · Newest first')],
   ];
 
   autoTable(doc, {
@@ -97,8 +98,9 @@ export function downloadOverduePaymentsPdf(data = {}) {
 
   const body =
     rows.length === 0
-      ? [['—', 'No overdue payments match the current filters', '—', '—', '—', '—']]
+      ? [['—', 'No overdue payments match the current filters', '—', '—', '—', '—', '—']]
       : rows.map((row) => [
+          String(row.paymentDate || '—'),
           String(row.settledDate || '—'),
           String(row.customerName || '—'),
           String(row.description || '—').replace(/\s+/g, ' ').trim(),
@@ -109,12 +111,12 @@ export function downloadOverduePaymentsPdf(data = {}) {
 
   autoTable(doc, {
     startY: tableStartY,
-    head: [['Settled date', 'Customer', 'Description', 'Days to settle', 'Overdue days', 'Amount']],
+    head: [['Payment date', 'Settled date', 'Customer', 'Description', 'Days to settle', 'Overdue days', 'Amount']],
     body,
     foot:
       rows.length === 0
         ? undefined
-        : [['', '', '', '', 'Total', `LKR ${formatLkr(totalAmount)}`]],
+        : [['', '', '', '', '', 'Total', `LKR ${formatLkr(totalAmount)}`]],
     theme: 'grid',
     styles: { fontSize: 8, cellPadding: 1.6, overflow: 'linebreak', valign: 'top' },
     headStyles: {
@@ -129,12 +131,13 @@ export function downloadOverduePaymentsPdf(data = {}) {
     },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      0: { cellWidth: 28 },
-      1: { cellWidth: 48 },
-      2: { cellWidth: 107 },
-      3: { halign: 'right', cellWidth: 28 },
+      0: { cellWidth: 26 },
+      1: { cellWidth: 26 },
+      2: { cellWidth: 42 },
+      3: { cellWidth: 95 },
       4: { halign: 'right', cellWidth: 26 },
-      5: { halign: 'right', cellWidth: 32 },
+      5: { halign: 'right', cellWidth: 24 },
+      6: { halign: 'right', cellWidth: 30 },
     },
     margin: { left: MARGIN, right: MARGIN, bottom: 16 },
     showHead: 'everyPage',

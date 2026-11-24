@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, getUsername, isAdmin } from '../auth';
+import { authFetch, getUsername, isAdmin, isManagerOrAdmin } from '../auth';
 import { DEFAULT_SHOP_NAME } from '../shopConfig';
 import {
   LoadingSpinner,
@@ -26,6 +26,7 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import { purchaseOrderPdfBlobUrl } from './purchaseOrderPdf';
 import { formatPoChequeWithBank, formatPoChequesList } from './poChequeDisplay';
+import PoChequeActionModal from './PoChequeActionModal';
 import { formatProductNameWithCode } from './brandTheme';
 import {
   groupSharedPurchaseOrders,
@@ -505,7 +506,9 @@ function chequeLineFromPayment(payment) {
 }
 
 function activePoPayments(cheques) {
-  const list = (Array.isArray(cheques) ? cheques : []).filter((c) => c && !c.cancelled);
+  const list = (Array.isArray(cheques) ? cheques : []).filter(
+    (c) => c && !c.cancelled && !c.chequeReturned && !c.settlementOfCheque,
+  );
   return list.length > 0 ? list.map(chequeLineFromPayment) : [newChequeLine()];
 }
 
@@ -554,6 +557,7 @@ export default function PurchaseOrdersPage() {
   const [dateTo, setDateTo] = useState('');
   const [distributorFilter, setDistributorFilter] = useState('');
   const [detailRow, setDetailRow] = useState(null);
+  const [chequeAction, setChequeAction] = useState(null);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelError, setCancelError] = useState(null);
@@ -1656,6 +1660,7 @@ export default function PurchaseOrdersPage() {
         }
         onClose={() => setDetailRow(null)}
         variant="purchaseOrder"
+        onPoChequeAction={isManagerOrAdmin() ? (cheque) => setChequeAction(cheque) : null}
         actions={
           detailRow ? (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
@@ -2407,6 +2412,19 @@ export default function PurchaseOrdersPage() {
           </div>
         </div>
       ) : null}
+      <PoChequeActionModal
+        open={chequeAction != null}
+        cheque={chequeAction}
+        bankAccounts={bankAccounts}
+        onClose={() => setChequeAction(null)}
+        onSaved={(data) => {
+          setChequeAction(null);
+          if (data?.po && detailRow && detailRow.id === data.po.id) {
+            setDetailRow(data.po);
+          }
+          load();
+        }}
+      />
     </div>
   );
 }

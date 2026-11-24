@@ -1417,6 +1417,7 @@ export default function ReportsPage() {
   const [payments, setPayments] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [promotions, setPromotions] = useState([]);
+  const [returnsRows, setReturnsRows] = useState([]);
   const [dailyStockDays, setDailyStockDays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1468,22 +1469,24 @@ export default function ReportsPage() {
     setError(null);
     try {
       if (collectorReportsView) {
-        const [billsRes, paymentsRes, customersRes, meRes, promoRes] = await Promise.all([
+        const [billsRes, paymentsRes, customersRes, meRes, promoRes, returnsRes] = await Promise.all([
           authFetch(`${apiBase}/api/bills`),
           authFetch(`${apiBase}/api/payments`),
           authFetch(`${apiBase}/api/customers`),
           authFetch(`${apiBase}/api/me`),
           fetch(`${apiBase}/api/promotions`),
+          fetch(`${apiBase}/api/returns`),
         ]);
         if (!billsRes.ok) throw new Error('Failed to load bills');
         if (!paymentsRes.ok) throw new Error('Failed to load payments');
         if (!customersRes.ok) throw new Error('Failed to load customers');
 
-        const [billsData, paymentsData, customersData, promoData] = await Promise.all([
+        const [billsData, paymentsData, customersData, promoData, returnsData] = await Promise.all([
           billsRes.json(),
           paymentsRes.json(),
           customersRes.json(),
           promoRes.ok ? promoRes.json() : Promise.resolve([]),
+          returnsRes.ok ? returnsRes.json() : Promise.resolve([]),
         ]);
 
         let session = {
@@ -1525,13 +1528,14 @@ export default function ReportsPage() {
         setPayments(paymentsList);
         setCustomers(customersList);
         setPromotions(Array.isArray(promoData) ? promoData : []);
+        setReturnsRows(Array.isArray(returnsData) ? returnsData : []);
         setLoads([]);
         setDailyStockDays([]);
         setCollectionStaff([]);
         return;
       }
 
-      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectionStaffRes, promoRes] =
+      const [loadsRes, billsRes, paymentsRes, customersRes, dailyRes, collectionStaffRes, promoRes, returnsRes] =
         await Promise.all([
           fetch(`${apiBase}/api/stocks`),
           fetch(`${apiBase}/api/bills`),
@@ -1540,6 +1544,7 @@ export default function ReportsPage() {
           fetch(`${apiBase}/api/daily-stock`),
           authFetch(`${apiBase}/api/collection-staff`),
           fetch(`${apiBase}/api/promotions`),
+          fetch(`${apiBase}/api/returns`),
         ]);
       if (!loadsRes.ok) throw new Error('Failed to load loads');
       if (!billsRes.ok) throw new Error('Failed to load bills');
@@ -1548,7 +1553,7 @@ export default function ReportsPage() {
       if (!dailyRes.ok) throw new Error('Failed to load daily stock');
       if (!collectionStaffRes.ok) throw new Error('Failed to load collection staff');
 
-      const [loadsData, billsData, paymentsData, customersData, dailyData, collectionStaffData, promoData] =
+      const [loadsData, billsData, paymentsData, customersData, dailyData, collectionStaffData, promoData, returnsData] =
         await Promise.all([
           loadsRes.json(),
           billsRes.json(),
@@ -1557,6 +1562,7 @@ export default function ReportsPage() {
           dailyRes.json(),
           collectionStaffRes.json(),
           promoRes.ok ? promoRes.json() : Promise.resolve([]),
+          returnsRes.ok ? returnsRes.json() : Promise.resolve([]),
         ]);
 
       setLoads(Array.isArray(loadsData) ? loadsData : []);
@@ -1564,6 +1570,7 @@ export default function ReportsPage() {
       setPayments(Array.isArray(paymentsData) ? paymentsData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
       setPromotions(Array.isArray(promoData) ? promoData : []);
+      setReturnsRows(Array.isArray(returnsData) ? returnsData : []);
       setDailyStockDays(Array.isArray(dailyData?.days) ? dailyData.days : []);
       setCollectionStaff(Array.isArray(collectionStaffData) ? collectionStaffData : []);
       setCollectorSession(null);
@@ -1574,6 +1581,7 @@ export default function ReportsPage() {
       setPayments([]);
       setCustomers([]);
       setPromotions([]);
+      setReturnsRows([]);
       setDailyStockDays([]);
       setCollectionStaff([]);
       setCollectorSession(null);
@@ -1739,8 +1747,8 @@ export default function ReportsPage() {
   const shopTargetsColSpan = shopSoldBrands.length + shopFreeBrands.length + 5;
 
   const billSettledDateLookup = useMemo(
-    () => buildBillSettledDateLookup(customers, bills, payments),
-    [customers, bills, payments],
+    () => buildBillSettledDateLookup(customers, bills, payments, promotions, returnsRows),
+    [customers, bills, payments, promotions, returnsRows],
   );
 
   const monthlyBillRows = useMemo(

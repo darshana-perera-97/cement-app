@@ -13,6 +13,7 @@ export default function RowDetailModal({
   title = null,
   subtitle = null,
   actions = null,
+  onPoChequeAction = null,
 }) {
   if (!open || row == null || typeof row !== 'object') return null;
 
@@ -34,7 +35,7 @@ export default function RowDetailModal({
       panelSizeClassName={panelSizeClassName}
     >
       {variant ? (
-        <RowDetailContent variant={variant} row={row} />
+        <RowDetailContent variant={variant} row={row} onPoChequeAction={onPoChequeAction} />
       ) : (
         <RawRowDump row={row} />
       )}

@@ -18,7 +18,7 @@ import { useBagProducts } from './BagProductsContext';
 import { formatBrandLabel, formatProductNameWithCode } from './brandTheme';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers, cdmPortion, onlineTransferPortion } from './paymentCheques';
 import { getPaymentReceiptInvoices } from './paymentReceipt';
-import { doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment, isPoBankTransferPayment } from './poChequeDisplay';
+import { canActOnIssuedPoCheque, doorStepNotesText, formatPoChequeWithBank, formatPoChequesList, isPoCashPayment, isPoBankTransferPayment, poChequeDispositionLabel } from './poChequeDisplay';
 import { poLineItems } from './poItems';
 import MonthlyTargetProgressBar from './MonthlyTargetProgressBar';
 import { MANAGER_ACCESS_OPTIONS } from './navConfig';
@@ -146,6 +146,14 @@ export function getRowDetailMeta(variant, row) {
               : 'Pending bill',
         subtitle: row.customerName || null,
       };
+    case 'returnCheque':
+      return {
+        title: 'Return cheque',
+        subtitle:
+          [row.customerName, row.chequeNumber ? `#${row.chequeNumber}` : null, row.returnDate]
+            .filter(Boolean)
+            .join(' · ') || null,
+      };
     case 'bankDaily':
       return {
         title: 'Daily bank summary',
@@ -196,7 +204,7 @@ export function getRowDetailMeta(variant, row) {
   }
 }
 
-export function RowDetailContent({ variant, row }) {
+export function RowDetailContent({ variant, row, onPoChequeAction = null }) {
   if (row == null || typeof row !== 'object') return null;
 
   switch (variant) {
@@ -215,7 +223,7 @@ export function RowDetailContent({ variant, row }) {
     case 'unloadRequest':
       return <UnloadRequestDetailContent row={row} />;
     case 'purchaseOrder':
-      return <PurchaseOrderDetailContent row={row} />;
+      return <PurchaseOrderDetailContent row={row} onPoChequeAction={onPoChequeAction} />;
     case 'quotation':
       return <QuotationDetailContent row={row} />;
     case 'user':
@@ -234,6 +242,8 @@ export function RowDetailContent({ variant, row }) {
       return <OverduePaymentDetailContent row={row} />;
     case 'pendingBill':
       return <PendingBillDetailContent row={row} />;
+    case 'returnCheque':
+      return <ReturnChequeDetailContent row={row} />;
     case 'bankDaily':
       return <BankDailyDetailContent row={row} />;
     case 'bankCheque':
@@ -1199,7 +1209,7 @@ function QuotationDetailContent({ row }) {
   );
 }
 
-function PurchaseOrderDetailContent({ row }) {
+function PurchaseOrderDetailContent({ row, onPoChequeAction = null }) {
   const cheques = Array.isArray(row.cheques) ? row.cheques : [];
   const lineItems =
     Array.isArray(row.batchItems) && row.batchItems.length > 0 ? row.batchItems : poLineItems(row);
@@ -1327,7 +1337,9 @@ function PurchaseOrderDetailContent({ row }) {
                   </>
                 )}
               </p>
-              {!isPoCashPayment(c) && poChequeStatusLabel(c.chequeDate, c.paymentType) && (c.bankAccountId || c.amount) ? (
+              {poChequeDispositionLabel(c) ? (
+                <p className="mt-1 text-xs font-medium text-amber-800">{poChequeDispositionLabel(c)}</p>
+              ) : !isPoCashPayment(c) && poChequeStatusLabel(c.chequeDate, c.paymentType) && (c.bankAccountId || c.amount) ? (
                 <p
                   className={`mt-1 text-xs font-medium ${
                     String(c.chequeDate ?? '').slice(0, 10) <=
@@ -1338,6 +1350,34 @@ function PurchaseOrderDetailContent({ row }) {
                 >
                   {poChequeStatusLabel(c.chequeDate, c.paymentType)}
                 </p>
+              ) : null}
+              {onPoChequeAction && canActOnIssuedPoCheque(c) ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onPoChequeAction({
+                      poId: row.id,
+                      poNumber: row.poNumber,
+                      product:
+                        (Array.isArray(row.batchItems) && row.batchItems.length > 0
+                          ? row.batchItems
+                          : poLineItems(row)
+                        )
+                          .map((item) => item.product)
+                          .filter(Boolean)
+                          .join(', ') || row.product,
+                      distributorName: row.distributorName,
+                      chequeNumber: c.chequeNumber,
+                      chequeDate: String(c.chequeDate ?? '').slice(0, 10),
+                      bankAccountId: c.bankAccountId,
+                      amount: c.amount,
+                      bankLabel: formatPoChequeWithBank(c),
+                    })
+                  }
+                  className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                >
+                  Return cheque
+                </button>
               ) : null}
             </div>
           ))}
@@ -1456,6 +1496,7 @@ function OverduePaymentDetailContent({ row }) {
     <>
       <SummaryGrid>
         <SummaryField label="Customer" value={displayText(row.customerName)} className="col-span-2" />
+        <SummaryField label="Payment date" value={displayText(row.paymentDate)} />
         <SummaryField label="Settled date" value={displayText(row.settledDate)} />
         <SummaryField label="Bill date" value={displayText(row.billDate)} />
         <SummaryField label="Credit due date" value={displayText(row.dueDate)} />
@@ -1561,6 +1602,64 @@ function PendingBillDetailContent({ row }) {
         />
       </SummaryGrid>
       {row.details ? <NoteBlock label="Bill details" value={row.details} /> : null}
+    </>
+  );
+}
+
+function ReturnChequeDetailContent({ row }) {
+  const settled = Boolean(row.settled);
+  return (
+    <>
+      <SummaryGrid>
+        <SummaryField label="Shop" value={displayText(row.customerName)} className="col-span-2" />
+        <SummaryField label="Return date" value={displayText(row.returnDate)} />
+        <SummaryField label="Cheque date" value={displayText(row.chequeDate)} />
+        <SummaryField
+          label="Cheque #"
+          value={row.chequeNumber ? `#${row.chequeNumber}` : '—'}
+          valueClassName="font-mono"
+        />
+        <SummaryField label="Bank" value={displayText(row.chequeBank)} />
+        <SummaryField label="Receipt" value={displayText(row.receiptNumber)} />
+        <SummaryField label="Payment date" value={displayText(row.paymentDate)} />
+        <SummaryField label="Returned by" value={displayText(row.returnedBy)} />
+        <SummaryField
+          label="Days since return"
+          value={row.daysFromReturn != null ? row.daysFromReturn : '—'}
+          valueClassName="tabular-nums"
+        />
+        <SummaryField
+          label="Face amount"
+          value={formatMoney(row.amount)}
+          valueClassName="font-semibold tabular-nums"
+        />
+        <SummaryField label="Paid" value={formatMoney(row.paidAmount)} valueClassName="tabular-nums" />
+        <SummaryField
+          label="Outstanding"
+          value={formatMoney(row.outstandingAmount)}
+          className="col-span-2 bg-rose-50 ring-rose-100"
+          valueClassName="font-semibold tabular-nums text-rose-900"
+        />
+        <SummaryField
+          label="Status"
+          value={
+            settled
+              ? row.settledDate
+                ? `Settled · ${row.settledDate}`
+                : 'Settled'
+              : 'Not settled'
+          }
+          className={
+            settled
+              ? 'col-span-2 bg-emerald-50 ring-emerald-100'
+              : 'col-span-2 bg-rose-50 ring-rose-100'
+          }
+          valueClassName={
+            settled ? 'font-semibold text-emerald-900' : 'font-semibold text-rose-900'
+          }
+        />
+      </SummaryGrid>
+      {row.returnNote ? <NoteBlock label="Return note" value={row.returnNote} /> : null}
     </>
   );
 }

@@ -170,6 +170,7 @@ function normalizeEntry(row) {
   if (poId) entry.poId = poId;
   if (poNumber) entry.poNumber = poNumber;
   if (batchId) entry.batchId = batchId;
+  if (row.chequeSettlement) entry.chequeSettlement = true;
   if (row.cancelled) {
     entry.cancelled = true;
     const cancelledAt = String(row.cancelledAt ?? '').trim();

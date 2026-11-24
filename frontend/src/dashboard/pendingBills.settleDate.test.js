@@ -1,4 +1,4 @@
-import { buildCustomerInvoiceRows, chequeRealizeYmd } from './pendingBills';
+import { buildCustomerInvoiceRows, buildOverduePaymentRows, chequeRealizeYmd, compareOverduePayments } from './pendingBills';
 
 const customer = { id: 'c1', name: 'Lake Shop', overdueDays: 14 };
 
@@ -28,6 +28,7 @@ describe('days to settle using cheque realizing dates', () => {
       { id: 'p1', customerId: 'c1', customerName: 'Lake Shop', date: '2026-10-10', amount: 1000 },
     ]);
     expect(row.settledDate).toBe('2026-10-10');
+    expect(row.paymentDate).toBe('2026-10-10');
     expect(row.daysToSettle).toBe(9);
   });
 
@@ -50,6 +51,7 @@ describe('days to settle using cheque realizing dates', () => {
       },
     ]);
     expect(row.settledDate).toBe('2026-10-28');
+    expect(row.paymentDate).toBe('2026-10-05');
     expect(row.daysToSettle).toBe(27);
   });
 
@@ -97,7 +99,55 @@ describe('days to settle using cheque realizing dates', () => {
     ]);
     const first = rows.find((row) => row.id === 'b1');
     const second = rows.find((row) => row.id === 'b2');
-    expect([first.settledDate, first.daysToSettle]).toEqual(['2026-10-05', 4]);
-    expect([second.settledDate, second.daysToSettle]).toEqual(['2026-10-20', 18]);
+    expect([first.settledDate, first.paymentDate, first.daysToSettle]).toEqual(['2026-10-05', '2026-10-05', 4]);
+    expect([second.settledDate, second.paymentDate, second.daysToSettle]).toEqual(['2026-10-20', '2026-10-05', 18]);
+  });
+});
+
+describe('overdue payment sort', () => {
+  const customers = [{ id: 'c1', name: 'Lake Shop', overdueDays: 14 }];
+  const bills = [
+    { id: 'cash-bill', customerName: 'Lake Shop', date: '2026-09-01', totalAmount: 500, invoiceNumber: 'INV-C' },
+    { id: 'cheque-bill', customerName: 'Lake Shop', date: '2026-09-01', totalAmount: 500, invoiceNumber: 'INV-Q' },
+  ];
+  const payments = [
+    {
+      id: 'p-cheque',
+      customerId: 'c1',
+      customerName: 'Lake Shop',
+      date: '2026-09-20',
+      amount: 500,
+      cashAmount: 0,
+      cheques: [{
+        id: 'ch1',
+        amount: 500,
+        chequeDate: '2026-10-01',
+        chequeDeposited: false,
+      }],
+      billCashAllocations: [{ billId: 'cheque-bill', cashAmount: 500 }],
+    },
+    {
+      id: 'p-cash',
+      customerId: 'c1',
+      customerName: 'Lake Shop',
+      date: '2026-09-25',
+      amount: 500,
+      billCashAllocations: [{ billId: 'cash-bill', cashAmount: 500 }],
+    },
+  ];
+
+  test('defaults to newest payment date, and can sort by settled date or overdue days', () => {
+    const rows = buildOverduePaymentRows(customers, bills, payments);
+    expect(rows.map((row) => row.id)).toEqual(['cash-bill', 'cheque-bill']);
+    expect(rows.map((row) => [row.paymentDate, row.settledDate, row.daysPastCredit])).toEqual([
+      ['2026-09-25', '2026-09-25', 10],
+      ['2026-09-20', '2026-10-01', 16],
+    ]);
+
+    const bySettled = [...rows].sort((a, b) => compareOverduePayments(a, b, 'settledDate', 'desc'));
+    expect(bySettled.map((row) => row.id)).toEqual(['cheque-bill', 'cash-bill']);
+
+    const byOverdue = [...rows].sort((a, b) => compareOverduePayments(a, b, 'daysPastCredit', 'asc'));
+    expect(byOverdue.map((row) => row.id)).toEqual(['cash-bill', 'cheque-bill']);
   });
 });

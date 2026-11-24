@@ -299,6 +299,247 @@ function poChequeMatchKey(c) {
   ].join('|');
 }
 
+/** Converting / clearing date, moved forward when the cheque is on hold. */
+function effectivePoChequeDate(c) {
+  const stored = String(c?.chequeDate ?? '').trim().slice(0, 10);
+  if (String(c?.chequeAction ?? '').trim() === 'hold') {
+    const hold = String(c?.holdUntil ?? '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(hold)) return hold;
+  }
+  return stored;
+}
+
+function isYmd(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim().slice(0, 10));
+}
+
+/**
+ * Keep returned cheques and replacement settlements when a purchase order is edited.
+ * Also keeps a hold if the same cheque is saved again.
+ */
+function preserveChequeDispositions(previousCheques, nextCheques) {
+  const next = (Array.isArray(nextCheques) ? nextCheques : []).map((c) =>
+    c && typeof c === 'object' ? { ...c } : c,
+  );
+  const prev = Array.isArray(previousCheques) ? previousCheques : [];
+  const keys = new Set(next.map((c) => poChequeMatchKey(c)).filter(Boolean));
+
+  for (const ch of next) {
+    if (!ch || typeof ch !== 'object' || ch.chequeAction) continue;
+    const key = poChequeMatchKey(ch);
+    if (!key) continue;
+    const old = prev.find(
+      (p) => p && poChequeMatchKey(p) === key && String(p.chequeAction ?? '').trim() === 'hold',
+    );
+    if (!old) continue;
+    ch.chequeAction = 'hold';
+    ch.holdUntil = old.holdUntil;
+    if (old.chequeActionAt) ch.chequeActionAt = old.chequeActionAt;
+    if (old.chequeActionBy) ch.chequeActionBy = old.chequeActionBy;
+  }
+
+  for (const old of prev) {
+    if (!old || typeof old !== 'object') continue;
+    if (!old.chequeReturned && !old.settlementOfCheque) continue;
+    const key = poChequeMatchKey(old);
+    if (key && keys.has(key)) continue;
+    next.push({ ...old });
+    if (key) keys.add(key);
+  }
+  return next;
+}
+
+/**
+ * Hold, return, or settle a cheque issued on a purchase order.
+ * Shared-batch copies of the same cheque are updated together.
+ * The replacement payment is stored once, on the purchase order that was selected.
+ * @returns {{ ok: boolean, error?: string, updated?: number, po?: object, cashSettlement?: object|null }}
+ */
+function resolveIssuedPurchaseCheque(records, opts, bankAccountById) {
+  const poId = String(opts?.poId ?? '').trim();
+  const recordedBy = String(opts?.recordedBy ?? '').trim();
+  const action = String(opts?.action ?? '').trim();
+  if (!poId) return { ok: false, error: 'Purchase order id is required' };
+  if (!recordedBy) return { ok: false, error: 'recordedBy (username) is required' };
+  if (action !== 'hold' && action !== 'return' && action !== 'settle_today') {
+    return { ok: false, error: 'Choose hold, return, or settle today' };
+  }
+
+  const targetKey = poChequeMatchKey({
+    chequeNumber: opts.chequeNumber,
+    chequeDate: opts.chequeDate,
+    bankAccountId: opts.bankAccountId,
+    amount: opts.amount,
+    paymentType: 'cheque',
+  });
+  const parts = targetKey.split('|');
+  if (!parts[0] || !parts[1] || !parts[2] || !(Number(parts[3]) > 0)) {
+    return { ok: false, error: 'chequeNumber, chequeDate, bankAccountId, and amount are required' };
+  }
+
+  const idx = records.findIndex((r) => r.id === poId);
+  if (idx < 0) return { ok: false, error: 'Purchase order not found' };
+  const po = records[idx];
+  if (isPurchaseOrderCancelled(po)) {
+    return { ok: false, error: 'This purchase order is cancelled' };
+  }
+
+  const batchId = String(po.batchId ?? '').trim();
+  const mode = String(po.chequeMode ?? '').trim();
+  const poIdsToTouch = new Set([poId]);
+  if (mode === 'shared' && batchId) {
+    for (const r of records) {
+      const id = String(r.id ?? '').trim();
+      if (id && String(r.batchId ?? '').trim() === batchId && !isPurchaseOrderCancelled(r)) {
+        poIdsToTouch.add(id);
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  let settlement = null;
+
+  if (action === 'hold') {
+    const holdUntil = String(opts.holdUntil ?? '').trim().slice(0, 10);
+    if (!isYmd(holdUntil)) {
+      return { ok: false, error: 'Enter the hold ending date' };
+    }
+    const today = String(opts.today ?? '').trim().slice(0, 10);
+    if (isYmd(today) && holdUntil <= today) {
+      return { ok: false, error: 'Hold ending date must be after today' };
+    }
+    opts._holdUntil = holdUntil;
+  } else {
+    const method = String(opts.settlementMethod ?? '').trim().toLowerCase();
+    if (action === 'settle_today' && method !== 'cash' && method !== 'bank_transfer') {
+      return { ok: false, error: 'Settle today with cash or a bank transfer' };
+    }
+    if (method !== 'cash' && method !== 'bank_transfer' && method !== 'cheque') {
+      return { ok: false, error: 'Choose how this cheque is settled' };
+    }
+    const amount = toNonNegMoney(opts.amount);
+    const settlementDate = String(opts.settlementDate ?? opts.today ?? '').trim().slice(0, 10);
+    if (method === 'cash') {
+      if (!isYmd(settlementDate)) return { ok: false, error: 'Settlement date is required' };
+      settlement = { paymentType: 'cash', amount, settlementOfCheque: true };
+    } else if (method === 'bank_transfer') {
+      if (!isYmd(settlementDate)) return { ok: false, error: 'Settlement date is required' };
+      const bankAccountId = String(opts.settlementBankAccountId ?? '').trim();
+      const acct = bankAccountById?.get?.(bankAccountId);
+      if (!bankAccountId || !acct) {
+        return { ok: false, error: 'Select a bank account for this transfer' };
+      }
+      settlement = {
+        paymentType: 'bank_transfer',
+        amount,
+        chequeDate: settlementDate,
+        bankAccountId,
+        bankAccount: bankAccountSnapshot(acct),
+        settlementOfCheque: true,
+      };
+      const reference = String(opts.settlementReference ?? '').trim();
+      if (reference) settlement.chequeNumber = reference;
+    } else {
+      const chequeNumber = String(opts.settlementChequeNumber ?? '').trim();
+      const chequeDate = String(opts.settlementChequeDate ?? '').trim().slice(0, 10);
+      const bankAccountId = String(opts.settlementBankAccountId ?? '').trim();
+      const acct = bankAccountById?.get?.(bankAccountId);
+      if (!chequeNumber) return { ok: false, error: 'Enter the new cheque number' };
+      if (!isYmd(chequeDate)) return { ok: false, error: 'Enter a converting date for the new cheque' };
+      if (!bankAccountId || !acct) {
+        return { ok: false, error: 'Select a bank account for the new cheque' };
+      }
+      settlement = {
+        paymentType: 'cheque',
+        chequeNumber,
+        chequeDate,
+        amount,
+        bankAccountId,
+        bankAccount: bankAccountSnapshot(acct),
+        settlementOfCheque: true,
+      };
+    }
+    settlement.settledAt = now;
+    settlement.settledBy = recordedBy;
+    settlement.replacesChequeNumber = parts[0];
+  }
+
+  let updated = 0;
+  let sawMatch = false;
+  for (const id of poIdsToTouch) {
+    const i = records.findIndex((r) => r.id === id);
+    if (i < 0) continue;
+    const row = records[i];
+    const cheques = Array.isArray(row.cheques) ? row.cheques : [];
+    let touched = false;
+    for (const ch of cheques) {
+      if (!ch || ch.cancelled || ch.chequeReturned) continue;
+      if (poChequeMatchKey(ch) !== targetKey) continue;
+      if (normalizePaymentType(ch) !== 'cheque') continue;
+      sawMatch = true;
+      if (action === 'hold') {
+        ch.chequeAction = 'hold';
+        ch.holdUntil = opts._holdUntil;
+        ch.chequeActionAt = now;
+        ch.chequeActionBy = recordedBy;
+      } else {
+        ch.chequeReturned = true;
+        ch.chequeReturnedAt = now;
+        ch.chequeReturnedBy = recordedBy;
+        ch.chequeAction = action;
+        ch.chequeActionAt = now;
+        ch.chequeActionBy = recordedBy;
+        ch.settlementMethod = settlement.paymentType;
+        if (settlement.chequeNumber) ch.settlementChequeNumber = settlement.chequeNumber;
+        if (settlement.chequeDate) ch.settlementChequeDate = settlement.chequeDate;
+        if (settlement.bankAccountId) ch.settlementBankAccountId = settlement.bankAccountId;
+        delete ch.holdUntil;
+      }
+      touched = true;
+      updated += 1;
+    }
+    if (id === poId && settlement) {
+      cheques.push(settlement);
+      touched = true;
+    }
+    if (touched) {
+      records[i] = { ...row, cheques, updatedAt: now, updatedBy: recordedBy };
+    }
+  }
+
+  if (!sawMatch || updated === 0) {
+    return { ok: false, error: 'Cheque not found, or it was already returned or settled' };
+  }
+
+  const saved = records.find((r) => r.id === poId) || records[idx];
+  let cashSettlement = null;
+  if (settlement && settlement.paymentType === 'cash') {
+    const product =
+      poLineItems(saved)
+        .map((item) => item.product)
+        .filter(Boolean)
+        .join(', ') || String(saved.product ?? '').trim();
+    const description = [
+      saved.poNumber ? `PO ${saved.poNumber}` : 'Purchase order',
+      saved.distributorName,
+      product,
+      `Cheque #${parts[0]} ${action === 'settle_today' ? 'settled today' : 'returned'} · cash`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    cashSettlement = {
+      poId,
+      poNumber: saved.poNumber || '',
+      batchId: batchId || '',
+      date: String(opts.settlementDate ?? opts.today ?? '').trim().slice(0, 10),
+      amount: settlement.amount,
+      description,
+    };
+  }
+
+  return { ok: true, updated, po: saved, cashSettlement };
+}
+
 /**
  * Mark a PO-issued cheque as cancelled (manager/admin). Shared-batch cheques cancel on all POs in the batch.
  * @returns {{ ok: boolean, error?: string, updated?: number, cancelledAt?: string }}
@@ -455,6 +696,9 @@ module.exports = {
   lastPricesByProduct,
   cancelIssuedCheque,
   cancelPurchaseOrder,
+  resolveIssuedPurchaseCheque,
+  preserveChequeDispositions,
+  effectivePoChequeDate,
   isPurchaseOrderCancelled,
   isPoCashPayment,
   isPoBankTransferPayment,

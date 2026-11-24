@@ -71,6 +71,31 @@ function sumItemReturnForBill(returnsRows, billId) {
   return Math.round(sum * 100) / 100;
 }
 
+/** Latest item-return date that credited a bill (YYYY-MM-DD), or ''. */
+function latestItemReturnDateForBill(returnsRows, billId) {
+  const id = String(billId ?? '').trim();
+  if (!id) return '';
+  let latest = '';
+  for (const row of Array.isArray(returnsRows) ? returnsRows : []) {
+    if (returnKind(row) !== 'item_return') continue;
+    let credited = false;
+    if (Array.isArray(row.billAllocations)) {
+      credited = row.billAllocations.some(
+        (alloc) =>
+          String(alloc?.billId ?? '').trim() === id &&
+          toNonNegMoney(alloc?.amount ?? alloc?.cashAmount) > 0,
+      );
+    } else {
+      credited =
+        String(row.billId ?? '').trim() === id && toNonNegMoney(row?.amount) > 0;
+    }
+    if (!credited) continue;
+    const d = String(row.date ?? '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d > latest) latest = d;
+  }
+  return latest;
+}
+
 /** Invoice total still to be paid after discounts, rule cashback, and item returns on that invoice. */
 function payableBillTotal(bill, promotions = [], returnsRows = []) {
   const base = toNonNegMoney(bill?.totalAmount);
@@ -157,6 +182,9 @@ export function listCustomerReturnedCheques(customer, payments) {
         chequeBank: String(c.chequeBank ?? '').trim(),
         chequeDate: String(c.chequeDate ?? '').slice(0, 10),
         receiptNumber: String(p.billNumber ?? '').trim(),
+        paymentDate: String(p.date ?? '').slice(0, 10),
+        returnedBy: String(c.chequeReturnedBy ?? '').trim(),
+        returnNote: String(c.chequeReturnedNote ?? '').trim(),
       });
     }
   }
@@ -571,8 +599,21 @@ function createRealizeDateCursor(payment, credit, options) {
   };
 }
 
+function rememberSettlingPaymentDate(paymentDateByBillId, billId, paymentDate) {
+  if (!paymentDateByBillId || !billId || paymentDateByBillId.has(billId)) return;
+  const ymd = String(paymentDate ?? '').slice(0, 10);
+  if (isYmd(ymd)) paymentDateByBillId.set(billId, ymd);
+}
+
 /** Date (YYYY-MM-DD) when each bill was fully cleared, using cheque realizing dates. */
-function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, customerId = '', promotions = []) {
+function buildSettledDateByBillId(
+  custBills,
+  custPayments,
+  pastBillAmount = 0,
+  customerId = '',
+  promotions = [],
+  paymentDateByBillId = null,
+) {
   const settledByBillId = new Map();
   const sortedBills = sortBillsChronological(custBills);
   const runningPaid = new Map();
@@ -600,7 +641,9 @@ function buildSettledDateByBillId(custBills, custPayments, pastBillAmount = 0, c
       if (toward <= 0.009) return;
       const settledOn = dateOf(toward);
       if (!billId || !cleared || settledByBillId.has(billId)) return;
-      if (isYmd(settledOn)) settledByBillId.set(billId, settledOn);
+      if (!isYmd(settledOn)) return;
+      settledByBillId.set(billId, settledOn);
+      rememberSettlingPaymentDate(paymentDateByBillId, billId, payDate);
     };
     if (explicit.length > 0) {
       for (const { billId, cashAmount } of explicit) {
@@ -659,11 +702,12 @@ function buildSettledDateByBillIdForCustomer(
   payments,
   promotions = [],
   returnsRows = [],
+  paymentDateByBillId = null,
 ) {
   const settledByBillId = new Map();
   if (!customer) return settledByBillId;
   const cursors = new WeakMap();
-  forEachCustomerSettlementApplication(
+  const { paidByBillId, pastPaid, custBills } = forEachCustomerSettlementApplication(
     customer,
     bills,
     payments,
@@ -682,25 +726,75 @@ function buildSettledDateByBillIdForCustomer(
       if (!info.settled || !info.billId || settledByBillId.has(info.billId)) return;
       if (!isYmd(settledOn)) return;
       settledByBillId.set(info.billId, settledOn);
+      rememberSettlingPaymentDate(paymentDateByBillId, info.billId, payment?.date);
     },
     returnsRows,
   );
+
+  // Item returns can clear a bill without a final payment application — mark those settled too.
+  const openingId = openingBalanceBillId(customer.id);
+  const pastOwed = toNonNegMoney(customer.pastBill);
+  const openingCredit = openingId ? sumItemReturnForBill(returnsRows, openingId) : 0;
+  const openingPayable = Math.max(0, Math.round((pastOwed - openingCredit) * 100) / 100);
+  if (
+    openingId &&
+    openingPayable > 0 &&
+    Math.round((openingPayable - toNonNegMoney(pastPaid)) * 100) / 100 <= 0.009 &&
+    !settledByBillId.has(openingId)
+  ) {
+    const returnDate = latestItemReturnDateForBill(returnsRows, openingId);
+    const fallback = openingBalanceBillDate(customer);
+    const settledOn = isYmd(returnDate) ? returnDate : fallback;
+    if (isYmd(settledOn)) settledByBillId.set(openingId, settledOn);
+  } else if (openingId && openingPayable <= 0.009 && openingCredit > 0 && !settledByBillId.has(openingId)) {
+    const returnDate = latestItemReturnDateForBill(returnsRows, openingId);
+    const fallback = openingBalanceBillDate(customer);
+    const settledOn = isYmd(returnDate) ? returnDate : fallback;
+    if (isYmd(settledOn)) settledByBillId.set(openingId, settledOn);
+  }
+
+  for (const bill of custBills || []) {
+    const id = String(bill.id ?? '').trim();
+    if (!id || settledByBillId.has(id)) continue;
+    const total = payableBillTotal(bill, promotions, returnsRows);
+    const paid = toNonNegMoney(paidByBillId.get(id) || 0);
+    if (total > 0.009 && Math.round((total - paid) * 100) / 100 > 0.009) continue;
+    if (total <= 0.009 && sumItemReturnForBill(returnsRows, id) <= 0) continue;
+    const returnDate = latestItemReturnDateForBill(returnsRows, id);
+    const billDate = String(bill.date ?? '').slice(0, 10);
+    const settledOn = isYmd(returnDate) ? returnDate : billDate;
+    if (isYmd(settledOn)) settledByBillId.set(id, settledOn);
+  }
+
   return settledByBillId;
 }
 
-/** Map bill id → settled date when fully paid (FIFO or explicit allocations). */
-export function buildBillSettledDateLookup(customers, bills, payments, promotions = []) {
+/** Map bill id → settled date when fully paid (FIFO, explicit allocations, or item returns). */
+export function buildBillSettledDateLookup(
+  customers,
+  bills,
+  payments,
+  promotions = [],
+  returnsRows = [],
+) {
   const settledByBillId = new Map();
   const safeCustomers = Array.isArray(customers) ? customers : [];
   const safeBills = Array.isArray(bills) ? bills : [];
   const safePayments = Array.isArray(payments) ? payments : [];
+  const safeReturns = Array.isArray(returnsRows) ? returnsRows : [];
   const registeredNk = new Set();
 
   for (const cust of safeCustomers) {
     const nk = normalizeCustomerName(cust.name);
     if (!nk) continue;
     registeredNk.add(nk);
-    for (const [id, date] of buildSettledDateByBillIdForCustomer(cust, safeBills, safePayments, promotions)) {
+    for (const [id, date] of buildSettledDateByBillIdForCustomer(
+      cust,
+      safeBills,
+      safePayments,
+      promotions,
+      safeReturns,
+    )) {
       settledByBillId.set(id, date);
     }
   }
@@ -718,24 +812,48 @@ export function buildBillSettledDateLookup(customers, bills, payments, promotion
     for (const [id, date] of buildSettledDateByBillId(obills, custPayments, 0, '', promotions)) {
       settledByBillId.set(id, date);
     }
+    for (const bill of obills) {
+      const id = String(bill.id ?? '').trim();
+      if (!id || settledByBillId.has(id)) continue;
+      const total = payableBillTotal(bill, promotions, safeReturns);
+      if (total > 0.009) continue;
+      if (sumItemReturnForBill(safeReturns, id) <= 0) continue;
+      const returnDate = latestItemReturnDateForBill(safeReturns, id);
+      const billDate = String(bill.date ?? '').slice(0, 10);
+      const settledOn = isYmd(returnDate) ? returnDate : billDate;
+      if (isYmd(settledOn)) settledByBillId.set(id, settledOn);
+    }
   }
 
   return settledByBillId;
 }
 
-/** True when approved payments have fully cleared the bill (no outstanding balance). */
-export function isBillFullySettled(bill, customers, bills, payments, promotions = []) {
+/** True when approved payments / item returns have fully cleared the bill (no outstanding balance). */
+export function isBillFullySettled(
+  bill,
+  customers,
+  bills,
+  payments,
+  promotions = [],
+  returnsRows = [],
+) {
   const nk = normalizeCustomerName(bill?.customerName);
   const id = String(bill?.id ?? '').trim();
-  const total = payableBillTotal(bill, promotions);
-  if (!id || total <= 0) return false;
+  const total = payableBillTotal(bill, promotions, returnsRows);
+  if (!id || total <= 0) return total <= 0 && sumItemReturnForBill(returnsRows, id) > 0;
 
   const cust = (Array.isArray(customers) ? customers : []).find(
     (c) => normalizeCustomerName(c.name) === nk,
   );
 
   if (cust) {
-    const { paidByBillId } = computeBillPaymentAllocation(cust, bills, payments, promotions);
+    const { paidByBillId } = computeBillPaymentAllocation(
+      cust,
+      bills,
+      payments,
+      promotions,
+      returnsRows,
+    );
     const paid = paidByBillId.get(id) || 0;
     return Math.round((total - paid) * 100) / 100 <= 0;
   }
@@ -749,7 +867,7 @@ export function isBillFullySettled(bill, customers, bills, payments, promotions 
   }
   let remainingCredit = paySum;
   for (const b of obills) {
-    const bTotal = payableBillTotal(b, promotions);
+    const bTotal = payableBillTotal(b, promotions, returnsRows);
     const paidToward = Math.min(bTotal, remainingCredit);
     remainingCredit -= paidToward;
     const bId = String(b.id ?? '').trim();
@@ -876,7 +994,7 @@ export function buildPendingBillRows(
       }
       let remainingCredit = paySum;
       for (const bill of sortBillsChronological(obills)) {
-        const total = payableBillTotal(bill, promotions);
+        const total = payableBillTotal(bill, promotions, returnsRows);
         const paidTowardBill = Math.min(total, remainingCredit);
         remainingCredit -= paidTowardBill;
         const remaining = Math.round((total - paidTowardBill) * 100) / 100;
@@ -929,12 +1047,14 @@ export function buildCustomerInvoiceRows(
   if (!customer) return [];
   const todayYmd = todayYmdLocal();
   const settlementDays = settlementDaysForCustomer(customer);
+  const paymentDateByBillId = new Map();
   const settledByBillId = buildSettledDateByBillIdForCustomer(
     customer,
     bills,
     payments,
     promotions,
     returnsRows,
+    paymentDateByBillId,
   );
   const { paidByBillId, pastPaid, custBills, paidByReturnChequeId, returnCheques } =
     computeBillPaymentAllocation(customer, bills, payments, promotions, returnsRows);
@@ -955,7 +1075,12 @@ export function buildCustomerInvoiceRows(
     let status = 'open';
     if (outstanding <= 0) status = 'settled';
     else if (paidTowardOpening > 0) status = 'partial';
-    const settledDate = openingId ? settledByBillId.get(openingId) || '' : '';
+    let settledDate = openingId ? settledByBillId.get(openingId) || '' : '';
+    const paymentDate = openingId ? paymentDateByBillId.get(openingId) || '' : '';
+    if (status === 'settled' && !settledDate && openingId) {
+      const returnDate = latestItemReturnDateForBill(returnsRows, openingId);
+      settledDate = isYmd(returnDate) ? returnDate : String(billDate ?? '').slice(0, 10);
+    }
     const billDateYmd = String(billDate ?? '').slice(0, 10);
     const daysToSettle =
       settledDate && /^\d{4}-\d{2}-\d{2}$/.test(billDateYmd)
@@ -968,6 +1093,7 @@ export function buildCustomerInvoiceRows(
       dueDate,
       settlementDays,
       settledDate,
+      paymentDate,
       daysToSettle,
       billTotal: openingPayable,
       paidAmount: paidTowardOpening,
@@ -991,7 +1117,13 @@ export function buildCustomerInvoiceRows(
     if (outstanding <= 0) status = 'settled';
     else if (paidTowardBill > 0) status = 'partial';
 
-    const settledDate = bill.id ? settledByBillId.get(bill.id) || '' : '';
+    let settledDate = bill.id ? settledByBillId.get(bill.id) || '' : '';
+    const paymentDate = id ? paymentDateByBillId.get(id) || '' : '';
+    if (status === 'settled' && !settledDate && id) {
+      const returnDate = latestItemReturnDateForBill(returnsRows, id);
+      const billDateYmdFallback = String(bill.date ?? '').slice(0, 10);
+      settledDate = isYmd(returnDate) ? returnDate : billDateYmdFallback;
+    }
     const billDateYmd = String(bill.date ?? '').slice(0, 10);
     const daysToSettle =
       settledDate && /^\d{4}-\d{2}-\d{2}$/.test(billDateYmd)
@@ -1004,6 +1136,7 @@ export function buildCustomerInvoiceRows(
       dueDate,
       settlementDays,
       settledDate,
+      paymentDate,
       daysToSettle,
       billTotal: total,
       paidAmount: paidTowardBill,
@@ -1058,6 +1191,37 @@ export function buildCustomerInvoiceRows(
   return rows;
 }
 
+const OVERDUE_PAYMENT_SORTS = new Set(['paymentDate', 'settledDate', 'daysPastCredit']);
+
+/**
+ * Compare overdue payment rows. Dates and overdue days with no value stay at the end.
+ * Default is newest payment date first.
+ */
+export function compareOverduePayments(a, b, sortKey = 'paymentDate', sortDir = 'desc') {
+  const key = OVERDUE_PAYMENT_SORTS.has(sortKey) ? sortKey : 'paymentDate';
+  const dir = sortDir === 'asc' ? 1 : -1;
+  let cmp = 0;
+  if (key === 'daysPastCredit') {
+    const av = Number(a?.daysPastCredit);
+    const bv = Number(b?.daysPastCredit);
+    const aOk = Number.isFinite(av);
+    const bOk = Number.isFinite(bv);
+    if (aOk && bOk) cmp = (av - bv) * dir;
+    else if (aOk !== bOk) return aOk ? -1 : 1;
+  } else {
+    const av = String(a?.[key] ?? '').slice(0, 10);
+    const bv = String(b?.[key] ?? '').slice(0, 10);
+    const aOk = /^\d{4}-\d{2}-\d{2}$/.test(av);
+    const bOk = /^\d{4}-\d{2}-\d{2}$/.test(bv);
+    if (aOk && bOk) cmp = av.localeCompare(bv) * dir;
+    else if (aOk !== bOk) return aOk ? -1 : 1;
+  }
+  if (cmp !== 0) return cmp;
+  const byName = String(a?.customerName ?? '').localeCompare(String(b?.customerName ?? ''));
+  if (byName !== 0) return byName;
+  return (Number(b?.amount) || 0) - (Number(a?.amount) || 0);
+}
+
 /**
  * Bills (and opening balances) that were fully paid after the customer's credit window.
  * Credit window is bill date + `overdueDays` (default 14), or the opening-balance due date.
@@ -1085,6 +1249,7 @@ export function buildOverduePaymentRows(
     rows.push({
       id: String(row.id ?? '').trim() || `${row.customerName}-${settledDate}-${rows.length}`,
       settledDate,
+      paymentDate: String(row.paymentDate ?? '').slice(0, 10),
       customerName: String(row.customerName ?? '').trim() || '—',
       description: String(row.description ?? '').trim() || 'Credit bill',
       amount,
@@ -1106,6 +1271,7 @@ export function buildOverduePaymentRows(
       pushLateSettlement({
         id: inv.id,
         settledDate: inv.settledDate,
+        paymentDate: inv.paymentDate,
         dueDate: inv.dueDate,
         amount: inv.billTotal,
         customerName: cust.name,
@@ -1128,7 +1294,15 @@ export function buildOverduePaymentRows(
 
   for (const [nk, obills] of orphanByNk) {
     const custPayments = safePayments.filter((p) => normalizeCustomerName(p.customerName) === nk);
-    const settledByBillId = buildSettledDateByBillId(obills, custPayments, 0, '', promotions);
+    const paymentDateByBillId = new Map();
+    const settledByBillId = buildSettledDateByBillId(
+      obills,
+      custPayments,
+      0,
+      '',
+      promotions,
+      paymentDateByBillId,
+    );
     const settlementDays = DEFAULT_OVERDUE_DAYS;
     for (const bill of obills) {
       const id = String(bill.id ?? '').trim();
@@ -1137,6 +1311,7 @@ export function buildOverduePaymentRows(
       pushLateSettlement({
         id,
         settledDate,
+        paymentDate: id ? paymentDateByBillId.get(id) || '' : '',
         dueDate: addDaysToYmd(billDate, settlementDays),
         amount: payableBillTotal(bill, promotions, returnsRows),
         customerName: bill.customerName,
@@ -1151,13 +1326,7 @@ export function buildOverduePaymentRows(
     }
   }
 
-  rows.sort((a, b) => {
-    const bySettled = b.settledDate.localeCompare(a.settledDate);
-    if (bySettled !== 0) return bySettled;
-    const byName = a.customerName.localeCompare(b.customerName);
-    if (byName !== 0) return byName;
-    return b.amount - a.amount;
-  });
+  rows.sort((a, b) => compareOverduePayments(a, b, 'paymentDate', 'desc'));
   return rows;
 }
 
@@ -1304,6 +1473,11 @@ export function buildReturnChequeRows(customers = [], bills = [], payments = [],
         chequeDate: rc.chequeDate || '',
         returnDate: rc.returnDate || '',
         receiptNumber: rc.receiptNumber || '',
+        paymentDate: rc.paymentDate || '',
+        returnedBy: rc.returnedBy || '',
+        returnNote: rc.returnNote || '',
+        customerContact: String(cust.contactNumber ?? '').trim(),
+        customerLocation: String(cust.location ?? '').trim(),
         paymentId: rc.paymentId || '',
         amount: rc.amount,
         paidAmount: paid,

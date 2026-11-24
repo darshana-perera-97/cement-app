@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiBase } from '../apiBase';
-import { authFetch, isCollector } from '../auth';
+import { authFetch, isCollector, isManagerOrAdmin } from '../auth';
+import PoChequeActionModal from './PoChequeActionModal';
 import ChequeCalendarSection from './ChequeCalendarSection';
 import { buildChequeCalendarItems } from './chequeCalendar';
 import { buildChequeTableRows, depositQueueRowKey } from './paymentCheques';
@@ -168,7 +169,7 @@ function IncomingChequeSection({ rows, search }) {
   );
 }
 
-function OutgoingPoChequeSection({ rows, search }) {
+function OutgoingPoChequeSection({ rows, search, canAct, onChequeAction }) {
   const filteredRows = useMemo(
     () =>
       rows.filter((row) =>
@@ -221,7 +222,19 @@ function OutgoingPoChequeSection({ rows, search }) {
                 { label: 'Converting date', value: row.chequeDate || '—' },
                 { label: 'Cheque #', value: row.chequeNumber },
                 { label: 'Amount', value: money(row.amount) },
+                ...(row.chequeAction === 'hold' ? [{ label: 'Status', value: `Held until ${row.holdUntil || row.chequeDate}` }] : []),
               ]}
+              actions={
+                canAct && row.paymentType === 'cheque' ? (
+                  <button
+                    type="button"
+                    onClick={() => onChequeAction?.(row)}
+                    className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                  >
+                    Return cheque
+                  </button>
+                ) : null
+              }
             />
           ))
         )}
@@ -235,12 +248,13 @@ function OutgoingPoChequeSection({ rows, search }) {
               <th className="px-3 py-3">Bank · Cheque #</th>
               <th className="px-3 py-3">Converting date</th>
               <th className="px-3 py-3 text-right">Amount</th>
+              {canAct ? <th className="px-3 py-3 text-right">Actions</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-slate-800">
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-sm text-slate-500">
+                <td colSpan={canAct ? 6 : 5} className="px-3 py-10 text-center text-sm text-slate-500">
                   {rows.length === 0 ? 'No pending PO cheques.' : 'No matches.'}
                 </td>
               </tr>
@@ -255,11 +269,29 @@ function OutgoingPoChequeSection({ rows, search }) {
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 font-mono text-xs">{row.bankLabel}</td>
                   <td className="whitespace-nowrap px-3 py-3 tabular-nums text-slate-600">
-                    {row.chequeDate || '—'}
+                    <div>{row.chequeDate || '—'}</div>
+                    {row.chequeAction === 'hold' ? (
+                      <div className="text-[11px] font-medium text-amber-800">Held until {row.holdUntil || row.chequeDate}</div>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-amber-900">
                     {money(row.amount)}
                   </td>
+                  {canAct ? (
+                    <td className="whitespace-nowrap px-3 py-3 text-right">
+                      {row.paymentType === 'cheque' ? (
+                        <button
+                          type="button"
+                          onClick={() => onChequeAction?.(row)}
+                          className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                        >
+                          Return cheque
+                        </button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  ) : null}
                 </tr>
               ))
             )}
@@ -278,6 +310,9 @@ export default function PendingChequesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [chequeAction, setChequeAction] = useState(null);
+  const canAct = isManagerOrAdmin();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -303,9 +338,10 @@ export default function PendingChequesPage() {
       ]);
       const purchaseOrders = poRes.ok ? await poRes.json() : [];
       const shopData = shopRes.ok ? await shopRes.json() : {};
-      const bankAccounts = Array.isArray(shopData.bankAccounts) ? shopData.bankAccounts : [];
+      const accounts = Array.isArray(shopData.bankAccounts) ? shopData.bankAccounts : [];
+      setBankAccounts(accounts);
       const poList = Array.isArray(purchaseOrders) ? purchaseOrders : [];
-      setOutgoingRows(buildPendingPoOutgoingRows(poList, bankAccounts));
+      setOutgoingRows(buildPendingPoOutgoingRows(poList, accounts));
 
       const companyCheques = companyRes.ok ? await companyRes.json() : [];
       const ownerCheques = ownerRes.ok ? await ownerRes.json() : [];
@@ -315,7 +351,7 @@ export default function PendingChequesPage() {
           companyCheques: Array.isArray(companyCheques) ? companyCheques : [],
           ownerCheques: Array.isArray(ownerCheques) ? ownerCheques : [],
           purchaseOrders: poList,
-          bankAccounts,
+          bankAccounts: accounts,
         }),
       );
     } catch (e) {
@@ -408,10 +444,40 @@ export default function PendingChequesPage() {
             </TableFiltersBar>
 
             <IncomingChequeSection rows={incomingRows} search={search} />
-            {!collectorView ? <OutgoingPoChequeSection rows={outgoingRows} search={search} /> : null}
+            {!collectorView ? (
+              <OutgoingPoChequeSection
+                rows={outgoingRows}
+                search={search}
+                canAct={canAct}
+                onChequeAction={(row) =>
+                  setChequeAction({
+                    poId: row.poId,
+                    poNumber: row.poNumber,
+                    product: row.product,
+                    distributorName: row.distributorName,
+                    chequeNumber: row.chequeNumber,
+                    chequeDate: row.sourceChequeDate || row.chequeDate,
+                    bankAccountId: row.bankAccountId,
+                    amount: row.amount,
+                    bankLabel: row.bankLabel,
+                  })
+                }
+              />
+            ) : null}
           </div>
         </div>
       )}
+
+      <PoChequeActionModal
+        open={chequeAction != null}
+        cheque={chequeAction}
+        bankAccounts={bankAccounts}
+        onClose={() => setChequeAction(null)}
+        onSaved={() => {
+          setChequeAction(null);
+          load();
+        }}
+      />
     </div>
   );
 }

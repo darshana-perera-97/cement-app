@@ -1,5 +1,5 @@
 const { toNonNegMoney } = require('./customersStore');
-const { poLineItems } = require('./purchaseOrdersStore');
+const { poLineItems, effectivePoChequeDate } = require('./purchaseOrdersStore');
 const { getPaymentCheques } = require('./paymentCheques');
 const {
   getPaymentCdmDeposits,
@@ -41,11 +41,12 @@ function collectPurchaseOrderOutgoingCheques(purchaseOrders) {
           ? 'bank_transfer'
           : 'cheque';
       const chequeNumber = String(c.chequeNumber ?? '').trim();
-      const chequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const sourceChequeDate = String(c.chequeDate ?? '').trim().slice(0, 10);
+      const chequeDate = effectivePoChequeDate(c);
       const dedupeKey =
         mode === 'shared' && batchId
-          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`
-          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${chequeDate}:${amount}:${bankAccountId}`;
+          ? `shared:${batchId}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`
+          : `po:${poId}:${i}:${paymentType}:${chequeNumber}:${sourceChequeDate}:${amount}:${bankAccountId}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       const distributorId = String(po.distributorId ?? '').trim();
