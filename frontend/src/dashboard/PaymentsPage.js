@@ -25,6 +25,7 @@ import {
 import RowDetailModal, { detailRowAttrs } from './RowDetailModal';
 import RecordPaymentModal from './RecordPaymentModal';
 import CollectorSeparateBillSettlementModal from './CollectorSeparateBillSettlementModal';
+import PrintPaymentsPdfModal from './PrintPaymentsPdfModal';
 import { useSeparateBillSettlementFlow } from './useShopCollectorSettings';
 import { getPaymentCheques, getPaymentCdmDeposits, getPaymentOnlineTransfers } from './paymentCheques';
 import { usePrinter } from '../printer/PrinterProvider';
@@ -61,6 +62,7 @@ export default function PaymentsPage() {
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelError, setCancelError] = useState(null);
   const [separateBillModalOpen, setSeparateBillModalOpen] = useState(false);
+  const [printPdfOpen, setPrintPdfOpen] = useState(false);
   const { useSeparateBillSettlement, loading: collectorSettingsLoading } = useSeparateBillSettlementFlow();
   const today = useMemo(() => todayYmdLocal(), []);
   const { closed: collectionClosed, loading: collectionClosedLoading } = useCollectorCollectionClosed(today);
@@ -244,15 +246,28 @@ export default function PaymentsPage() {
             ? 'Record cash or cheque payments, then allocate across pending invoices.'
             : 'Record cash and cheque payments against customer balances.'}
         </p>
-        <button
-          type="button"
-          onClick={() => openModal()}
-          disabled={collectorSettingsLoading || paymentsLocked}
-          title={paymentsLocked ? 'Collection for today is over. You cannot add more payments.' : undefined}
-          className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60 sm:w-auto"
-        >
-          Record payment
-        </button>
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+          <button
+            type="button"
+            onClick={() => setPrintPdfOpen(true)}
+            disabled={loading || !!error || rows.length === 0}
+            title="Download payments PDF"
+            aria-label="Download payments PDF"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-100 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            <PrinterGlyph className="h-4 w-4" />
+            <span className="sm:sr-only">Download PDF</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => openModal()}
+            disabled={collectorSettingsLoading || paymentsLocked}
+            title={paymentsLocked ? 'Collection for today is over. You cannot add more payments.' : undefined}
+            className="inline-flex w-full shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-[1.03] disabled:opacity-60 sm:w-auto"
+          >
+            Record payment
+          </button>
+        </div>
       </div>
 
       {paymentsLocked ? (
@@ -466,6 +481,14 @@ export default function PaymentsPage() {
         />
       ) : null}
       </div>
+
+      <PrintPaymentsPdfModal
+        open={printPdfOpen}
+        onClose={() => setPrintPdfOpen(false)}
+        payments={rows}
+        initialDateFrom={dateFrom}
+        initialDateTo={dateTo}
+      />
 
       <RecordPaymentModal
         open={modalOpen}

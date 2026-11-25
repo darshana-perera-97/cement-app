@@ -215,14 +215,15 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     moneyCell(r?.bankTransferCollected),
     moneyCell(r?.cashIn),
   ];
-  const shopHead = [['Shop', 'Cash invoice #', 'Cash', 'Cheque', 'CDM', 'Bank transfer', 'Collections']];
+  const shopHead = [['Shop', 'Cash invoice #', 'Payment Bill invoice', 'Cash', 'Cheque', 'CDM', 'Bank transfer', 'Collections']];
   const emptyShopAmounts = [moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0), moneyCell(0)];
   const shopBody =
     shopRows.length === 0
-      ? [['—', '—', ...emptyShopAmounts]]
+      ? [['—', '—', '—', ...emptyShopAmounts]]
       : shopRows.map((r) => [
           r.shop || '—',
           cashInvoicesExcludingReturnSettlements(r.cashInvoiceNumbers),
+          String(r.paymentBillInvoices || '').trim() || '—',
           ...shopAmountCells(r),
         ]);
 
@@ -233,6 +234,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
           [
             `Total (${shopRows.length} shop${shopRows.length === 1 ? '' : 's'})`,
             '',
+            '',
             moneyCell(totals.cash),
             moneyCell(totals.cheque),
             moneyCell(totals.cdm),
@@ -242,7 +244,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
         ];
 
   const shopColumnStyles = {};
-  for (let i = 0; i < 5; i += 1) shopColumnStyles[2 + i] = { halign: 'right' };
+  for (let i = 0; i < 5; i += 1) shopColumnStyles[3 + i] = { halign: 'right' };
 
   autoTable(doc, {
     ...TABLE_OPTS,
@@ -263,8 +265,13 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     );
     const cashBody =
       listedCashRows.length === 0
-        ? [['—', '—', moneyCell(0)]]
-        : listedCashRows.map((r) => [r.customerName || '—', r.invoiceNumber || '—', moneyCell(r.amount)]);
+        ? [['—', '—', '—', moneyCell(0)]]
+        : listedCashRows.map((r) => [
+            r.customerName || '—',
+            r.invoiceNumber || '—',
+            r.billNumber || '—',
+            moneyCell(r.amount),
+          ]);
     const cashFoot =
       listedCashRows.length === 0
         ? null
@@ -272,18 +279,19 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             [
               `Total (${listedCashRows.length} payment${listedCashRows.length === 1 ? '' : 's'})`,
               '',
+              '',
               moneyCell(sumAmounts(listedCashRows)),
             ],
           ];
     autoTable(doc, {
       ...TABLE_OPTS,
-      head: [['Shop', 'Invoice #', 'Amount']],
+      head: [['Shop', 'Invoice #', 'Bill #', 'Amount']],
       body: cashBody,
       foot: cashFoot || undefined,
       startY: y,
       tableWidth: pageW,
       columnStyles: {
-        2: { halign: 'right' },
+        3: { halign: 'right' },
       },
     });
   }
@@ -457,9 +465,9 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     `Payments on ${reportDate || '—'} that settle a returned cheque${userLabel ? ` · ${userLabel}` : ''}. These amounts are already included in the method totals above and are not repeated in the cash, cheque, CDM, or bank lists.`,
   );
 
-  const returnHead = ['Shop', 'Return cheque', 'Method', 'Reference', 'Amount'];
+  const returnHead = ['Shop', 'Return cheque', 'Method', 'Reference', 'Bill #', 'Amount'];
   if (showRecordedBy) returnHead.push('Recorded by');
-  const returnEmpty = ['—', '—', '—', '—', moneyCell(0)];
+  const returnEmpty = ['—', '—', '—', '—', '—', moneyCell(0)];
   if (showRecordedBy) returnEmpty.push('—');
   const returnBody =
     returnChequeRows.length === 0
@@ -470,6 +478,7 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
             r.returnCheque || '—',
             r.method || '—',
             r.reference || '—',
+            r.billNumber || '—',
             moneyCell(r.amount),
           ];
           if (showRecordedBy) row.push(r.recordedBy || '—');
@@ -480,11 +489,12 @@ export function downloadDailyCollectionsReportPdf(data, options = {}) {
     '',
     '',
     '',
+    '',
     moneyCell(returnChequeTotal),
   ];
   if (showRecordedBy) returnFootRow.push('');
   const returnFoot = returnChequeRows.length === 0 ? null : [returnFootRow];
-  const returnColumnStyles = { 4: { halign: 'right' } };
+  const returnColumnStyles = { 5: { halign: 'right' } };
 
   autoTable(doc, {
     ...TABLE_OPTS,

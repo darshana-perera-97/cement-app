@@ -65,6 +65,7 @@ export function collectReturnChequeSettlementRows({
       returnCheque: row.invoiceNumber,
       method: 'Cash',
       reference: '—',
+      billNumber: row.billNumber || '—',
       amount: Number(row.amount) || 0,
       recordedBy: row.recordedBy,
     });
@@ -77,6 +78,7 @@ export function collectReturnChequeSettlementRows({
       returnCheque: row.invoiceNumber,
       method: 'Cheque',
       reference: detailBits([chequeNumberWithBank(row), row.chequeDate]),
+      billNumber: row.billNumber || '—',
       amount: Number(row.amount) || 0,
       recordedBy: row.recordedBy,
     });
@@ -89,6 +91,7 @@ export function collectReturnChequeSettlementRows({
       returnCheque: row.invoiceNumber,
       method: 'CDM deposit',
       reference: detailBits([row.cdmNumber, row.cdmDate, row.bankAccount]),
+      billNumber: row.billNumber || '—',
       amount: Number(row.amount) || 0,
       recordedBy: row.recordedBy,
     });
@@ -101,6 +104,7 @@ export function collectReturnChequeSettlementRows({
       returnCheque: row.invoiceNumber,
       method: 'Bank transfer',
       reference: detailBits([row.reference, row.transferDate, row.bankAccount]),
+      billNumber: row.billNumber || '—',
       amount: Number(row.amount) || 0,
       recordedBy: row.recordedBy,
     });
