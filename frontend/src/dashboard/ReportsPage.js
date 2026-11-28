@@ -24,6 +24,7 @@ import { downloadDailyCollectionsReportPdf } from './dailyCollectionsReportPdf';
 import {
   downloadCompanyUnloadReportExcel,
   downloadCompanyUnloadReportPdf,
+  downloadCompanyUnloadShopPdf,
 } from './companyUnloadReportExport';
 import { downloadCustomerOutstandingReport } from './customerOutstandingExport';
 import { buildShopTargetsRows } from './shopTargetsReport';
@@ -660,9 +661,15 @@ function buildCompanyUnloadRows(bills, promotions, brands = getCachedBrands()) {
         unitRaw == null || unitRaw === '' || !Number.isFinite(Number(unitRaw))
           ? null
           : round2(Number(unitRaw));
+      const totalRaw = bill.totalAmount;
       lines.push({
         rowKey: `${bill.id || date}-${brand.key}`,
+        billId: String(bill.id ?? ''),
         invoiceNumber: String(bill.invoiceNumber ?? '').trim(),
+        totalAmount:
+          totalRaw == null || totalRaw === '' || !Number.isFinite(Number(totalRaw))
+            ? null
+            : round2(Number(totalRaw)),
         date,
         shopKey: customerNameKey(shop),
         shop,
@@ -2845,6 +2852,10 @@ export default function ReportsPage() {
     downloadCompanyUnloadReportExcel(filteredCompanyUnloadRows, companyUnloadExportOptions);
   }, [filteredCompanyUnloadRows, companyUnloadExportOptions]);
 
+  const handleDownloadCompanyUnloadShopPdf = useCallback(() => {
+    downloadCompanyUnloadShopPdf(filteredCompanyUnloadRows, companyUnloadExportOptions);
+  }, [filteredCompanyUnloadRows, companyUnloadExportOptions]);
+
   const handleDownloadDailyCollectionsPdf = useCallback(() => {
     downloadDailyCollectionsReportPdf(
       {
@@ -3829,6 +3840,15 @@ export default function ReportsPage() {
             className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Download PDF
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadCompanyUnloadShopPdf}
+            disabled={loading || !!error || filteredCompanyUnloadRows.length === 0}
+            className={`${downloadBtnClass} inline-flex items-center gap-2`}
+          >
+            <PrinterGlyph className="h-4 w-4" />
+            Download for shop
           </button>
           <button
             type="button"
@@ -6208,5 +6228,13 @@ export default function ReportsPage() {
       </>
       ) : null}
     </div>
+  );
+}
+
+function PrinterGlyph({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M7 3.75A.75.75 0 017.75 3h8.5a.75.75 0 01.75.75V7h.75A2.25 2.25 0 0120 9.25v6.5A2.25 2.25 0 0117.75 18H17v2.25a.75.75 0 01-.75.75h-8.5a.75.75 0 01-.75-.75V18H6.25A2.25 2.25 0 014 15.75v-6.5A2.25 2.25 0 016.25 7H7V3.75zM8.5 4.5v2.5h7V4.5h-7zM6.25 8.5a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75H7v-1.25a.75.75 0 01.75-.75h8.5a.75.75 0 01.75.75V16.5h.75a.75.75 0 00.75-.75v-6.5a.75.75 0 00-.75-.75H6.25zM9 16.5v3h6v-3H9zM8 11.25a.75.75 0 01.75-.75h1.5a.75.75 0 010 1.5h-1.5a.75.75 0 01-.75-.75z" />
+    </svg>
   );
 }

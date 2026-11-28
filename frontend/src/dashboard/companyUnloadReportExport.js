@@ -69,6 +69,24 @@ function totalsOf(rows) {
   );
 }
 
+/** Each invoice is counted once, even when it has several item lines. */
+function shopBillSummary(rows) {
+  const seen = new Set();
+  let invoiceCount = 0;
+  let billTotal = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key =
+      String(row.billId ?? '').trim() ||
+      `${String(row.invoiceNumber ?? '').trim()}|${String(row.date ?? '').slice(0, 10)}|${String(row.shop ?? '').trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    invoiceCount += 1;
+    const amount = Number(row.totalAmount);
+    if (Number.isFinite(amount)) billTotal += amount;
+  }
+  return { invoiceCount, billTotal };
+}
+
 function addPageFooters(doc) {
   const pageCount = doc.internal.getNumberOfPages();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -82,21 +100,37 @@ function addPageFooters(doc) {
   }
 }
 
+const SHOP_PDF_HEAD = [
+  [
+    'Date',
+    'Invoice number',
+    'Shop name',
+    'Item name',
+    'Number of items',
+    'Free bag amount',
+    'Per bag price',
+    'Total bill amount',
+  ],
+];
+
 /**
  * Download the filtered company unloading report as a PDF.
+ * Pass `forShop: true` to include invoice number and total bill amount.
  * @param {Array} rows
- * @param {{ dateFrom?: string, dateTo?: string, shop?: string, search?: string, generatedAt?: Date }} [options]
+ * @param {{ dateFrom?: string, dateTo?: string, shop?: string, search?: string, generatedAt?: Date, forShop?: boolean }} [options]
  */
 export function downloadCompanyUnloadReportPdf(rows, options = {}) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const totals = totalsOf(safeRows);
+  const forShop = options.forShop === true;
+  const bills = forShop ? shopBillSummary(safeRows) : null;
   const { generatedAt = new Date() } = options;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.setTextColor(15, 23, 42);
-  doc.text('Unloading report for Company', MARGIN, 16);
+  doc.text(forShop ? 'Unloading report for Shop' : 'Unloading report for Company', MARGIN, 16);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -109,37 +143,70 @@ export function downloadCompanyUnloadReportPdf(rows, options = {}) {
   const filterLines = doc.splitTextToSize(filterLine(options), doc.internal.pageSize.getWidth() - MARGIN * 2);
   doc.text(filterLines, MARGIN, 27);
   const summaryY = 27 + filterLines.length * 4;
-  doc.text(
-    `${safeRows.length} line${safeRows.length === 1 ? '' : 's'} · ${formatBags(totals.bagCount)} items · ${formatBags(totals.freeBags)} free bags`,
-    MARGIN,
-    summaryY,
-  );
+  const summaryParts = [
+    `${safeRows.length} line${safeRows.length === 1 ? '' : 's'}`,
+    `${formatBags(totals.bagCount)} items`,
+    `${formatBags(totals.freeBags)} free bags`,
+  ];
+  if (forShop) {
+    summaryParts.push(
+      `${formatBags(bills.invoiceCount)} invoice${bills.invoiceCount === 1 ? '' : 's'}`,
+      `bill total ${moneyCell(bills.billTotal)}`,
+    );
+  }
+  doc.text(summaryParts.join(' · '), MARGIN, summaryY);
   doc.setTextColor(0, 0, 0);
 
+  const shopBody =
+    safeRows.length > 0
+      ? safeRows.map((row) => [
+          display(row.date),
+          display(row.invoiceNumber),
+          display(row.shop),
+          display(row.itemName),
+          formatBags(row.bagCount),
+          formatBags(row.freeBags),
+          moneyCell(row.perBagPrice),
+          moneyCell(row.totalAmount),
+        ])
+      : [['—', '—', '—', '—', '0', '0', '—', '—']];
+  const companyBody =
+    safeRows.length > 0
+      ? safeRows.map((row) => [
+          display(row.date),
+          display(row.shop),
+          display(row.itemName),
+          formatBags(row.bagCount),
+          formatBags(row.freeBags),
+          moneyCell(row.perBagPrice),
+        ])
+      : [['—', '—', '—', '0', '0', '—']];
+
   autoTable(doc, {
-    head: PDF_HEAD,
-    body:
-      safeRows.length > 0
-        ? safeRows.map((row) => [
-            display(row.date),
-            display(row.shop),
-            display(row.itemName),
-            formatBags(row.bagCount),
-            formatBags(row.freeBags),
-            moneyCell(row.perBagPrice),
-          ])
-        : [['—', '—', '—', '0', '0', '—']],
+    head: forShop ? SHOP_PDF_HEAD : PDF_HEAD,
+    body: forShop ? shopBody : companyBody,
     foot:
       safeRows.length > 0
         ? [
-            [
-              `Total (${safeRows.length} line${safeRows.length === 1 ? '' : 's'})`,
-              '',
-              '',
-              formatBags(totals.bagCount),
-              formatBags(totals.freeBags),
-              '',
-            ],
+            forShop
+              ? [
+                  `Total (${safeRows.length} line${safeRows.length === 1 ? '' : 's'})`,
+                  '',
+                  '',
+                  '',
+                  formatBags(totals.bagCount),
+                  formatBags(totals.freeBags),
+                  '',
+                  moneyCell(bills.billTotal),
+                ]
+              : [
+                  `Total (${safeRows.length} line${safeRows.length === 1 ? '' : 's'})`,
+                  '',
+                  '',
+                  formatBags(totals.bagCount),
+                  formatBags(totals.freeBags),
+                  '',
+                ],
           ]
         : undefined,
     startY: summaryY + 6,
@@ -148,17 +215,35 @@ export function downloadCompanyUnloadReportPdf(rows, options = {}) {
     headStyles: { fillColor: [71, 85, 105], textColor: 255, fontStyle: 'bold' },
     footStyles: { fillColor: [226, 232, 240], textColor: [15, 23, 42], fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
-    columnStyles: {
-      3: { halign: 'right' },
-      4: { halign: 'right' },
-      5: { halign: 'right' },
-    },
+    columnStyles: forShop
+      ? {
+          4: { halign: 'right' },
+          5: { halign: 'right' },
+          6: { halign: 'right' },
+          7: { halign: 'right' },
+        }
+      : {
+          3: { halign: 'right' },
+          4: { halign: 'right' },
+          5: { halign: 'right' },
+        },
     showHead: 'everyPage',
   });
 
   addPageFooters(doc);
   const { rangeSlug, safeDate } = fileSlug({ ...options, generatedAt });
-  doc.save(`company-unloading-report-${rangeSlug}-${safeDate}.pdf`);
+  const filePrefix = forShop ? 'shop-unloading-report' : 'company-unloading-report';
+  doc.save(`${filePrefix}-${rangeSlug}-${safeDate}.pdf`);
+}
+
+/**
+ * Shop copy of the company unloading report.
+ * Invoice number and total bill amount appear in this PDF only.
+ * @param {Array} rows
+ * @param {{ dateFrom?: string, dateTo?: string, shop?: string, search?: string, generatedAt?: Date }} [options]
+ */
+export function downloadCompanyUnloadShopPdf(rows, options = {}) {
+  downloadCompanyUnloadReportPdf(rows, { ...options, forShop: true });
 }
 
 /**
